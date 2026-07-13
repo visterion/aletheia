@@ -18,6 +18,8 @@ jobs:
           java-version: '26'
       - name: Test
         run: ./mvnw -B test
+      - name: Package
+        run: ./mvnw -B -DskipTests package
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
         uses: docker/login-action@v3

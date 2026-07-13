@@ -2,7 +2,8 @@
 .env
 .env.*
 docs/
-target/
+target/*
+!target/aletheia-*.jar
 # Never send account data / exports / dumps into the build context.
 exports/
 dumps/
