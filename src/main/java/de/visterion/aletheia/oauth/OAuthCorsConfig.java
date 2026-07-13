@@ -1,5 +1,6 @@
 package de.visterion.aletheia.oauth;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -7,12 +8,15 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * CORS configuration for the OAuth endpoints. MCP clients (Claude.ai, ChatGPT) may invoke
- * discovery and registration from a browser context, which requires preflight OPTIONS to be
- * answered with appropriate Access-Control-* headers.
+ * CORS configuration for the OAuth + MCP endpoints. MCP clients (Claude.ai, ChatGPT) invoke
+ * discovery, registration and the MCP endpoint from a browser context, which requires preflight
+ * OPTIONS to be answered with appropriate Access-Control-* headers.
  *
- * <p>Allowlist is intentionally narrow — only the known MCP host origins. Add new origins here
- * when supporting additional clients.
+ * <p>Allowlist is intentionally narrow — the known MCP host origins plus the server's own issuer
+ * origin. The issuer must be allowed because the OAuth consent form is served from the issuer's
+ * page and POSTs back to it: behind a reverse proxy (Cloudflare) the app sees that same-origin
+ * POST as cross-origin, so without the issuer in the allowlist the consent submit is rejected as
+ * "Invalid CORS request".
  */
 @Configuration
 public class OAuthCorsConfig {
@@ -29,18 +33,24 @@ public class OAuthCorsConfig {
           "https://chat.openai.com");
 
   @Bean
-  public WebMvcConfigurer oauthCorsConfigurer() {
+  public WebMvcConfigurer oauthCorsConfigurer(OAuthProperties oauthProperties) {
+    List<String> originList = new ArrayList<>(ALLOWED_ORIGINS);
+    String issuer = oauthProperties.getIssuer();
+    if (issuer != null && !issuer.isBlank()) {
+      originList.add(issuer);
+    }
+    String[] origins = originList.toArray(String[]::new);
     return new WebMvcConfigurer() {
       @Override
       public void addCorsMappings(CorsRegistry registry) {
         registry
             .addMapping("/.well-known/oauth-**")
-            .allowedOriginPatterns(ALLOWED_ORIGINS.toArray(String[]::new))
+            .allowedOriginPatterns(origins)
             .allowedMethods("GET", "OPTIONS")
             .maxAge(3600);
         registry
             .addMapping("/oauth/**")
-            .allowedOriginPatterns(ALLOWED_ORIGINS.toArray(String[]::new))
+            .allowedOriginPatterns(origins)
             .allowedMethods("GET", "POST", "OPTIONS")
             .allowedHeaders("Authorization", "Content-Type", "Accept")
             .maxAge(3600);
@@ -50,7 +60,7 @@ public class OAuthCorsConfig {
         // guards non-OPTIONS /mcp); this only makes the endpoint CORS-reachable from the browser.
         registry
             .addMapping("/mcp/**")
-            .allowedOriginPatterns(ALLOWED_ORIGINS.toArray(String[]::new))
+            .allowedOriginPatterns(origins)
             .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
             .allowedHeaders(
                 "Authorization", "Content-Type", "Accept", "Mcp-Session-Id", "Mcp-Protocol-Version")
@@ -58,7 +68,7 @@ public class OAuthCorsConfig {
             .maxAge(3600);
         registry
             .addMapping("/mcp")
-            .allowedOriginPatterns(ALLOWED_ORIGINS.toArray(String[]::new))
+            .allowedOriginPatterns(origins)
             .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
             .allowedHeaders(
                 "Authorization", "Content-Type", "Accept", "Mcp-Session-Id", "Mcp-Protocol-Version")
