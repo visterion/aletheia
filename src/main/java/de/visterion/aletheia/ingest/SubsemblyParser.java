@@ -6,8 +6,10 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import org.springframework.stereotype.Component;
 
 /** Parses a Subsembly JSON export (array of booking objects). */
+@Component
 public class SubsemblyParser {
 
   private final ObjectMapper mapper = new ObjectMapper();
