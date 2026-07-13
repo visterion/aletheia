@@ -73,6 +73,14 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Token/OAuth-principal caches in the ported HiveMem auth package (AuthFilter,
+             CachedTokenService, LoginRateLimiter, RateLimiter). Version managed by the
+             Spring Boot 4.1 BOM. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
