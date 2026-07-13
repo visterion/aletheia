@@ -193,25 +193,22 @@ public class WriteTools {
             .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
             .fetchOne(CONTRACTS.HIVEMEM_CELL_ID);
 
-    boolean exists =
-        db.fetchExists(db.selectOne().from(CONTRACTS).where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId)));
-    if (exists) {
-      db.update(CONTRACTS)
-          .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
-          .set(CONTRACTS.NOTES, notes)
-          .set(CONTRACTS.STATUS, "linked")
-          .set(CONTRACTS.CONFIRMED_AT, org.jooq.impl.DSL.currentOffsetDateTime())
-          .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
-          .execute();
-    } else {
-      db.insertInto(CONTRACTS)
-          .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
-          .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
-          .set(CONTRACTS.NOTES, notes)
-          .set(CONTRACTS.STATUS, "linked")
-          .set(CONTRACTS.CONFIRMED_AT, org.jooq.impl.DSL.currentOffsetDateTime())
-          .execute();
-    }
+    // Upsert on the uq_contract_counterparty unique key (V6): link/relink is a single
+    // statement, so there is no fetchExists-then-insert/update TOCTOU window in which two
+    // concurrent calls could each observe "no row" and both insert.
+    db.insertInto(CONTRACTS)
+        .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
+        .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
+        .set(CONTRACTS.NOTES, notes)
+        .set(CONTRACTS.STATUS, "linked")
+        .set(CONTRACTS.CONFIRMED_AT, org.jooq.impl.DSL.currentOffsetDateTime())
+        .onConflict(CONTRACTS.COUNTERPARTY_ID)
+        .doUpdate()
+        .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
+        .set(CONTRACTS.NOTES, notes)
+        .set(CONTRACTS.STATUS, "linked")
+        .set(CONTRACTS.CONFIRMED_AT, org.jooq.impl.DSL.currentOffsetDateTime())
+        .execute();
 
     insertHistory(counterpartyId, "contract", oldCellId, hivememCellId, "confirmed");
 
