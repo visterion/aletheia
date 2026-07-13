@@ -239,4 +239,43 @@ class ReadToolsIT extends AbstractPostgresIT {
 
     assertThat(db.fetchCount(TRANSACTIONS)).isEqualTo(1);
   }
+
+  @Test
+  void sqlQueryRejectsSelectIntoTableCreation() {
+    long imp = importId();
+    insertTxn(imp, "hash-guard3", LocalDate.now(), "1.00", "DBIT", "CDTR-GUARD3", null, "Guard Co 3");
+
+    assertThatThrownBy(() -> readTools.sqlQuery("SELECT * INTO evil FROM transactions"))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    assertThat(db.fetchCount(TRANSACTIONS)).isEqualTo(1);
+    Integer evilTableCount =
+        db.fetchOne(
+                "SELECT count(*) AS n FROM information_schema.tables WHERE table_name = 'evil'")
+            .get("n", Integer.class);
+    assertThat(evilTableCount).isZero();
+  }
+
+  @Test
+  void sqlQueryAllowsIntoAsAnAliasSuffixNotARealSelectInto() {
+    long imp = importId();
+    insertTxn(imp, "hash-guard4", LocalDate.now(), "1.00", "DBIT", "CDTR-GUARD4", null, "Guard Co 4");
+
+    SqlQueryResult result =
+        readTools.sqlQuery("SELECT amount AS into_total FROM transactions LIMIT 1");
+
+    assertThat(result.columns()).containsExactly("into_total");
+    assertThat(result.rows()).hasSize(1);
+  }
+
+  @Test
+  void sqlQueryAllowsIntoInsideAStringLiteral() {
+    long imp = importId();
+    insertTxn(imp, "hash-guard5", LocalDate.now(), "1.00", "DBIT", "CDTR-GUARD5", null, "Guard Co 5");
+
+    SqlQueryResult result = readTools.sqlQuery("SELECT 'paid into account' AS note");
+
+    assertThat(result.columns()).containsExactly("note");
+    assertThat(result.rows().get(0).get("note")).isEqualTo("paid into account");
+  }
 }
