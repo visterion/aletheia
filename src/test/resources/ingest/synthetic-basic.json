@@ -1,0 +1,18 @@
+[
+  {
+    "Id": "1001", "AcctId": "ACC1", "OwnrAcctIBAN": "DE00000000000000000001",
+    "Amt": "49.9900000000000", "AmtCcy": "EUR", "CdtDbtInd": "DBIT",
+    "BookgDt": "2026-08-01", "ValDt": "2026-08-01", "BookgSts": "BOOK",
+    "BookgTxt": "SEPA-Lastschrift", "RmtInf": "Beitrag 08/2026",
+    "GVC": "105", "PurpCd": "OTHR",
+    "RmtdNm": "SYNTHETIC INSURER", "RmtdAcctIBAN": "DE00000000000000000999",
+    "CdtrId": "DE00ZZZ00000000000", "MndtId": "MND-1", "EndToEndId": "E2E-1",
+    "FooBar": "unknown-field-should-survive-in-raw"
+  },
+  {
+    "Id": "1002", "AcctId": "ACC1", "OwnrAcctIBAN": "DE00000000000000000001",
+    "Amt": "3.50", "AmtCcy": "EUR", "CdtDbtInd": "DBIT",
+    "BookgDt": "2026-08-02", "ValDt": "2026-08-02", "BookgSts": "PDNG",
+    "RmtInf": "pending card auth"
+  }
+]
