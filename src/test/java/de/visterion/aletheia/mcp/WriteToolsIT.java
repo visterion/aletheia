@@ -217,6 +217,18 @@ class WriteToolsIT extends AbstractPostgresIT {
   }
 
   @Test
+  void linkContractCalledTwiceProducesExactlyOneContractsRow() {
+    long id = counterpartyWithOneTransaction("CDTR-CONTRACT-DUP", "Contract Dup Co");
+
+    writeTools.linkContract(id, "hivemem-cell-a", "first link");
+    writeTools.linkContract(id, "hivemem-cell-b", "second link");
+
+    var contracts = db.selectFrom(CONTRACTS).where(CONTRACTS.COUNTERPARTY_ID.eq(id)).fetch();
+    assertThat(contracts).hasSize(1);
+    assertThat(contracts.get(0).get(CONTRACTS.HIVEMEM_CELL_ID)).isEqualTo("hivemem-cell-b");
+  }
+
+  @Test
   void dismissSetsStatusAndReason() {
     long id = counterpartyWithOneTransaction("CDTR-DISMISS", "Dismiss Co");
 
