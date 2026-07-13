@@ -9,10 +9,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
-/** On startup, ingests every *.json in the configured directory. Never throws. */
+/**
+ * On startup, ingests every *.json in the configured directory. Never throws.
+ *
+ * <p>{@code @Order(1)} guarantees this runs before {@link
+ * de.visterion.aletheia.substrate.CounterpartyResolver} ({@code @Order(2)}) — Spring does not
+ * order {@link ApplicationRunner} beans without explicit {@code @Order} (spec §3, adversarial
+ * review M5).
+ */
 @Component
+@Order(1)
 public class IngestRunner implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(IngestRunner.class);
