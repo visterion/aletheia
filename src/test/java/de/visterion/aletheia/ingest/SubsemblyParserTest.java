@@ -1,7 +1,10 @@
 package de.visterion.aletheia.ingest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -40,5 +43,20 @@ class SubsemblyParserTest {
         "x", "ACC-FALLBACK", null, "1.00", "EUR", "DBIT", "2026-08-01", "2026-08-01",
         "BOOK", null, null, null, null, null, null, null, null, null, null, null, null, null);
     assertThat(b.accountKey()).isEqualTo("ACC-FALLBACK");
+  }
+
+  @Test
+  void nonArrayRootThrowsIllegalArgument() {
+    var in = new ByteArrayInputStream(
+        "{\"not\":\"an array\"}".getBytes(StandardCharsets.UTF_8));
+    assertThatThrownBy(() -> new SubsemblyParser().parse(in))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void malformedJsonThrows() {
+    var in = new ByteArrayInputStream("{ not valid json".getBytes(StandardCharsets.UTF_8));
+    assertThatThrownBy(() -> new SubsemblyParser().parse(in))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 }
