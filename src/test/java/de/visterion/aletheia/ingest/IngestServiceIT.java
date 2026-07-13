@@ -158,6 +158,41 @@ class IngestServiceIT extends AbstractPostgresIT {
   }
 
   @Test
+  void allPendingFileStillWritesImportsRow(@org.junit.jupiter.api.io.TempDir Path dir)
+      throws Exception {
+    String json =
+        """
+        [
+          {"Id":"1","OwnrAcctIBAN":"DE1","Amt":"49.99","AmtCcy":"EUR","CdtDbtInd":"DBIT",
+           "BookgDt":"2026-08-01","BookgSts":"PDNG","RmtdNm":"A","RmtInf":"x"},
+          {"Id":"2","OwnrAcctIBAN":"DE1","Amt":"3.50","AmtCcy":"EUR","CdtDbtInd":"DBIT",
+           "BookgDt":"2026-08-02","BookgSts":"PDNG","RmtdNm":"B","RmtInf":"y"}
+        ]
+        """;
+    ImportSummary s = ingestService.ingest(write(dir, "all-pending.json", json));
+
+    assertThat(s.rowsBooked()).isEqualTo(0);
+    assertThat(s.rowsPendingIgnored()).isEqualTo(2);
+    assertThat(s.fileAlreadyImported()).isFalse();
+    assertThat(db.fetchCount(Tables.IMPORTS)).isEqualTo(1);
+    assertThat(db.fetchCount(Tables.TRANSACTIONS)).isEqualTo(0);
+  }
+
+  @Test
+  void emptyArrayFileWritesImportsRowWithNullPeriod(@org.junit.jupiter.api.io.TempDir Path dir)
+      throws Exception {
+    String json = "[]";
+    ImportSummary s = ingestService.ingest(write(dir, "empty.json", json));
+
+    assertThat(s.rowsBooked()).isEqualTo(0);
+    assertThat(db.fetchCount(Tables.IMPORTS)).isEqualTo(1);
+    var row = db.selectFrom(Tables.IMPORTS).fetchOne();
+    assertThat(row.get(Tables.IMPORTS.PERIOD_START)).isNull();
+    assertThat(row.get(Tables.IMPORTS.PERIOD_END)).isNull();
+    assertThat(db.fetchCount(Tables.TRANSACTIONS)).isEqualTo(0);
+  }
+
+  @Test
   void rawRoundTripsUnknownField(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
     String json =
         "[{\"OwnrAcctIBAN\":\"DE1\",\"Amt\":\"10.00\",\"AmtCcy\":\"EUR\",\"CdtDbtInd\":\"DBIT\","
