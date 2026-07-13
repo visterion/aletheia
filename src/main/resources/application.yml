@@ -10,6 +10,12 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    # Owner creds (spec §6/§7): Flyway needs CREATE/ALTER DDL, so it runs as aletheia_owner,
+    # not aletheia_app or aletheia_ro. The existing single aletheia/aletheia role maps to
+    # aletheia_owner until the three-role split lands (Task 8).
+    url: ${ALETHEIA_DB_URL:jdbc:postgresql://localhost:5432/aletheia}
+    user: ${ALETHEIA_DB_USER:aletheia}
+    password: ${ALETHEIA_DB_PASSWORD}
 
   ai:
     mcp:
@@ -22,6 +28,22 @@ spring:
 aletheia:
   ingest:
     dir: ${ALETHEIA_INGEST_DIR:exports}
+    # Two datasources (spec §6/§7). Both default to empty so DataSourceConfig's fallback chain
+    # (explicit props -> @ServiceConnection JdbcConnectionDetails -> spring.datasource.*) applies:
+    # in prod set the env vars below; in single-datasource/test setups the fallback keeps working.
+    app:
+      # aletheia_app: SELECT+INSERT on transactions, full DML on register/auth tables. Falls back
+      # to spring.datasource.* (the app creds today) until the three-role split (Task 8).
+      url: ${ALETHEIA_APP_DB_URL:}
+      username: ${ALETHEIA_APP_DB_USER:}
+      password: ${ALETHEIA_APP_DB_PASSWORD:}
+    ro:
+      # aletheia_ro: GRANT SELECT only. Used exclusively by the sql_query MCP tool so a
+      # prompt-injected query cannot write, even if the tool-layer SELECT-only check is bypassed.
+      # In prod this MUST be set to the dedicated read-only role (ALETHEIA_RO_DB_*).
+      url: ${ALETHEIA_RO_DB_URL:}
+      username: ${ALETHEIA_RO_DB_USER:}
+      password: ${ALETHEIA_RO_DB_PASSWORD:}
 
 server:
   port: ${ALETHEIA_PORT:8431}
