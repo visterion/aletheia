@@ -6,19 +6,25 @@ import de.visterion.aletheia.jooq.Tables;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.jooq.DSLContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.transaction.annotation.Transactional;
 
-// @Transactional wraps each test method in its own transaction that Spring Test rolls back
-// afterward, isolating the shared Testcontainers Postgres instance between test methods.
-// IngestService's TransactionTemplate (PROPAGATION_REQUIRED, the default) joins this outer
-// transaction, so production semantics (one commit per file) are unaffected in real runs.
-@Transactional
+// No class-level @Transactional here on purpose: IngestService runs its own
+// TransactionTemplate (PROPAGATION_REQUIRED) per file, and if the test method were also
+// wrapped in a Spring-managed transaction, the service's transaction would just join it and
+// never physically commit or roll back until test teardown. That would hide bugs in the
+// "whole file rolls back on error" guarantee. Instead, each test lets IngestService commit or
+// roll back for real, and afterEach() truncates the tables it touches for isolation.
 class IngestServiceIT extends AbstractPostgresIT {
 
   @Autowired IngestService ingestService;
   @Autowired DSLContext db;
+
+  @AfterEach
+  void cleanUp() {
+    db.execute("TRUNCATE TABLE transactions, imports RESTART IDENTITY CASCADE");
+  }
 
   private Path write(Path dir, String name, String json) throws Exception {
     Path f = dir.resolve(name);
@@ -132,6 +138,23 @@ class IngestServiceIT extends AbstractPostgresIT {
             () -> ingestService.ingest(write(dir, "bad.json", json)))
         .isInstanceOf(IllegalArgumentException.class);
     assertThat(txCount()).isZero(); // rolled back
+  }
+
+  @Test
+  void mixedValidAndBadAmountRollsBackWholeFile(@org.junit.jupiter.api.io.TempDir Path dir)
+      throws Exception {
+    String json =
+        "[{\"OwnrAcctIBAN\":\"DE1\",\"Amt\":\"10.00\",\"AmtCcy\":\"EUR\",\"CdtDbtInd\":\"DBIT\","
+            + "\"BookgDt\":\"2026-08-01\",\"BookgSts\":\"BOOK\",\"RmtdNm\":\"A\",\"RmtInf\":\"x\"},"
+            + "{\"OwnrAcctIBAN\":\"DE1\",\"Amt\":\"1.005\",\"AmtCcy\":\"EUR\",\"CdtDbtInd\":\"DBIT\","
+            + "\"BookgDt\":\"2026-08-02\",\"BookgSts\":\"BOOK\",\"RmtdNm\":\"B\",\"RmtInf\":\"y\"}]";
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> ingestService.ingest(write(dir, "mixed.json", json)))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    assertThat(db.fetchCount(Tables.TRANSACTIONS)).isZero();
+    assertThat(db.fetchCount(Tables.IMPORTS)).isZero();
   }
 
   @Test
