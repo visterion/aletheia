@@ -36,6 +36,26 @@ public class OAuthCorsConfig {
             .allowedMethods("GET", "POST", "OPTIONS")
             .allowedHeaders("Authorization", "Content-Type", "Accept")
             .maxAge(3600);
+        // The MCP endpoint itself: a browser-context MCP client (claude.ai) preflights /mcp and
+        // must be able to read the 401 + WWW-Authenticate (RFC 9728) that bootstraps OAuth, plus
+        // the Mcp-Session-Id on the Streamable HTTP transport. Auth still applies (the AuthFilter
+        // guards non-OPTIONS /mcp); this only makes the endpoint CORS-reachable from the browser.
+        registry
+            .addMapping("/mcp/**")
+            .allowedOrigins(ALLOWED_ORIGINS.toArray(String[]::new))
+            .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
+            .allowedHeaders(
+                "Authorization", "Content-Type", "Accept", "Mcp-Session-Id", "Mcp-Protocol-Version")
+            .exposedHeaders("WWW-Authenticate", "Mcp-Session-Id")
+            .maxAge(3600);
+        registry
+            .addMapping("/mcp")
+            .allowedOrigins(ALLOWED_ORIGINS.toArray(String[]::new))
+            .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
+            .allowedHeaders(
+                "Authorization", "Content-Type", "Accept", "Mcp-Session-Id", "Mcp-Protocol-Version")
+            .exposedHeaders("WWW-Authenticate", "Mcp-Session-Id")
+            .maxAge(3600);
       }
     };
   }
