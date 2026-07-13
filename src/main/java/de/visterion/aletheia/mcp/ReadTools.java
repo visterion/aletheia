@@ -48,6 +48,16 @@ public class ReadTools {
 
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
 
+  /**
+   * Matches a top-level {@code INTO} keyword followed by whitespace and something else, the
+   * shape used by {@code SELECT ... INTO new_table FROM ...} (table-creation, not a read). Applied
+   * only to {@link #stripStringLiterals(String)} output so an {@code INTO} that only occurs inside
+   * a string literal (e.g. {@code SELECT 'paid into account'}) does not trip the guard. An {@code
+   * INTO} used as a mere identifier suffix (e.g. {@code AS into_total}) never matches because
+   * {@code \bINTO\b} requires a non-word character on both sides.
+   */
+  private static final Pattern SELECT_INTO = Pattern.compile("(?is)\\bINTO\\b\\s+\\S");
+
   // language=SQL
   private static final String COUNTERPARTY_TRANSACTIONS_SQL =
       """
@@ -329,8 +339,8 @@ public class ReadTools {
       name = "sql_query",
       description =
           "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."
-              + " Runs on a SELECT-only DB role; non-SELECT and stacked statements are rejected"
-              + " before execution.")
+              + " Runs on a SELECT-only DB role; non-SELECT, stacked, and SELECT INTO statements"
+              + " are rejected before execution.")
   public SqlQueryResult sqlQuery(@ToolParam(description = "a single SELECT statement") String sql) {
     requireSelectOnly(sql);
     Result<Record> result = roDsl.fetch(sql);
@@ -350,9 +360,19 @@ public class ReadTools {
   }
 
   /**
-   * Rejects anything that is not a single {@code SELECT} statement, before the tool ever touches
-   * the (SELECT-only) {@code roDsl} connection (spec §5/§9): non-SELECT statements (INSERT,
-   * UPDATE, DELETE, DDL, ...) and stacked statements (a {@code ;} followed by more SQL).
+   * Rejects anything that is not a single, side-effect-free {@code SELECT} statement, before the
+   * tool ever touches the (SELECT-only) {@code roDsl} connection (spec §5/§9): non-SELECT
+   * statements (INSERT, UPDATE, DELETE, DDL, ...), stacked statements (a {@code ;} followed by
+   * more SQL), and the {@code SELECT ... INTO ...} table-creation form (a SELECT that is
+   * actually a write: it creates and populates a new table).
+   *
+   * <p><b>This is defense-in-depth, not the security boundary.</b> The real boundary is the
+   * {@code aletheia_ro} DB role backing {@link #roDsl}: it has {@code SELECT} only, no {@code
+   * CREATE}, and no {@code EXECUTE} on dangerous functions. This tool-layer guard catches the
+   * obvious shapes (non-SELECT, stacked statements, {@code SELECT INTO}) early with a clear error
+   * message, but it cannot catch a side-effecting function call hidden inside an otherwise
+   * syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)} or {@code SELECT
+   * lo_export(...)}) -- blocking those is the DB role's job, not a regex's.
    */
   private static void requireSelectOnly(String sql) {
     if (sql == null || sql.isBlank()) {
@@ -367,6 +387,34 @@ public class ReadTools {
     if (!SELECT_ONLY.matcher(withoutTrailingSemicolon).matches()) {
       throw new IllegalArgumentException("sql_query only allows a single SELECT statement");
     }
+    if (SELECT_INTO.matcher(stripStringLiterals(withoutTrailingSemicolon)).find()) {
+      throw new IllegalArgumentException(
+          "sql_query rejects SELECT INTO (it creates/populates a table, not a read)");
+    }
+  }
+
+  /**
+   * Blanks out the contents of single-quoted SQL string literals so guard regexes only ever see
+   * actual SQL syntax, not text a caller put inside a string (e.g. {@code SELECT 'paid into
+   * account'} must not trip the {@code SELECT INTO} guard). Not a full SQL tokenizer: it toggles
+   * on every {@code '}, so the standard {@code ''} escaped-quote form is treated as an empty
+   * string followed by the resumption of literal SQL rather than one literal containing a quote,
+   * and double-quoted identifiers are left as-is. Both are accepted, documented gaps -- {@link
+   * #requireSelectOnly} is defense-in-depth, not the security boundary.
+   */
+  private static String stripStringLiterals(String sql) {
+    StringBuilder result = new StringBuilder(sql.length());
+    boolean inString = false;
+    for (int i = 0; i < sql.length(); i++) {
+      char c = sql.charAt(i);
+      if (c == '\'') {
+        inString = !inString;
+        result.append(' ');
+      } else {
+        result.append(inString ? ' ' : c);
+      }
+    }
+    return result.toString();
   }
 
   private static String normalize(String value, String defaultValue) {
