@@ -50,8 +50,17 @@ public class AuthFilter extends OncePerRequestFilter {
    * a browser MCP client (claude.ai) cannot read the RFC 9728 {@code WWW-Authenticate} that
    * bootstraps OAuth unless these headers are set here.
    */
-  private static final java.util.Set<String> ALLOWED_MCP_ORIGINS =
-      java.util.Set.of("https://claude.ai", "https://chatgpt.com", "https://chat.openai.com");
+  private static boolean isAllowedMcpOrigin(String origin) {
+    if (origin == null) {
+      return false;
+    }
+    return origin.equals("https://claude.ai")
+        || origin.endsWith(".claude.ai")
+        || origin.equals("https://claude.com")
+        || origin.endsWith(".claude.com")
+        || origin.equals("https://chatgpt.com")
+        || origin.equals("https://chat.openai.com");
+  }
 
   private final Optional<TokenService> tokenService;
   private final RateLimiter rateLimiter;
@@ -183,7 +192,7 @@ public class AuthFilter extends OncePerRequestFilter {
     // Make the 401 readable by a browser MCP client so it can follow WWW-Authenticate into OAuth.
     // AuthFilter short-circuits before Spring's CORS layer, so we set the headers here.
     String origin = request.getHeader("Origin");
-    if (origin != null && ALLOWED_MCP_ORIGINS.contains(origin)) {
+    if (isAllowedMcpOrigin(origin)) {
       response.setHeader("Access-Control-Allow-Origin", origin);
       response.addHeader("Access-Control-Expose-Headers", "WWW-Authenticate");
       response.addHeader("Vary", "Origin");
