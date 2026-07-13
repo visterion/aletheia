@@ -6,6 +6,7 @@ import de.visterion.aletheia.jooq.Tables;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.jooq.DSLContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,6 +15,11 @@ class IngestRunnerIT extends AbstractPostgresIT {
 
   @Autowired IngestService ingestService;
   @Autowired DSLContext db;
+
+  @AfterEach
+  void cleanUp() {
+    db.execute("TRUNCATE TABLE transactions, imports RESTART IDENTITY CASCADE");
+  }
 
   @Test
   void malformedFileIsSkippedAndGoodFileStillIngests(@TempDir Path dir) throws Exception {
