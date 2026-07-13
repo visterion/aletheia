@@ -46,6 +46,13 @@ Banking4 -> Subsembly JSON export -> Ingest -> Postgres -> Aletheia MCP <-> Clau
    one merchant and one classification.
 4. **Dialogue.** The analysis happens in conversation with Claude.
 
+## Ingesting a Banking4 export
+
+Drop a Subsembly JSON export into the directory named by `aletheia.ingest.dir`
+(default `exports/`, gitignored) and start the app. Ingest is idempotent —
+re-importing overlapping periods inserts no duplicates. Only booked
+transactions are stored; pending bookings are skipped.
+
 ## Tagging model
 
 There are two separate levels:

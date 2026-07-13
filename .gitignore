@@ -39,3 +39,5 @@ camt*.xml
 dumps/
 *.csv
 !src/test/resources/**/*.csv
+*.json
+!src/test/resources/**/*.json
