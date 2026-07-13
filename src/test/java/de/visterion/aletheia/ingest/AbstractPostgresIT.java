@@ -17,7 +17,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * whichever subclass ran second.
  */
 @SpringBootTest
-abstract class AbstractPostgresIT {
+public abstract class AbstractPostgresIT {
 
   @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
@@ -30,5 +30,22 @@ abstract class AbstractPostgresIT {
   static void disableStartupIngest(DynamicPropertyRegistry registry) {
     // Point ingest at a non-existent dir so the startup runner no-ops (spec §7 test isolation).
     registry.add("aletheia.ingest.dir", () -> "target/test-no-ingest-dir");
+  }
+
+  @DynamicPropertySource
+  static void pointBothDataSourcesAtTheSharedContainer(DynamicPropertyRegistry registry) {
+    // Prod has three DB roles (owner/app/ro, spec §6/§7); tests run single-role, so both the
+    // app and read-only datasource beans point at the same Testcontainers instance here.
+    registry.add("aletheia.datasource.app.url", POSTGRES::getJdbcUrl);
+    registry.add("aletheia.datasource.app.username", POSTGRES::getUsername);
+    registry.add("aletheia.datasource.app.password", POSTGRES::getPassword);
+    registry.add("aletheia.datasource.ro.url", POSTGRES::getJdbcUrl);
+    registry.add("aletheia.datasource.ro.username", POSTGRES::getUsername);
+    registry.add("aletheia.datasource.ro.password", POSTGRES::getPassword);
+    // spring.flyway.url/user/password (owner creds in prod, spec §6/§7) has hard-coded
+    // localhost defaults in application.yml; point Flyway at the same shared container.
+    registry.add("spring.flyway.url", POSTGRES::getJdbcUrl);
+    registry.add("spring.flyway.user", POSTGRES::getUsername);
+    registry.add("spring.flyway.password", POSTGRES::getPassword);
   }
 }
