@@ -35,7 +35,7 @@ public class CounterpartyResolver implements ApplicationRunner {
       SELECT
           identity_type,
           identity_value,
-          (array_agg(counterparty_name ORDER BY booking_date)
+          (array_agg(counterparty_name ORDER BY booking_date, counterparty_name)
               FILTER (WHERE counterparty_name IS NOT NULL))[1] AS display_name
       FROM (
           SELECT
