@@ -105,6 +105,9 @@ public class LoginController {
     }
     rateLimiter.clearFailures(ip);
     HttpSession session = request.getSession(true);
+    // Rotate the session id after successful auth (anti session-fixation): an attacker who
+    // planted a pre-login session cookie must not be able to ride the now-authenticated session.
+    request.changeSessionId();
     session.setAttribute(SESSION_TOKEN_KEY, token);
     if (safe != null) {
       try {
