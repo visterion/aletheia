@@ -1,0 +1,48 @@
+name: loc
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'badges/**'
+      - '*.md'
+      - 'docs/**'
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  loc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tokei
+        run: |
+          curl -sSL https://github.com/XAMPPRocky/tokei/releases/download/v12.1.2/tokei-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv tokei /usr/local/bin/tokei
+          tokei --version
+      - name: Generate badge JSON
+        run: |
+          mkdir -p badges
+          tokei --exclude target --exclude node_modules --exclude dist --output json > /tmp/tokei.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open('/tmp/tokei.json'))
+          loc = d['Total']['code']
+          msg = f"{loc/1000:.1f}k" if loc >= 1000 else str(loc)
+          out = {"schemaVersion": 1, "label": "lines of code", "message": msg, "color": "blue"}
+          open('badges/loc.json', 'w').write(json.dumps(out))
+          print(f"LOC={loc} -> {msg}")
+          PY
+      - name: Commit if changed
+        run: |
+          if git diff --quiet badges/loc.json 2>/dev/null && [ -f badges/loc.json ]; then
+            echo "no change"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add badges/loc.json
+          git diff --cached --quiet && { echo "no staged change"; exit 0; }
+          git commit -m "chore(badges): refresh LOC count [skip ci]"
+          git push

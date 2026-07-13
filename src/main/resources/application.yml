@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: aletheia
+
+  datasource:
+    url: ${ALETHEIA_DB_URL:jdbc:postgresql://localhost:5432/aletheia}
+    username: ${ALETHEIA_DB_USER:aletheia}
+    password: ${ALETHEIA_DB_PASSWORD:}
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  ai:
+    mcp:
+      server:
+        name: aletheia
+        version: 0.1.0
+        # Streamable HTTP transport, same shape as HiveMem/Agora
+        protocol: STREAMABLE
+
+server:
+  port: ${ALETHEIA_PORT:8431}
+
+logging:
+  level:
+    de.visterion.aletheia: INFO

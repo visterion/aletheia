@@ -1,0 +1,13 @@
+.git/
+.env
+.env.*
+docs/
+target/
+# Never send account data / exports / dumps into the build context.
+exports/
+dumps/
+*.sql.dump
+*.dump
+# Repo working notes, not build inputs.
+*.png
+badges/

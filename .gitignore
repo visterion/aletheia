@@ -1,0 +1,41 @@
+# --- Build output ---
+target/
+node_modules/
+dist/
+
+# --- IDE / tooling ---
+.idea/
+.vscode/
+*.iml
+.DS_Store
+.serena/
+.worktrees/
+.superpowers/
+.playwright-mcp/
+# Local Claude Code settings (deploy permissions, host-specific — never public)
+.claude/settings.local.json
+
+# --- Private working docs (local-only, like the other visterion repos) ---
+docs/
+CLAUDE.md
+AGENTS.md
+/PLAN.md
+/*-PLAN.md
+
+# --- SENSITIVE: this is an OPEN-SOURCE repo, and Aletheia touches real account data ---
+# Never let credentials, real bank exports, DB dumps or account data reach the public remote.
+.env
+.env.*
+!.env.example
+# Banking4 / Subsembly exports and any raw account data
+exports/
+*.export.json
+*.subsembly.json
+banking4-*.json
+camt*.xml
+# Database dumps
+*.sql.dump
+*.dump
+dumps/
+*.csv
+!src/test/resources/**/*.csv
