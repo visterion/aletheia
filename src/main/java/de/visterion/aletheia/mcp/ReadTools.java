@@ -1,0 +1,450 @@
+package de.visterion.aletheia.mcp;
+
+import static de.visterion.aletheia.jooq.Tables.CONTRACTS;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
+import static de.visterion.aletheia.jooq.Tables.RECURRING;
+import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
+
+import de.visterion.aletheia.substrate.CounterpartyEvidence;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+import org.jooq.DSLContext;
+import org.jooq.Field;
+import org.jooq.Record;
+import org.jooq.Result;
+import org.jooq.impl.DSL;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Component;
+
+/**
+ * MCP read tools (spec §5 "Read", scope {@code read}). Every tool name here matches {@code
+ * ToolPermissionService.READ_TOOLS} exactly.
+ *
+ * <p>All tools except {@link #sqlQuery} run on the app {@link DSLContext} ({@code db}, the
+ * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): a
+ * prompt-injected query cannot write, even if the tool-layer SELECT-only check below is somehow
+ * bypassed, because the underlying DB role is SELECT-only.
+ */
+@Component
+public class ReadTools {
+
+  /** {@code recurring.cadence} -> occurrences/year, used to estimate annual cost (spec §5). */
+  private static final Map<String, Integer> CADENCE_PERIODS_PER_YEAR =
+      Map.of(
+          "monthly", 12,
+          "quarterly", 4,
+          "half_yearly", 2,
+          "yearly", 1);
+
+  private static final int DEFAULT_REVIEW_QUEUE_LIMIT = 50;
+
+  private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
+
+  // language=SQL
+  private static final String COUNTERPARTY_TRANSACTIONS_SQL =
+      """
+      SELECT i.id, i.booking_date, i.value_date, i.amount, i.currency, i.direction,
+             i.booking_text, i.remittance_info, i.counterparty_name, i.counterparty_iban,
+             i.creditor_id
+      FROM (
+          SELECT t.*,
+              CASE
+                  WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+                  WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
+                  WHEN t.counterparty_name IS NOT NULL THEN 'name'
+              END AS identity_type,
+              CASE
+                  WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+                  WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
+                  WHEN t.counterparty_name IS NOT NULL THEN
+                      upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
+              END AS identity_value
+          FROM transactions t
+      ) i
+      JOIN counterparties c ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value
+      WHERE c.id = ?
+        AND (CAST(? AS integer) IS NULL OR i.booking_date >= CURRENT_DATE - (CAST(? AS integer) * INTERVAL '1 day'))
+      ORDER BY i.booking_date DESC
+      """;
+
+  private final DSLContext db;
+  private final DSLContext roDsl;
+
+  public ReadTools(DSLContext db, @Qualifier("roDsl") DSLContext roDsl) {
+    this.db = db;
+    this.roDsl = roDsl;
+  }
+
+  @Tool(
+      name = "list_counterparties",
+      description =
+          "List counterparties with their evidence aggregates, current tags, recurring series"
+              + " and contract-link status. filter: untagged | unreviewed | has_recurring | all"
+              + " (default all). sort: spend_desc (default) | recent.")
+  public List<CounterpartySummary> listCounterparties(
+      @ToolParam(
+              description = "untagged | unreviewed | has_recurring | all (default all)",
+              required = false)
+          String filter,
+      @ToolParam(description = "spend_desc (default) | recent", required = false) String sort) {
+    String effectiveFilter = normalize(filter, "all");
+    String effectiveSort = normalize(sort, "spend_desc");
+
+    var query =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                COUNTERPARTIES.IDENTITY_VALUE,
+                COUNTERPARTIES.STATUS,
+                COUNTERPARTIES.REVIEWED,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE,
+                V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.SPAN_DAYS,
+                V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
+                V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
+                V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                DSL.field(
+                    DSL.exists(
+                        DSL.selectOne()
+                            .from(CONTRACTS)
+                            .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))))
+                    .as("has_contract"))
+            .from(COUNTERPARTIES)
+            .leftJoin(RECURRING)
+            .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .leftJoin(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID));
+
+    var conditionalQuery =
+        switch (effectiveFilter) {
+          case "untagged" ->
+              query.where(
+                  DSL.notExists(
+                      DSL.selectOne()
+                          .from(COUNTERPARTY_TAGS)
+                          .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
+          case "unreviewed" -> query.where(COUNTERPARTIES.REVIEWED.eq(false));
+          case "has_recurring" -> query.where(RECURRING.ID.isNotNull());
+          default -> query.where(DSL.trueCondition());
+        };
+
+    var sortedQuery =
+        switch (effectiveSort) {
+          case "recent" -> conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.desc().nullsLast());
+          default ->
+              conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D.desc().nullsLast());
+        };
+
+    Result<Record> rows = sortedQuery.fetch();
+
+    Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();
+
+    List<CounterpartySummary> result = new ArrayList<>();
+    for (Record row : rows) {
+      long id = row.get(COUNTERPARTIES.ID);
+      result.add(
+          new CounterpartySummary(
+              id,
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              row.get(COUNTERPARTIES.IDENTITY_VALUE),
+              row.get(COUNTERPARTIES.STATUS),
+              Boolean.TRUE.equals(row.get(COUNTERPARTIES.REVIEWED)),
+              mapEvidence(row, id),
+              tagsByCounterparty.getOrDefault(id, List.of()),
+              mapRecurring(row),
+              Boolean.TRUE.equals(row.get("has_contract", Boolean.class))));
+    }
+    return result;
+  }
+
+  @Tool(
+      name = "get_review_queue",
+      description =
+          "The counterparties still needing a human decision (status='open'), ordered"
+              + " descending by estimated annual cost (recurring.typical_amount * periods/year,"
+              + " or spend_last_365d if no recurring series is recorded yet).")
+  public List<ReviewQueueEntry> getReviewQueue(
+      @ToolParam(description = "max rows to return (default 50)", required = false)
+          Integer limit) {
+    int effectiveLimit = limit != null && limit > 0 ? limit : DEFAULT_REVIEW_QUEUE_LIMIT;
+
+    var rows =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE,
+                V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.SPAN_DAYS,
+                V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
+                V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
+                V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DIRECTION)
+            .from(COUNTERPARTIES)
+            .leftJoin(RECURRING)
+            .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .leftJoin(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(COUNTERPARTIES.STATUS.eq("open"))
+            .fetch();
+
+    List<ReviewQueueEntry> entries = new ArrayList<>();
+    for (Record row : rows) {
+      long id = row.get(COUNTERPARTIES.ID);
+      CounterpartyEvidence evidence = mapEvidence(row, id);
+      RecurringView recurring = mapRecurring(row);
+      entries.add(
+          new ReviewQueueEntry(
+              id,
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              evidence,
+              recurring,
+              annualCostEstimate(recurring, evidence)));
+    }
+
+    entries.sort(Comparator.comparing(ReviewQueueEntry::annualCostEstimate).reversed());
+    return entries.size() > effectiveLimit ? entries.subList(0, effectiveLimit) : entries;
+  }
+
+  @Tool(
+      name = "list_unmatched_recurring",
+      description =
+          "Recurring series whose counterparty has no linked contracts row -- a recurring debit"
+              + " without a documented contract.")
+  public List<UnmatchedRecurringEntry> listUnmatchedRecurring() {
+    var rows =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                COUNTERPARTIES.IDENTITY_VALUE,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE)
+            .from(RECURRING)
+            .join(COUNTERPARTIES)
+            .on(COUNTERPARTIES.ID.eq(RECURRING.COUNTERPARTY_ID))
+            .where(
+                DSL.notExists(
+                    DSL.selectOne()
+                        .from(CONTRACTS)
+                        .where(CONTRACTS.COUNTERPARTY_ID.eq(RECURRING.COUNTERPARTY_ID))))
+            .fetch();
+
+    List<UnmatchedRecurringEntry> entries = new ArrayList<>();
+    for (Record row : rows) {
+      entries.add(
+          new UnmatchedRecurringEntry(
+              row.get(COUNTERPARTIES.ID),
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              row.get(COUNTERPARTIES.IDENTITY_VALUE),
+              mapRecurring(row)));
+    }
+    return entries;
+  }
+
+  @Tool(
+      name = "counterparty_transactions",
+      description =
+          "The underlying bookings for one counterparty (evidence detail), optionally limited to"
+              + " the last N days via period.")
+  public List<TransactionView> counterpartyTransactions(
+      @ToolParam(description = "counterparties.id") long counterpartyId,
+      @ToolParam(description = "restrict to the last N days; omit for all history", required = false)
+          Integer period) {
+    Result<Record> rows =
+        db.fetch(COUNTERPARTY_TRANSACTIONS_SQL, counterpartyId, period, period);
+    List<TransactionView> transactions = new ArrayList<>();
+    for (Record row : rows) {
+      transactions.add(
+          new TransactionView(
+              row.get("id", Long.class),
+              row.get("booking_date", java.time.LocalDate.class),
+              row.get("value_date", java.time.LocalDate.class),
+              row.get("amount", BigDecimal.class),
+              row.get("currency", String.class),
+              row.get("direction", String.class),
+              row.get("booking_text", String.class),
+              row.get("remittance_info", String.class),
+              row.get("counterparty_name", String.class),
+              row.get("counterparty_iban", String.class),
+              row.get("creditor_id", String.class)));
+    }
+    return transactions;
+  }
+
+  @Tool(
+      name = "sql_query",
+      description =
+          "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."
+              + " Runs on a SELECT-only DB role; non-SELECT and stacked statements are rejected"
+              + " before execution.")
+  public SqlQueryResult sqlQuery(@ToolParam(description = "a single SELECT statement") String sql) {
+    requireSelectOnly(sql);
+    Result<Record> result = roDsl.fetch(sql);
+    List<String> columns = new ArrayList<>();
+    for (Field<?> field : result.fields()) {
+      columns.add(field.getName());
+    }
+    List<Map<String, Object>> rowMaps = new ArrayList<>();
+    for (Record row : result) {
+      Map<String, Object> rowMap = new LinkedHashMap<>();
+      for (String column : columns) {
+        rowMap.put(column, row.get(column));
+      }
+      rowMaps.add(rowMap);
+    }
+    return new SqlQueryResult(columns, rowMaps);
+  }
+
+  /**
+   * Rejects anything that is not a single {@code SELECT} statement, before the tool ever touches
+   * the (SELECT-only) {@code roDsl} connection (spec §5/§9): non-SELECT statements (INSERT,
+   * UPDATE, DELETE, DDL, ...) and stacked statements (a {@code ;} followed by more SQL).
+   */
+  private static void requireSelectOnly(String sql) {
+    if (sql == null || sql.isBlank()) {
+      throw new IllegalArgumentException("sql_query requires a non-blank SELECT statement");
+    }
+    String trimmed = sql.strip();
+    String withoutTrailingSemicolon =
+        trimmed.endsWith(";") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    if (withoutTrailingSemicolon.contains(";")) {
+      throw new IllegalArgumentException("sql_query rejects stacked statements");
+    }
+    if (!SELECT_ONLY.matcher(withoutTrailingSemicolon).matches()) {
+      throw new IllegalArgumentException("sql_query only allows a single SELECT statement");
+    }
+  }
+
+  private static String normalize(String value, String defaultValue) {
+    return value == null || value.isBlank() ? defaultValue : value;
+  }
+
+  private Map<Long, List<CounterpartyTagView>> fetchTagsByCounterparty() {
+    Map<Long, List<CounterpartyTagView>> byCounterparty = new LinkedHashMap<>();
+    db.selectFrom(COUNTERPARTY_TAGS)
+        .fetch()
+        .forEach(
+            tagRow ->
+                byCounterparty
+                    .computeIfAbsent(tagRow.get(COUNTERPARTY_TAGS.COUNTERPARTY_ID), key -> new ArrayList<>())
+                    .add(
+                        new CounterpartyTagView(
+                            tagRow.get(COUNTERPARTY_TAGS.DIMENSION),
+                            tagRow.get(COUNTERPARTY_TAGS.VALUE),
+                            tagRow.get(COUNTERPARTY_TAGS.SOURCE),
+                            tagRow.get(COUNTERPARTY_TAGS.CONFIDENCE))));
+    return byCounterparty;
+  }
+
+  /** Returns {@code null} when the left-joined evidence row is absent (no matched transactions). */
+  private static CounterpartyEvidence mapEvidence(Record row, long counterpartyId) {
+    Long evidenceCounterpartyId = row.get(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID);
+    if (evidenceCounterpartyId == null) {
+      return null;
+    }
+    Long txnCount = row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT);
+    Integer spanDays = row.get(V_COUNTERPARTY_EVIDENCE.SPAN_DAYS);
+    return new CounterpartyEvidence(
+        counterpartyId,
+        txnCount == null ? 0 : txnCount.intValue(),
+        row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN),
+        row.get(V_COUNTERPARTY_EVIDENCE.LAST_SEEN),
+        spanDays == null ? 0 : spanDays,
+        row.get(V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT),
+        row.get(V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN),
+        row.get(V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX),
+        row.get(V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG),
+        row.get(V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV),
+        row.get(V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS),
+        row.get(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D),
+        row.get(V_COUNTERPARTY_EVIDENCE.DIRECTION));
+  }
+
+  /** Returns {@code null} when the left-joined recurring row is absent. */
+  private static RecurringView mapRecurring(Record row) {
+    Long recurringId = row.get(RECURRING.ID);
+    if (recurringId == null) {
+      return null;
+    }
+    return new RecurringView(
+        recurringId,
+        row.get(RECURRING.CADENCE),
+        row.get(RECURRING.TYPICAL_AMOUNT),
+        row.get(RECURRING.AMOUNT_MIN),
+        row.get(RECURRING.AMOUNT_MAX),
+        row.get(RECURRING.FIRST_SEEN),
+        row.get(RECURRING.LAST_SEEN),
+        row.get(RECURRING.OCCURRENCE_COUNT),
+        row.get(RECURRING.SOURCE),
+        row.get(RECURRING.CONFIDENCE));
+  }
+
+  /**
+   * spec §5: annual cost = {@code typical_amount * periods/year} for a non-irregular recurring
+   * series, else {@code spend_last_365d}. {@code irregular} has no clean periods/year, so it
+   * falls back to the same {@code spend_last_365d} proxy used before any recurring is marked.
+   */
+  private static BigDecimal annualCostEstimate(RecurringView recurring, CounterpartyEvidence evidence) {
+    if (recurring != null && recurring.typicalAmount() != null) {
+      Integer periodsPerYear = CADENCE_PERIODS_PER_YEAR.get(recurring.cadence());
+      if (periodsPerYear != null) {
+        return recurring.typicalAmount().multiply(BigDecimal.valueOf(periodsPerYear));
+      }
+    }
+    return evidence != null && evidence.spendLast365d() != null ? evidence.spendLast365d() : BigDecimal.ZERO;
+  }
+}
