@@ -4,6 +4,7 @@ import static de.visterion.aletheia.jooq.Tables.CONTRACTS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
+import static de.visterion.aletheia.jooq.Tables.V_CONTRACT_EVIDENCE;
 import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
@@ -420,15 +421,21 @@ public class ReadTools {
   @Tool(
       name = "get_review_queue",
       description =
-          "The counterparties still needing a human decision (status='open'), ordered"
-              + " descending by estimated annual cost (recurring.typical_amount * periods/year,"
-              + " or the DBIT-only spend of the last 365 days if no recurring series is"
-              + " recorded yet). Excludes CRDT-predominant counterparties (salary, incoming"
-              + " transfers -- see list_income); a counterparty with no evidence row yet"
-              + " (unknown direction) stays in the queue, since nothing should skip human"
-              + " review. Compact by default ({id, displayName, identityType, cadence,"
-              + " annualCostEstimate, txnCount, lastSeen}); pass verbose=true for the full"
-              + " evidence/recurring blob.")
+          "The obligations still needing a human decision, ordered descending by estimated"
+              + " annual cost. Two shapes: an OPEN contract (contracts.status='open') -- the"
+              + " primary decision unit for any counterparty that has a contract layer at all,"
+              + " confirm/dismiss it via confirm_counterparty/dismiss_counterparty(contractId);"
+              + " or, for a counterparty with no contract row whatsoever (e.g. an ELV obligation"
+              + " that never carried a mandate_id), the whole open counterparty (contractId"
+              + " null) -- confirm/dismiss it without a contractId. Annual cost is"
+              + " recurring.typical_amount * periods/year, or the DBIT-only spend of the last"
+              + " 365 days if no recurring series is recorded yet, scoped to the contract when"
+              + " one exists (never the counterparty's combined debit). Excludes"
+              + " CRDT-predominant counterparties (salary, incoming transfers -- see"
+              + " list_income); a counterparty with no evidence row yet (unknown direction)"
+              + " stays in the queue, since nothing should skip human review. Compact by default"
+              + " ({id, contractId, displayName, identityType, cadence, annualCostEstimate,"
+              + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob.")
   public List<ReviewQueueEntry> getReviewQueue(
       @ToolParam(description = "max rows to return (default 50)", required = false)
           Integer limit,
@@ -441,6 +448,116 @@ public class ReadTools {
     int effectiveLimit = limit != null && limit > 0 ? limit : DEFAULT_REVIEW_QUEUE_LIMIT;
     boolean effectiveVerbose = Boolean.TRUE.equals(verbose);
 
+    List<ReviewQueueEntry> entries = new ArrayList<>();
+    entries.addAll(openContractEntries(effectiveVerbose));
+    entries.addAll(openCounterpartiesWithoutContractsEntries(effectiveVerbose));
+
+    entries.sort(Comparator.comparing(ReviewQueueEntry::annualCostEstimate).reversed());
+    return entries.size() > effectiveLimit ? entries.subList(0, effectiveLimit) : entries;
+  }
+
+  /**
+   * The primary decision unit (TP1 contract grain): one row per OPEN {@code contracts} row.
+   * {@code v_contract_evidence} supplies the per-mandate debit fallback; {@code
+   * v_counterparty_evidence} is left-joined too so a mandate-less contract (whose {@code
+   * v_contract_evidence} join yields no match, since {@code NULL = NULL} is never true) still
+   * gets a debit fallback -- the counterparty's own debit, since a mandate-less obligation IS the
+   * whole counterparty (spec review M1 edge case).
+   */
+  private List<ReviewQueueEntry> openContractEntries(boolean verbose) {
+    var rows =
+        db.select(
+                CONTRACTS.ID,
+                CONTRACTS.COUNTERPARTY_ID,
+                CONTRACTS.MANDATE_ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE,
+                V_CONTRACT_EVIDENCE.TXN_COUNT,
+                V_CONTRACT_EVIDENCE.LAST_SEEN,
+                V_CONTRACT_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.SPAN_DAYS,
+                V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
+                V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
+                V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL)
+            .from(CONTRACTS)
+            .join(COUNTERPARTIES)
+            .on(COUNTERPARTIES.ID.eq(CONTRACTS.COUNTERPARTY_ID))
+            .leftJoin(RECURRING)
+            .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
+            .leftJoin(V_CONTRACT_EVIDENCE)
+            .on(
+                V_CONTRACT_EVIDENCE
+                    .COUNTERPARTY_ID
+                    .eq(CONTRACTS.COUNTERPARTY_ID)
+                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+            .leftJoin(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
+            .where(CONTRACTS.STATUS.eq("open"))
+            .fetch();
+
+    List<ReviewQueueEntry> entries = new ArrayList<>();
+    for (Record row : rows) {
+      long counterpartyId = row.get(CONTRACTS.COUNTERPARTY_ID);
+      RecurringView recurring = mapRecurring(row);
+      BigDecimal contractDebit = row.get(V_CONTRACT_EVIDENCE.DEBIT_LAST_365D);
+      BigDecimal counterpartyDebit = row.get(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D);
+      BigDecimal debitFallback = contractDebit != null ? contractDebit : counterpartyDebit;
+      Long contractTxnCount = row.get(V_CONTRACT_EVIDENCE.TXN_COUNT);
+      Integer txnCount =
+          contractTxnCount != null
+              ? contractTxnCount.intValue()
+              : row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT) == null
+                  ? null
+                  : row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT).intValue();
+      LocalDate lastSeen =
+          row.get(V_CONTRACT_EVIDENCE.LAST_SEEN) != null
+              ? row.get(V_CONTRACT_EVIDENCE.LAST_SEEN)
+              : row.get(V_COUNTERPARTY_EVIDENCE.LAST_SEEN);
+      CounterpartyEvidence evidence = mapEvidence(row, counterpartyId);
+      entries.add(
+          new ReviewQueueEntry(
+              counterpartyId,
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              row.get(CONTRACTS.ID),
+              verbose ? evidence : null,
+              verbose ? recurring : null,
+              AnnualCost.estimate(recurring, debitFallback),
+              recurring == null ? null : recurring.cadence(),
+              txnCount,
+              lastSeen));
+    }
+    return entries;
+  }
+
+  /**
+   * The legacy path (pre-TP1 behavior, preserved): an OPEN counterparty with NO {@code contracts}
+   * row at all -- it was never contract-rooted (e.g. an ELV obligation that never carried a
+   * {@code mandate_id}), so the whole counterparty remains the decision unit.
+   */
+  private List<ReviewQueueEntry> openCounterpartiesWithoutContractsEntries(boolean verbose) {
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
@@ -478,6 +595,11 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
             .where(COUNTERPARTIES.STATUS.eq("open"))
+            .and(
+                DSL.notExists(
+                    DSL.selectOne()
+                        .from(CONTRACTS)
+                        .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))))
             // The evidence view is a LEFT JOIN: a bare `= 'DBIT'` would behave like an inner
             // join and silently drop an open counterparty with no evidence row yet. The IS
             // NULL branch keeps unknown-direction counterparties in the queue -- nothing
@@ -502,16 +624,15 @@ public class ReadTools {
               id,
               row.get(COUNTERPARTIES.DISPLAY_NAME),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
-              effectiveVerbose ? evidence : null,
-              effectiveVerbose ? recurring : null,
+              null,
+              verbose ? evidence : null,
+              verbose ? recurring : null,
               AnnualCost.estimate(recurring, evidence),
               cadence,
               txnCount,
               lastSeen));
     }
-
-    entries.sort(Comparator.comparing(ReviewQueueEntry::annualCostEstimate).reversed());
-    return entries.size() > effectiveLimit ? entries.subList(0, effectiveLimit) : entries;
+    return entries;
   }
 
   @Tool(
@@ -648,13 +769,19 @@ public class ReadTools {
   @Tool(
       name = "obligations_register",
       description =
-          "The documented obligations register: confirmed recurring outgoing (DBIT) obligations"
-              + " with annual cost, tags and contract-link status, ordered by annual cost, plus"
-              + " the total.")
+          "The documented obligations register: confirmed contracts (TP1 contract grain -- one"
+              + " row per confirmed contracts row, so a counterparty with two confirmed"
+              + " contracts, e.g. two insurance policies, produces two rows) with annual cost,"
+              + " tags and contract-link status, ordered by annual cost, plus the total. Each"
+              + " row's annual cost is scoped to its OWN contract -- never the counterparty's"
+              + " combined debit.")
   public ObligationsRegister obligationsRegister() {
     var rows =
         db.select(
-                COUNTERPARTIES.ID,
+                CONTRACTS.ID,
+                CONTRACTS.COUNTERPARTY_ID,
+                CONTRACTS.MANDATE_ID,
+                CONTRACTS.HIVEMEM_CELL_ID,
                 COUNTERPARTIES.DISPLAY_NAME,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 RECURRING.ID,
@@ -667,52 +794,48 @@ public class ReadTools {
                 RECURRING.OCCURRENCE_COUNT,
                 RECURRING.SOURCE,
                 RECURRING.CONFIDENCE,
-                V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID,
-                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
-                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
-                V_COUNTERPARTY_EVIDENCE.LAST_SEEN,
-                V_COUNTERPARTY_EVIDENCE.SPAN_DAYS,
-                V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT,
-                V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN,
-                V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX,
-                V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG,
-                V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
-                V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
-                V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
-                V_COUNTERPARTY_EVIDENCE.DIRECTION,
-                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
-                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
-                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
-                CONTRACTS.COUNTERPARTY_ID,
-                CONTRACTS.HIVEMEM_CELL_ID)
-            .from(COUNTERPARTIES)
-            .join(RECURRING)
-            .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
-            .join(V_COUNTERPARTY_EVIDENCE)
-            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
-            .leftJoin(CONTRACTS)
-            .on(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
-            .where(COUNTERPARTIES.STATUS.eq("confirmed"))
-            .and(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("DBIT"))
+                V_CONTRACT_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D)
+            .from(CONTRACTS)
+            .join(COUNTERPARTIES)
+            .on(COUNTERPARTIES.ID.eq(CONTRACTS.COUNTERPARTY_ID))
+            .leftJoin(RECURRING)
+            .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
+            .leftJoin(V_CONTRACT_EVIDENCE)
+            .on(
+                V_CONTRACT_EVIDENCE
+                    .COUNTERPARTY_ID
+                    .eq(CONTRACTS.COUNTERPARTY_ID)
+                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+            // A mandate-less contract's MANDATE_ID is NULL, so the join above never matches it
+            // (NULL = NULL is not TRUE in SQL) -- fall back to the counterparty's own evidence,
+            // since a mandate-less obligation IS the whole counterparty (spec review M1 edge
+            // case).
+            .leftJoin(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
+            .where(CONTRACTS.STATUS.eq("confirmed"))
             .fetch();
 
     Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();
 
     List<ObligationRow> obligationRows = new ArrayList<>();
     for (Record row : rows) {
-      long id = row.get(COUNTERPARTIES.ID);
-      CounterpartyEvidence evidence = mapEvidence(row, id);
+      long counterpartyId = row.get(CONTRACTS.COUNTERPARTY_ID);
       RecurringView recurring = mapRecurring(row);
-      boolean hasContract = row.get(CONTRACTS.COUNTERPARTY_ID) != null;
+      BigDecimal contractDebit = row.get(V_CONTRACT_EVIDENCE.DEBIT_LAST_365D);
+      BigDecimal counterpartyDebit = row.get(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D);
+      BigDecimal debitFallback = contractDebit != null ? contractDebit : counterpartyDebit;
       obligationRows.add(
           new ObligationRow(
-              id,
+              counterpartyId,
               row.get(COUNTERPARTIES.DISPLAY_NAME),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              row.get(CONTRACTS.ID),
+              row.get(CONTRACTS.MANDATE_ID),
               recurring == null ? null : recurring.cadence(),
-              AnnualCost.estimate(recurring, evidence),
-              tagsByCounterparty.getOrDefault(id, List.of()),
-              hasContract,
+              AnnualCost.estimate(recurring, debitFallback),
+              tagsByCounterparty.getOrDefault(counterpartyId, List.of()),
+              true,
               row.get(CONTRACTS.HIVEMEM_CELL_ID)));
     }
 
