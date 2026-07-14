@@ -77,7 +77,7 @@ class ReadToolsIT extends AbstractPostgresIT {
   }
 
   @Test
-  void listCounterpartiesOrdersBySpendLast365dDescendingByDefault() {
+  void listCounterpartiesOrdersByDebitLast365dDescendingByDefault() {
     long imp = importId();
     // Big spender: 2 debits totalling 500 in the last year.
     insertTxn(imp, "hash-big-1", LocalDate.now().minusDays(10), "250.00", "DBIT", "CDTR-BIG", null, "Big Spender");
@@ -94,6 +94,24 @@ class ReadToolsIT extends AbstractPostgresIT {
     assertThat(summaries.get(0).evidence()).isNotNull();
     assertThat(summaries.get(0).evidence().spendLast365d()).isEqualByComparingTo("500.00");
     assertThat(summaries.get(1).displayName()).isEqualTo("Small Spender");
+  }
+
+  @Test
+  void listCounterpartiesSpendDescRanksByDebitOnlySpendNotDirectionBlindTotal() {
+    long imp = importId();
+    // Salary: a single large credit, no debits at all.
+    insertTxn(imp, "hash-salary-1", LocalDate.now().minusDays(15), "5000.00", "CRDT", "CDTR-SALARY", null, "Salary");
+    // Netflix: a modest debit.
+    insertTxn(imp, "hash-netflix-1", LocalDate.now().minusDays(20), "200.00", "DBIT", "CDTR-NETFLIX", null, "Netflix");
+
+    resolver.run(null);
+
+    List<CounterpartySummary> summaries =
+        readTools.listCounterparties(null, CounterpartySort.spend_desc);
+
+    assertThat(summaries).hasSize(2);
+    assertThat(summaries.get(0).displayName()).isEqualTo("Netflix");
+    assertThat(summaries.get(1).displayName()).isEqualTo("Salary");
   }
 
   @Test

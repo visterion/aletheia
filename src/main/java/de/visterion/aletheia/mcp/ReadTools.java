@@ -388,7 +388,7 @@ public class ReadTools {
         switch (effectiveSort) {
           case recent -> conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.desc().nullsLast());
           case spend_desc ->
-              conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D.desc().nullsLast());
+              conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D.desc().nullsLast());
         };
 
     Result<Record> rows = sortedQuery.fetch();
