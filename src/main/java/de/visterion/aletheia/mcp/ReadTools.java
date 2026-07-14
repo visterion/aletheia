@@ -585,6 +585,87 @@ public class ReadTools {
   }
 
   @Tool(
+      name = "obligations_register",
+      description =
+          "The documented obligations register: confirmed recurring outgoing (DBIT) obligations"
+              + " with annual cost, tags and contract-link status, ordered by annual cost, plus"
+              + " the total.")
+  public ObligationsRegister obligationsRegister() {
+    var rows =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE,
+                V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.SPAN_DAYS,
+                V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
+                V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
+                V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
+                CONTRACTS.COUNTERPARTY_ID,
+                CONTRACTS.HIVEMEM_CELL_ID)
+            .from(COUNTERPARTIES)
+            .join(RECURRING)
+            .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .join(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .leftJoin(CONTRACTS)
+            .on(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(COUNTERPARTIES.STATUS.eq("confirmed"))
+            .and(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("DBIT"))
+            .fetch();
+
+    Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();
+
+    List<ObligationRow> obligationRows = new ArrayList<>();
+    for (Record row : rows) {
+      long id = row.get(COUNTERPARTIES.ID);
+      CounterpartyEvidence evidence = mapEvidence(row, id);
+      RecurringView recurring = mapRecurring(row);
+      boolean hasContract = row.get(CONTRACTS.COUNTERPARTY_ID) != null;
+      obligationRows.add(
+          new ObligationRow(
+              id,
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              recurring == null ? null : recurring.cadence(),
+              AnnualCost.estimate(recurring, evidence),
+              tagsByCounterparty.getOrDefault(id, List.of()),
+              hasContract,
+              row.get(CONTRACTS.HIVEMEM_CELL_ID)));
+    }
+
+    obligationRows.sort(Comparator.comparing(ObligationRow::annualCost).reversed());
+
+    BigDecimal total =
+        obligationRows.stream()
+            .map(ObligationRow::annualCost)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+    return new ObligationsRegister(obligationRows, total);
+  }
+
+  @Tool(
       name = "sql_query",
       description =
           "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."
