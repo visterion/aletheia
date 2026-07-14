@@ -40,13 +40,12 @@ public class WriteTools {
   @Tool(
       name = "classify_counterparty",
       description =
-          "Set/replace the tags for one dimension on a counterparty (domain | nature |"
-              + " necessity). source: auto | confirmed. Never sets counterparties.reviewed or"
-              + " status -- only confirm/dismiss do that.")
+          "Set/replace the tags for one dimension on a counterparty. Never sets"
+              + " counterparties.reviewed or status -- only confirm/dismiss do that.")
   public WriteAck classifyCounterparty(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(description = "the {dimension, value} pairs to set") List<TagInput> tags,
-      @ToolParam(description = "auto | confirmed") String source,
+      @ToolParam(description = "provenance of this classification") TagSource source,
       @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
     requireExistingCounterparty(counterpartyId);
     if (tags == null || tags.isEmpty()) {
@@ -77,7 +76,7 @@ public class WriteTools {
             .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, counterpartyId)
             .set(COUNTERPARTY_TAGS.DIMENSION, dimension)
             .set(COUNTERPARTY_TAGS.VALUE, value)
-            .set(COUNTERPARTY_TAGS.SOURCE, source)
+            .set(COUNTERPARTY_TAGS.SOURCE, source.name())
             .set(COUNTERPARTY_TAGS.CONFIDENCE, confidence)
             .execute();
       }
@@ -87,7 +86,7 @@ public class WriteTools {
           "tag:" + dimension,
           String.join(",", oldValues),
           String.join(",", newValues),
-          source);
+          source.name());
     }
 
     return new WriteAck(counterpartyId, "tags updated for " + dimensions.size() + " dimension(s)");
@@ -97,18 +96,16 @@ public class WriteTools {
       name = "mark_recurring",
       description =
           "Record/replace the recurring series for a counterparty (upsert on counterparty_id)."
-              + " cadence: monthly | quarterly | half_yearly | yearly | irregular. source: auto |"
-              + " confirmed. Never sets counterparties.reviewed or status.")
+              + " Never sets counterparties.reviewed or status.")
   public WriteAck markRecurring(
       @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(description = "monthly | quarterly | half_yearly | yearly | irregular")
-          String cadence,
+      @ToolParam(description = "recurrence interval") Cadence cadence,
       @ToolParam(description = "the representative amount per occurrence") BigDecimal typicalAmount,
       @ToolParam(description = "smallest observed amount, optional", required = false)
           BigDecimal amountMin,
       @ToolParam(description = "largest observed amount, optional", required = false)
           BigDecimal amountMax,
-      @ToolParam(description = "auto | confirmed") String source,
+      @ToolParam(description = "provenance of this classification") TagSource source,
       @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
     requireExistingCounterparty(counterpartyId);
 
@@ -120,19 +117,19 @@ public class WriteTools {
 
     db.insertInto(RECURRING)
         .set(RECURRING.COUNTERPARTY_ID, counterpartyId)
-        .set(RECURRING.CADENCE, cadence)
+        .set(RECURRING.CADENCE, cadence.name())
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
         .set(RECURRING.AMOUNT_MIN, amountMin)
         .set(RECURRING.AMOUNT_MAX, amountMax)
-        .set(RECURRING.SOURCE, source)
+        .set(RECURRING.SOURCE, source.name())
         .set(RECURRING.CONFIDENCE, confidence)
         .onConflict(RECURRING.COUNTERPARTY_ID)
         .doUpdate()
-        .set(RECURRING.CADENCE, cadence)
+        .set(RECURRING.CADENCE, cadence.name())
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
         .set(RECURRING.AMOUNT_MIN, amountMin)
         .set(RECURRING.AMOUNT_MAX, amountMax)
-        .set(RECURRING.SOURCE, source)
+        .set(RECURRING.SOURCE, source.name())
         .set(RECURRING.CONFIDENCE, confidence)
         .execute();
 
@@ -141,9 +138,9 @@ public class WriteTools {
         "recurring",
         oldTypicalAmount == null ? null : oldTypicalAmount.toPlainString(),
         typicalAmount == null ? null : typicalAmount.toPlainString(),
-        source);
+        source.name());
 
-    return new WriteAck(counterpartyId, "recurring series set to " + cadence);
+    return new WriteAck(counterpartyId, "recurring series set to " + cadence.name());
   }
 
   @Tool(
