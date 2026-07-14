@@ -152,10 +152,17 @@ public class WriteTools {
   @Tool(
       name = "mark_recurring",
       description =
-          "Record/replace the recurring series for a counterparty (upsert on counterparty_id)."
-              + " Never sets counterparties.reviewed or status.")
+          "Record/replace the recurring series for a counterparty, keyed by (counterparty_id,"
+              + " contract_id) -- pass contractId (a contracts.id) to target that specific"
+              + " contract's series, or null for the counterparty's mandate-less series. An"
+              + " auto-source call can never overwrite an already-confirmed row. Never sets"
+              + " counterparties.reviewed or status.")
   public WriteAck markRecurring(
       @ToolParam(description = "counterparties.id") long counterpartyId,
+      @ToolParam(
+              description = "contracts.id to target, or null for the mandate-less series",
+              required = false)
+          Long contractId,
       @ToolParam(description = "recurrence interval") Cadence cadence,
       @ToolParam(description = "the representative amount per occurrence") BigDecimal typicalAmount,
       @ToolParam(description = "smallest observed amount, optional", required = false)
@@ -166,21 +173,28 @@ public class WriteTools {
       @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
     requireExistingCounterparty(counterpartyId);
 
+    org.jooq.Condition key =
+        RECURRING
+            .COUNTERPARTY_ID
+            .eq(counterpartyId)
+            .and(
+                contractId == null
+                    ? RECURRING.CONTRACT_ID.isNull()
+                    : RECURRING.CONTRACT_ID.eq(contractId));
+
     BigDecimal oldTypicalAmount =
-        db.select(RECURRING.TYPICAL_AMOUNT)
-            .from(RECURRING)
-            .where(RECURRING.COUNTERPARTY_ID.eq(counterpartyId))
-            .fetchOne(RECURRING.TYPICAL_AMOUNT);
+        db.select(RECURRING.TYPICAL_AMOUNT).from(RECURRING).where(key).fetchOne(RECURRING.TYPICAL_AMOUNT);
 
     db.insertInto(RECURRING)
         .set(RECURRING.COUNTERPARTY_ID, counterpartyId)
+        .set(RECURRING.CONTRACT_ID, contractId)
         .set(RECURRING.CADENCE, cadence.name())
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
         .set(RECURRING.AMOUNT_MIN, amountMin)
         .set(RECURRING.AMOUNT_MAX, amountMax)
         .set(RECURRING.SOURCE, source.name())
         .set(RECURRING.CONFIDENCE, confidence)
-        .onConflict(RECURRING.COUNTERPARTY_ID)
+        .onConflict(RECURRING.COUNTERPARTY_ID, RECURRING.CONTRACT_ID)
         .doUpdate()
         .set(RECURRING.CADENCE, cadence.name())
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
@@ -188,6 +202,8 @@ public class WriteTools {
         .set(RECURRING.AMOUNT_MAX, amountMax)
         .set(RECURRING.SOURCE, source.name())
         .set(RECURRING.CONFIDENCE, confidence)
+        // GUARD: an auto-source call can never overwrite a row a human already confirmed.
+        .where(RECURRING.SOURCE.eq("auto"))
         .execute();
 
     insertHistory(
@@ -203,12 +219,29 @@ public class WriteTools {
   @Tool(
       name = "confirm_counterparty",
       description =
-          "The human's 'yes': flip this counterparty's auto tags/recurring to confirmed, set"
-              + " reviewed=true and status='confirmed'. Drains the review queue for this"
-              + " counterparty.")
+          "The human's 'yes'. If contractId (a contracts.id) is given, confirms just that"
+              + " contract: status='confirmed', source='confirmed', confirmed_at=now(), and its"
+              + " linked recurring row's source='confirmed' -- the counterparty's tags/reviewed"
+              + " flag are untouched. If contractId is omitted and the counterparty has a"
+              + " mandate-less auto recurring row (contract_id IS NULL), that series is"
+              + " materialized into a NULL-mandate contract first and confirmed the same way."
+              + " Otherwise (no contractId, no mandate-less series): legacy behavior -- flip this"
+              + " counterparty's auto tags/recurring to confirmed, set reviewed=true and"
+              + " status='confirmed'. Drains the review queue for this counterparty.")
   public WriteAck confirmCounterparty(
-      @ToolParam(description = "counterparties.id") long counterpartyId) {
+      @ToolParam(description = "counterparties.id") long counterpartyId,
+      @ToolParam(
+              description = "contracts.id to confirm, optional -- see tool description",
+              required = false)
+          Long contractId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
+
+    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
+      long targetContract =
+          contractId != null ? contractId : materializeMandatelessContract(counterpartyId);
+      confirmContractRow(counterpartyId, targetContract);
+      return new WriteAck(counterpartyId, "contract " + targetContract + " confirmed");
+    }
 
     db.update(COUNTERPARTY_TAGS)
         .set(COUNTERPARTY_TAGS.SOURCE, "confirmed")
@@ -233,55 +266,139 @@ public class WriteTools {
     return new WriteAck(counterpartyId, "confirmed");
   }
 
+  private void confirmContractRow(long counterpartyId, long contractId) {
+    db.update(CONTRACTS)
+        .set(CONTRACTS.STATUS, "confirmed")
+        .set(CONTRACTS.SOURCE, "confirmed")
+        .set(CONTRACTS.CONFIRMED_AT, java.time.OffsetDateTime.now())
+        .where(CONTRACTS.ID.eq(contractId))
+        .execute();
+
+    db.update(RECURRING)
+        .set(RECURRING.SOURCE, "confirmed")
+        .where(RECURRING.CONTRACT_ID.eq(contractId))
+        .execute();
+
+    insertHistory(counterpartyId, "contract:" + contractId, "open", "confirmed", "confirmed");
+  }
+
+  /**
+   * True if {@code counterpartyId} has a recurring row with no linked contract ({@code
+   * contract_id IS NULL}) -- i.e. an obligation that surfaced without a mandate (recurring debits
+   * that never carry a {@code mandate_id}, spec §5) and has not yet had its contract row
+   * materialized by a per-contract confirm/dismiss/link.
+   */
+  private boolean hasMandatelessAutoRecurring(long counterpartyId) {
+    return db.fetchExists(
+        db.selectOne()
+            .from(RECURRING)
+            .where(RECURRING.COUNTERPARTY_ID.eq(counterpartyId))
+            .and(RECURRING.CONTRACT_ID.isNull()));
+  }
+
+  /**
+   * Lazily materializes the NULL-mandate ({@code mandate_id IS NULL}) contract row for a
+   * counterparty's mandate-less recurring series, and repoints that recurring row at it.
+   * Idempotent: if a NULL-mandate contract already exists for this counterparty, its id is
+   * returned instead of inserting a duplicate (the {@code uq_contract_counterparty_mandate}
+   * unique key, V9, treats NULLs as not distinct, so a second insert would violate it anyway).
+   */
+  private long materializeMandatelessContract(long counterpartyId) {
+    Long existing =
+        db.select(CONTRACTS.ID)
+            .from(CONTRACTS)
+            .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
+            .and(CONTRACTS.MANDATE_ID.isNull())
+            .fetchOne(CONTRACTS.ID);
+    if (existing != null) {
+      return existing;
+    }
+    long id =
+        db.insertInto(CONTRACTS)
+            .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
+            .set(CONTRACTS.MANDATE_ID, (String) null)
+            .set(CONTRACTS.SOURCE, "auto")
+            .set(CONTRACTS.STATUS, "open")
+            .returning(CONTRACTS.ID)
+            .fetchOne()
+            .getId();
+    // Point the counterparty's mandate-less recurring row at this newly materialized contract.
+    db.update(RECURRING)
+        .set(RECURRING.CONTRACT_ID, id)
+        .where(RECURRING.COUNTERPARTY_ID.eq(counterpartyId))
+        .and(RECURRING.CONTRACT_ID.isNull())
+        .execute();
+    return id;
+  }
+
   @Tool(
       name = "link_contract",
       description =
-          "Link this counterparty to a HiveMem contract cell (insert/update contracts). Find"
-              + " the cell id via HiveMem:search with where.realm=contracts (or the topic"
-              + " documenting the contract).")
+          "Link a contract to a HiveMem contract cell. contractId is a contracts.id -- get it"
+              + " from list_unmatched_recurring/get_review_queue (for a mandate-less obligation,"
+              + " confirm_counterparty/dismiss_counterparty without a contractId first to"
+              + " materialize its contract row). Find the cell id via HiveMem:search with"
+              + " where.realm=contracts (or the topic documenting the contract).")
   public WriteAck linkContract(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
+      @ToolParam(description = "contracts.id to link") long contractId,
       @ToolParam(description = "the HiveMem cell id") String hivememCellId,
       @ToolParam(description = "optional free-text notes", required = false) String notes) {
-    requireExistingCounterparty(counterpartyId);
+    Long counterpartyId =
+        db.select(CONTRACTS.COUNTERPARTY_ID)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.COUNTERPARTY_ID);
+    if (counterpartyId == null) {
+      throw new IllegalArgumentException("no such contract: " + contractId);
+    }
 
     String oldCellId =
         db.select(CONTRACTS.HIVEMEM_CELL_ID)
             .from(CONTRACTS)
-            .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
+            .where(CONTRACTS.ID.eq(contractId))
             .fetchOne(CONTRACTS.HIVEMEM_CELL_ID);
 
-    // Upsert on the uq_contract_counterparty unique key (V6): link/relink is a single
-    // statement, so there is no fetchExists-then-insert/update TOCTOU window in which two
-    // concurrent calls could each observe "no row" and both insert.
-    db.insertInto(CONTRACTS)
-        .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
+    db.update(CONTRACTS)
         .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
         .set(CONTRACTS.NOTES, notes)
-        .set(CONTRACTS.STATUS, "linked")
-        .set(CONTRACTS.CONFIRMED_AT, org.jooq.impl.DSL.currentOffsetDateTime())
-        .onConflict(CONTRACTS.COUNTERPARTY_ID)
-        .doUpdate()
-        .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
-        .set(CONTRACTS.NOTES, notes)
-        .set(CONTRACTS.STATUS, "linked")
-        .set(CONTRACTS.CONFIRMED_AT, org.jooq.impl.DSL.currentOffsetDateTime())
+        .where(CONTRACTS.ID.eq(contractId))
         .execute();
 
     insertHistory(counterpartyId, "contract", oldCellId, hivememCellId, "confirmed");
 
-    return new WriteAck(counterpartyId, "linked to HiveMem cell " + hivememCellId);
+    return new WriteAck(
+        counterpartyId, "linked contract " + contractId + " to HiveMem cell " + hivememCellId);
   }
 
   @Tool(
       name = "dismiss_counterparty",
       description =
-          "This counterparty is not an obligation / not recurring: status='dismissed',"
-              + " dismissed_reason=reason.")
+          "If contractId (a contracts.id) is given, dismisses just that contract:"
+              + " status='dismissed', dismissed_reason=reason -- the counterparty's status is"
+              + " untouched. If contractId is omitted and the counterparty has a mandate-less"
+              + " auto recurring row, that series is materialized into a NULL-mandate contract"
+              + " first and dismissed the same way. Otherwise (legacy): this counterparty is not"
+              + " an obligation / not recurring: status='dismissed', dismissed_reason=reason.")
   public WriteAck dismissCounterparty(
       @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(description = "why this counterparty was dismissed") String reason) {
+      @ToolParam(description = "why this counterparty was dismissed") String reason,
+      @ToolParam(
+              description = "contracts.id to dismiss, optional -- see tool description",
+              required = false)
+          Long contractId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
+
+    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
+      long targetContract =
+          contractId != null ? contractId : materializeMandatelessContract(counterpartyId);
+      db.update(CONTRACTS)
+          .set(CONTRACTS.STATUS, "dismissed")
+          .set(CONTRACTS.DISMISSED_REASON, reason)
+          .where(CONTRACTS.ID.eq(targetContract))
+          .execute();
+      insertHistory(counterpartyId, "contract:" + targetContract, "open", "dismissed", "confirmed");
+      return new WriteAck(counterpartyId, "contract " + targetContract + " dismissed: " + reason);
+    }
 
     db.update(COUNTERPARTIES)
         .set(COUNTERPARTIES.STATUS, "dismissed")
