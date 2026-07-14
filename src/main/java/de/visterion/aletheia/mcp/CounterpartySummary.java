@@ -17,8 +17,11 @@ import java.util.List;
  * @param evidence the {@code v_counterparty_evidence} aggregates, {@code null} if the
  *     counterparty has no transactions matched (should not normally happen)
  * @param tags the current {@code counterparty_tags}
- * @param recurring the current {@code recurring} series, {@code null} if none is recorded
+ * @param recurring a representative {@code recurring} series (the first one seen when the
+ *     counterparty has several, TP1 -- one per contract), {@code null} if none is recorded
  * @param hasContract whether a {@code contracts} row links this counterparty to HiveMem
+ * @param contractCount the number of {@code contracts} rows for this counterparty (TP1 -- a
+ *     counterparty can have more than one, e.g. two insurance policies with the same insurer)
  */
 public record CounterpartySummary(
     long id,
@@ -30,4 +33,5 @@ public record CounterpartySummary(
     CounterpartyEvidence evidence,
     List<CounterpartyTagView> tags,
     RecurringView recurring,
-    boolean hasContract) {}
+    boolean hasContract,
+    int contractCount) {}

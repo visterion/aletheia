@@ -368,7 +368,12 @@ public class ReadTools {
                         DSL.selectOne()
                             .from(CONTRACTS)
                             .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))))
-                    .as("has_contract"))
+                    .as("has_contract"),
+                DSL.field(
+                        DSL.select(DSL.count())
+                            .from(CONTRACTS)
+                            .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID)))
+                    .as("contract_count"))
             .from(COUNTERPARTIES)
             .leftJoin(RECURRING)
             .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
@@ -399,9 +404,21 @@ public class ReadTools {
 
     Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();
 
+    // A counterparty may now have multiple `recurring` rows (one per contract, TP1) -- the
+    // leftJoin(RECURRING) above fans a split counterparty into multiple rows here. Keep only the
+    // first row seen per counterparty id so each counterparty is returned exactly once; the
+    // dropped duplicate rows carry the same evidence/tags/contract_count (those aren't
+    // recurring-scoped), only `recurring` differs, and a single representative series is enough
+    // for this summary (spec §5 -- the full set is available via obligations_register/
+    // list_unmatched_recurring at contract grain).
+    Set<Long> seenIds = new HashSet<>();
     List<CounterpartySummary> result = new ArrayList<>();
     for (Record row : rows) {
       long id = row.get(COUNTERPARTIES.ID);
+      if (!seenIds.add(id)) {
+        continue;
+      }
+      Integer contractCount = row.get("contract_count", Integer.class);
       result.add(
           new CounterpartySummary(
               id,
@@ -413,7 +430,8 @@ public class ReadTools {
               mapEvidence(row, id),
               tagsByCounterparty.getOrDefault(id, List.of()),
               mapRecurring(row),
-              Boolean.TRUE.equals(row.get("has_contract", Boolean.class))));
+              Boolean.TRUE.equals(row.get("has_contract", Boolean.class)),
+              contractCount == null ? 0 : contractCount));
     }
     return result;
   }
@@ -638,9 +656,95 @@ public class ReadTools {
   @Tool(
       name = "list_unmatched_recurring",
       description =
-          "Recurring series whose counterparty has no linked contracts row -- a recurring debit"
-              + " without a documented contract.")
-  public List<UnmatchedRecurringEntry> listUnmatchedRecurring() {
+          "Recurring debits without a documented contract (TP1 contract grain, spec §5 M3):"
+              + " UNION of (1) an unlinked mandate contract -- a contracts row whose"
+              + " hivemem_cell_id is not yet set, with its recurring series, and (2) a"
+              + " mandate-less auto series -- a recurring row with no contract_id at all (never"
+              + " carried a mandate_id). contractId distinguishes the two shapes (set for (1),"
+              + " null for (2)).")
+  public List<UnmatchedRecurringEntry> listUnmatchedRecurring(
+      @ToolParam(description = "annual_cost_desc, optional -- default unsorted", required = false)
+          UnmatchedRecurringSort sort,
+      @ToolParam(description = "max rows to return, optional -- default all", required = false)
+          Integer limit) {
+    List<UnmatchedRecurringEntry> entries = new ArrayList<>();
+    entries.addAll(unlinkedMandateContractEntries());
+    entries.addAll(mandatelessRecurringEntries());
+
+    if (sort == UnmatchedRecurringSort.annual_cost_desc) {
+      entries.sort(Comparator.comparing(UnmatchedRecurringEntry::annualCostEstimate).reversed());
+    }
+    return limit != null && limit > 0 && entries.size() > limit
+        ? entries.subList(0, limit)
+        : entries;
+  }
+
+  /**
+   * Branch (1) of {@link #listUnmatchedRecurring}: a {@code contracts} row with no {@code
+   * hivemem_cell_id} yet, inner-joined to its {@code recurring} series (a contract without a
+   * measured series yet has nothing to surface here).
+   */
+  private List<UnmatchedRecurringEntry> unlinkedMandateContractEntries() {
+    var rows =
+        db.select(
+                CONTRACTS.ID,
+                CONTRACTS.COUNTERPARTY_ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                COUNTERPARTIES.IDENTITY_VALUE,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE,
+                V_CONTRACT_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D)
+            .from(CONTRACTS)
+            .join(RECURRING)
+            .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
+            .join(COUNTERPARTIES)
+            .on(COUNTERPARTIES.ID.eq(CONTRACTS.COUNTERPARTY_ID))
+            .leftJoin(V_CONTRACT_EVIDENCE)
+            .on(
+                V_CONTRACT_EVIDENCE
+                    .COUNTERPARTY_ID
+                    .eq(CONTRACTS.COUNTERPARTY_ID)
+                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+            .leftJoin(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
+            .where(CONTRACTS.HIVEMEM_CELL_ID.isNull())
+            .fetch();
+
+    List<UnmatchedRecurringEntry> entries = new ArrayList<>();
+    for (Record row : rows) {
+      RecurringView recurring = mapRecurring(row);
+      BigDecimal contractDebit = row.get(V_CONTRACT_EVIDENCE.DEBIT_LAST_365D);
+      BigDecimal counterpartyDebit = row.get(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D);
+      BigDecimal debitFallback = contractDebit != null ? contractDebit : counterpartyDebit;
+      entries.add(
+          new UnmatchedRecurringEntry(
+              row.get(CONTRACTS.COUNTERPARTY_ID),
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              row.get(COUNTERPARTIES.IDENTITY_VALUE),
+              row.get(CONTRACTS.ID),
+              recurring,
+              AnnualCost.estimate(recurring, debitFallback)));
+    }
+    return entries;
+  }
+
+  /**
+   * Branch (2) of {@link #listUnmatchedRecurring}: a {@code recurring} row with no {@code
+   * contract_id} -- a series that never carried a {@code mandate_id} (e.g. an ELV debit), so no
+   * {@code contracts} row was ever derived for it.
+   */
+  private List<UnmatchedRecurringEntry> mandatelessRecurringEntries() {
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
@@ -656,26 +760,29 @@ public class ReadTools {
                 RECURRING.LAST_SEEN,
                 RECURRING.OCCURRENCE_COUNT,
                 RECURRING.SOURCE,
-                RECURRING.CONFIDENCE)
+                RECURRING.CONFIDENCE,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D)
             .from(RECURRING)
             .join(COUNTERPARTIES)
             .on(COUNTERPARTIES.ID.eq(RECURRING.COUNTERPARTY_ID))
-            .where(
-                DSL.notExists(
-                    DSL.selectOne()
-                        .from(CONTRACTS)
-                        .where(CONTRACTS.COUNTERPARTY_ID.eq(RECURRING.COUNTERPARTY_ID))))
+            .leftJoin(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(RECURRING.COUNTERPARTY_ID))
+            .where(RECURRING.CONTRACT_ID.isNull())
             .fetch();
 
     List<UnmatchedRecurringEntry> entries = new ArrayList<>();
     for (Record row : rows) {
+      RecurringView recurring = mapRecurring(row);
+      BigDecimal debitFallback = row.get(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D);
       entries.add(
           new UnmatchedRecurringEntry(
               row.get(COUNTERPARTIES.ID),
               row.get(COUNTERPARTIES.DISPLAY_NAME),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(COUNTERPARTIES.IDENTITY_VALUE),
-              mapRecurring(row)));
+              null,
+              recurring,
+              AnnualCost.estimate(recurring, debitFallback)));
     }
     return entries;
   }

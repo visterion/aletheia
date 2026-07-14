@@ -7,7 +7,9 @@ import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.Record;
@@ -93,18 +95,25 @@ public class CounterpartySelectorResolver {
             .where(conditions.isEmpty() ? DSL.trueCondition() : DSL.and(conditions))
             .fetch();
 
-    List<Long> ids = new ArrayList<>();
+    // A counterparty may now have multiple `recurring` rows (one per contract, TP1) -- the
+    // leftJoin(RECURRING) above fans a split counterparty into multiple rows here. Dedupe by id
+    // so every counterparty is resolved exactly once: a counterparty qualifies as soon as any one
+    // of its fanned-out rows passes the minAnnualCost check (acceptable for the selector --
+    // precise per-contract filtering is out of scope, TP1 plan "Deferred").
+    Set<Long> seen = new LinkedHashSet<>();
     for (Record row : rows) {
       long id = row.get(COUNTERPARTIES.ID);
-      if (where != null && where.minAnnualCost() != null) {
-        CounterpartyEvidence evidence = ReadTools.mapEvidence(row, id);
-        RecurringView recurring = ReadTools.mapRecurring(row);
-        if (AnnualCost.estimate(recurring, evidence).compareTo(where.minAnnualCost()) < 0) {
-          continue;
+      if (!seen.contains(id)) {
+        if (where != null && where.minAnnualCost() != null) {
+          CounterpartyEvidence evidence = ReadTools.mapEvidence(row, id);
+          RecurringView recurring = ReadTools.mapRecurring(row);
+          if (AnnualCost.estimate(recurring, evidence).compareTo(where.minAnnualCost()) < 0) {
+            continue;
+          }
         }
+        seen.add(id);
       }
-      ids.add(id);
     }
-    return ids;
+    return new ArrayList<>(seen);
   }
 }
