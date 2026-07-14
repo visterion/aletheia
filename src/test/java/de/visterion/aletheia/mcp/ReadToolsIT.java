@@ -247,21 +247,31 @@ class ReadToolsIT extends AbstractPostgresIT {
     long matchedId = counterpartyIdFor("CDTR-MATCHED");
     long unmatchedId = counterpartyIdFor("CDTR-UNMATCHED");
 
+    // Matched: its contract already has a recurring series linked (contract_id set) AND is
+    // documented in HiveMem (hivemem_cell_id set) -- excluded from both UNION branches.
+    long matchedContractId =
+        db.insertInto(CONTRACTS)
+            .set(CONTRACTS.COUNTERPARTY_ID, matchedId)
+            .set(CONTRACTS.STATUS, "open")
+            .set(CONTRACTS.HIVEMEM_CELL_ID, "cell-matched")
+            .returning(CONTRACTS.ID)
+            .fetchOne(CONTRACTS.ID);
     db.insertInto(RECURRING)
         .set(RECURRING.COUNTERPARTY_ID, matchedId)
+        .set(RECURRING.CONTRACT_ID, matchedContractId)
         .set(RECURRING.CADENCE, "monthly")
         .set(RECURRING.TYPICAL_AMOUNT, new BigDecimal("15.00"))
         .set(RECURRING.SOURCE, "auto")
         .execute();
+    // Unmatched: a mandate-less series (no contract_id at all) -- branch (2).
     db.insertInto(RECURRING)
         .set(RECURRING.COUNTERPARTY_ID, unmatchedId)
         .set(RECURRING.CADENCE, "monthly")
         .set(RECURRING.TYPICAL_AMOUNT, new BigDecimal("25.00"))
         .set(RECURRING.SOURCE, "auto")
         .execute();
-    db.insertInto(CONTRACTS).set(CONTRACTS.COUNTERPARTY_ID, matchedId).set(CONTRACTS.STATUS, "open").execute();
 
-    List<UnmatchedRecurringEntry> unmatched = readTools.listUnmatchedRecurring();
+    List<UnmatchedRecurringEntry> unmatched = readTools.listUnmatchedRecurring(null, null);
 
     assertThat(unmatched).hasSize(1);
     assertThat(unmatched.get(0).displayName()).isEqualTo("Unmatched Co");
