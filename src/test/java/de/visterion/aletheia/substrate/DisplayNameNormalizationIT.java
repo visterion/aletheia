@@ -74,13 +74,13 @@ class DisplayNameNormalizationIT extends AbstractPostgresIT {
         "DBIT",
         "CDTR-1",
         null,
-        "Land   Rheinland-Pfalz    Mainz");
+        "Padded   Name    Co");
     resolver.run(null);
     String name =
         db.select(COUNTERPARTIES.DISPLAY_NAME)
             .from(COUNTERPARTIES)
             .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-1"))
             .fetchOne(COUNTERPARTIES.DISPLAY_NAME);
-    assertThat(name).isEqualTo("Land Rheinland-Pfalz Mainz");
+    assertThat(name).isEqualTo("Padded Name Co");
   }
 }

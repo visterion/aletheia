@@ -101,8 +101,8 @@ class ReadToolsIT extends AbstractPostgresIT {
     long imp = importId();
     // Salary: a single large credit, no debits at all.
     insertTxn(imp, "hash-salary-1", LocalDate.now().minusDays(15), "5000.00", "CRDT", "CDTR-SALARY", null, "Salary");
-    // Netflix: a modest debit.
-    insertTxn(imp, "hash-netflix-1", LocalDate.now().minusDays(20), "200.00", "DBIT", "CDTR-NETFLIX", null, "Netflix");
+    // Streaming Co: a modest debit.
+    insertTxn(imp, "hash-streamingco-1", LocalDate.now().minusDays(20), "200.00", "DBIT", "CDTR-STREAM", null, "Streaming Co");
 
     resolver.run(null);
 
@@ -110,7 +110,7 @@ class ReadToolsIT extends AbstractPostgresIT {
         readTools.listCounterparties(null, CounterpartySort.spend_desc);
 
     assertThat(summaries).hasSize(2);
-    assertThat(summaries.get(0).displayName()).isEqualTo("Netflix");
+    assertThat(summaries.get(0).displayName()).isEqualTo("Streaming Co");
     assertThat(summaries.get(1).displayName()).isEqualTo("Salary");
   }
 
