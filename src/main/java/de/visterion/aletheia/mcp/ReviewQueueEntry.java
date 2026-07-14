@@ -21,8 +21,8 @@ import java.time.LocalDate;
  * @param recurring the current {@code recurring} series, {@code null} if none is recorded or in
  *     compact mode
  * @param annualCostEstimate {@code recurring.typical_amount * periods/year} when a non-irregular
- *     recurring series exists, else {@code evidence.spend_last_365d} (spec §5) -- the priority
- *     this queue is ordered by, descending
+ *     recurring series exists, else the DBIT-only spend of the last 365 days ({@code
+ *     evidence.debit_last_365d}, spec §5) -- the priority this queue is ordered by, descending
  * @param cadence the recurring series' cadence, {@code null} if none is recorded (populated in
  *     both compact and verbose mode)
  * @param txnCount transaction count from the evidence view, {@code null} if no evidence row

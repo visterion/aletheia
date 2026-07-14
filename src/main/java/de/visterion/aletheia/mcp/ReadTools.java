@@ -174,8 +174,10 @@ public class ReadTools {
       @ToolParam(description = "SUM | AVG | MEDIAN | COUNT") AggregateMetric metric,
       @ToolParam(description = "DBIT | CRDT | BOTH (BOTH nets signed amounts, no direction filter)")
           Direction direction,
-      @ToolParam(description = "also split buckets per counterparty, keyed on id")
-          boolean byCounterparty,
+      @ToolParam(
+              description = "also split buckets per counterparty, keyed on id",
+              required = false)
+          Boolean byCounterparty,
       @ToolParam(
               description = "explicit counterparty id scope; takes precedence over where",
               required = false)
@@ -184,8 +186,9 @@ public class ReadTools {
               description = "declarative counterparty selector, resolved when counterpartyIds is absent",
               required = false)
           CounterpartySelector where) {
+    boolean effectiveByCounterparty = Boolean.TRUE.equals(byCounterparty);
     List<Long> ids = resolveAggregateScope(counterpartyIds, where);
-    boolean joinIdentity = ids != null || byCounterparty;
+    boolean joinIdentity = ids != null || effectiveByCounterparty;
     if (joinIdentity && ids != null && ids.isEmpty()) {
       return List.of();
     }
@@ -199,7 +202,7 @@ public class ReadTools {
     String valueExpr = "CAST(" + valueExpr(metric, amountExpr) + " AS numeric)";
 
     StringBuilder sql = new StringBuilder("SELECT ").append(period).append(" AS period");
-    if (byCounterparty) {
+    if (effectiveByCounterparty) {
       sql.append(", c.id AS counterparty_id, c.display_name AS display_name");
     }
     sql.append(", ").append(valueExpr).append(" AS value ");
@@ -238,7 +241,7 @@ public class ReadTools {
     if (groupBy != AggregateGroupBy.TOTAL) {
       groupByCols.add(period);
     }
-    if (byCounterparty) {
+    if (effectiveByCounterparty) {
       groupByCols.add("c.id");
       groupByCols.add("c.display_name");
     }
@@ -250,7 +253,7 @@ public class ReadTools {
     // literal 'total', and Postgres rejects a bare string constant in ORDER BY (it looks for an
     // integer ordinal), while an output-column-name reference works for any expression.
     sql.append("ORDER BY period");
-    if (byCounterparty) {
+    if (effectiveByCounterparty) {
       sql.append(", c.id");
     }
 
@@ -260,8 +263,8 @@ public class ReadTools {
       buckets.add(
           new AggregateBucket(
               row.get("period", String.class),
-              byCounterparty ? row.get("counterparty_id", Long.class) : null,
-              byCounterparty ? row.get("display_name", String.class) : null,
+              effectiveByCounterparty ? row.get("counterparty_id", Long.class) : null,
+              effectiveByCounterparty ? row.get("display_name", String.class) : null,
               row.get("value", BigDecimal.class)));
     }
     return buckets;
@@ -419,22 +422,24 @@ public class ReadTools {
       description =
           "The counterparties still needing a human decision (status='open'), ordered"
               + " descending by estimated annual cost (recurring.typical_amount * periods/year,"
-              + " or spend_last_365d if no recurring series is recorded yet). Excludes"
-              + " CRDT-predominant counterparties (salary, incoming transfers -- see"
-              + " list_income); a counterparty with no evidence row yet (unknown direction)"
-              + " stays in the queue, since nothing should skip human review. Compact by"
-              + " default ({id, displayName, identityType, cadence, annualCostEstimate,"
-              + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring"
-              + " blob.")
+              + " or the DBIT-only spend of the last 365 days if no recurring series is"
+              + " recorded yet). Excludes CRDT-predominant counterparties (salary, incoming"
+              + " transfers -- see list_income); a counterparty with no evidence row yet"
+              + " (unknown direction) stays in the queue, since nothing should skip human"
+              + " review. Compact by default ({id, displayName, identityType, cadence,"
+              + " annualCostEstimate, txnCount, lastSeen}); pass verbose=true for the full"
+              + " evidence/recurring blob.")
   public List<ReviewQueueEntry> getReviewQueue(
       @ToolParam(description = "max rows to return (default 50)", required = false)
           Integer limit,
       @ToolParam(
               description =
                   "false (default): compact rows without the evidence/recurring blob; true:"
-                      + " full evidence/recurring detail")
-          boolean verbose) {
+                      + " full evidence/recurring detail",
+              required = false)
+          Boolean verbose) {
     int effectiveLimit = limit != null && limit > 0 ? limit : DEFAULT_REVIEW_QUEUE_LIMIT;
+    boolean effectiveVerbose = Boolean.TRUE.equals(verbose);
 
     var rows =
         db.select(
@@ -497,8 +502,8 @@ public class ReadTools {
               id,
               row.get(COUNTERPARTIES.DISPLAY_NAME),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
-              verbose ? evidence : null,
-              verbose ? recurring : null,
+              effectiveVerbose ? evidence : null,
+              effectiveVerbose ? recurring : null,
               AnnualCost.estimate(recurring, evidence),
               cadence,
               txnCount,

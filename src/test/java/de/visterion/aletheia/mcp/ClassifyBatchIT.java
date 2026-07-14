@@ -1,6 +1,7 @@
 package de.visterion.aletheia.mcp;
 
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -131,5 +132,35 @@ class ClassifyBatchIT extends AbstractPostgresIT {
         .isInstanceOf(IllegalArgumentException.class);
 
     assertThat(db.fetchCount(COUNTERPARTY_TAGS)).isZero();
+  }
+
+  @Test
+  void duplicateExplicitIdsAreDeduped() {
+    long id = seedUntaggedCounterparty("duplicate");
+    List<TagInput> tags = List.of(new TagInput("domain", "insurance"));
+
+    var ack =
+        writeTools.classifyCounterparty(
+            List.of(id, id), null, tags, TagSource.auto, null, false);
+
+    assertThat(ack.affectedCount()).isEqualTo(1);
+    assertThat(
+            db.fetchCount(
+                COUNTERPARTY_HISTORY,
+                COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id).and(COUNTERPARTY_HISTORY.FIELD.eq("tag:domain"))))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void emptyTagsListChangesNothing() {
+    long id = seedUntaggedCounterparty("no-tags");
+
+    var ack =
+        writeTools.classifyCounterparty(List.of(id), null, List.of(), TagSource.auto, null, false);
+
+    assertThat(ack.affectedCount()).isZero();
+    assertThat(ack.dimensions()).isEmpty();
+    assertThat(db.fetchCount(COUNTERPARTY_TAGS)).isZero();
+    assertThat(db.fetchCount(COUNTERPARTY_HISTORY)).isZero();
   }
 }

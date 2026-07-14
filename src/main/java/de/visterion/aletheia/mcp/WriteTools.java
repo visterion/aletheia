@@ -59,12 +59,16 @@ public class WriteTools {
       @ToolParam(description = "the {dimension, value} pairs to set") List<TagInput> tags,
       @ToolParam(description = "provenance of this classification") TagSource source,
       @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence,
-      @ToolParam(description = "must be true to run a batch of 200 or more") boolean confirm) {
+      @ToolParam(
+              description = "must be true to run a batch of 200 or more",
+              required = false)
+          Boolean confirm) {
+    boolean effectiveConfirm = Boolean.TRUE.equals(confirm);
     List<Long> ids = resolveTargetIds(counterpartyIds, where);
-    enforceBatchCaps(ids, confirm);
+    enforceBatchCaps(ids, effectiveConfirm);
 
     if (tags == null || tags.isEmpty()) {
-      return new BatchWriteAck(ids.size(), List.of());
+      return new BatchWriteAck(0, List.of());
     }
 
     // "Set/replace" (spec §5): for every dimension present in the request, drop the existing
@@ -119,7 +123,7 @@ public class WriteTools {
    */
   private List<Long> resolveTargetIds(List<Long> counterpartyIds, CounterpartySelector where) {
     if (counterpartyIds != null && !counterpartyIds.isEmpty()) {
-      return counterpartyIds;
+      return counterpartyIds.stream().distinct().toList();
     }
     if (where != null) {
       return selectorResolver.resolve(where);
