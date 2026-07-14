@@ -429,7 +429,7 @@ public class ReadTools {
   }
 
   /** Returns {@code null} when the left-joined evidence row is absent (no matched transactions). */
-  private static CounterpartyEvidence mapEvidence(Record row, long counterpartyId) {
+  static CounterpartyEvidence mapEvidence(Record row, long counterpartyId) {
     Long evidenceCounterpartyId = row.get(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID);
     if (evidenceCounterpartyId == null) {
       return null;
@@ -456,7 +456,7 @@ public class ReadTools {
   }
 
   /** Returns {@code null} when the left-joined recurring row is absent. */
-  private static RecurringView mapRecurring(Record row) {
+  static RecurringView mapRecurring(Record row) {
     Long recurringId = row.get(RECURRING.ID);
     if (recurringId == null) {
       return null;
