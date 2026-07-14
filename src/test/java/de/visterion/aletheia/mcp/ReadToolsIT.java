@@ -200,11 +200,48 @@ class ReadToolsIT extends AbstractPostgresIT {
 
     long id = counterpartyIdFor("CDTR-T");
 
-    List<TransactionView> txns = readTools.counterpartyTransactions(id, null);
+    List<TransactionView> txns = readTools.counterpartyTransactions(id, null, null, null);
 
     assertThat(txns).hasSize(2);
     assertThat(txns).extracting(TransactionView::amount).allMatch(a -> a.compareTo(new BigDecimal("10.00")) == 0);
     assertThat(txns.get(0).bookingDate()).isEqualTo(LocalDate.of(2026, 2, 1)); // DESC order
+  }
+
+  @Test
+  void counterpartyTransactionsWithAbsoluteRangeReturnsOnlyBookingsInThatRange() {
+    long imp = importId();
+    insertTxn(imp, "hash-r2024", LocalDate.of(2024, 6, 1), "10.00", "DBIT", "CDTR-RANGE", null, "Range Co");
+    insertTxn(imp, "hash-r2025-1", LocalDate.of(2025, 1, 15), "10.00", "DBIT", "CDTR-RANGE", null, "Range Co");
+    insertTxn(imp, "hash-r2025-2", LocalDate.of(2025, 12, 20), "10.00", "DBIT", "CDTR-RANGE", null, "Range Co");
+    resolver.run(null);
+
+    long id = counterpartyIdFor("CDTR-RANGE");
+
+    List<TransactionView> txns =
+        readTools.counterpartyTransactions(id, null, LocalDate.of(2025, 1, 1), LocalDate.of(2025, 12, 31));
+
+    assertThat(txns).hasSize(2);
+    assertThat(txns)
+        .extracting(TransactionView::bookingDate)
+        .containsExactlyInAnyOrder(LocalDate.of(2025, 1, 15), LocalDate.of(2025, 12, 20));
+  }
+
+  @Test
+  void counterpartyTransactionsAbsoluteRangeWinsOverPeriod() {
+    long imp = importId();
+    insertTxn(imp, "hash-w2024", LocalDate.of(2024, 6, 1), "10.00", "DBIT", "CDTR-WINS", null, "Wins Co");
+    insertTxn(imp, "hash-w2025", LocalDate.of(2025, 6, 1), "10.00", "DBIT", "CDTR-WINS", null, "Wins Co");
+    resolver.run(null);
+
+    long id = counterpartyIdFor("CDTR-WINS");
+
+    // period=3650 (~10 years) would normally include both, but the absolute range should win
+    // and restrict to 2025 only.
+    List<TransactionView> txns =
+        readTools.counterpartyTransactions(id, 3650, LocalDate.of(2025, 1, 1), LocalDate.of(2025, 12, 31));
+
+    assertThat(txns).hasSize(1);
+    assertThat(txns.get(0).bookingDate()).isEqualTo(LocalDate.of(2025, 6, 1));
   }
 
   @Test

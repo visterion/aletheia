@@ -102,7 +102,13 @@ public class ReadTools {
       ) i
       JOIN counterparties c ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value
       WHERE c.id = ?
-        AND (CAST(? AS integer) IS NULL OR i.booking_date >= CURRENT_DATE - (CAST(? AS integer) * INTERVAL '1 day'))
+        AND (
+          (CAST(? AS date) IS NOT NULL AND CAST(? AS date) IS NOT NULL
+              AND i.booking_date BETWEEN CAST(? AS date) AND CAST(? AS date))
+          OR ((CAST(? AS date) IS NULL OR CAST(? AS date) IS NULL)
+              AND (CAST(? AS integer) IS NULL
+                  OR i.booking_date >= CURRENT_DATE - (CAST(? AS integer) * INTERVAL '1 day')))
+        )
       ORDER BY i.booking_date DESC
       """;
 
@@ -526,13 +532,37 @@ public class ReadTools {
       name = "counterparty_transactions",
       description =
           "The underlying bookings for one counterparty (evidence detail), optionally limited to"
-              + " the last N days via period.")
+              + " the last N days via period, or to an inclusive [dateFrom, dateTo] absolute"
+              + " range on booking_date. When dateFrom and dateTo are both given, the absolute"
+              + " range wins over period (period is ignored).")
   public List<TransactionView> counterpartyTransactions(
       @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(description = "restrict to the last N days; omit for all history", required = false)
-          Integer period) {
+      @ToolParam(
+              description =
+                  "restrict to the last N days; omit for all history; ignored when dateFrom and"
+                      + " dateTo are both given",
+              required = false)
+          Integer period,
+      @ToolParam(
+              description = "inclusive range start on booking_date; wins over period when set together with dateTo",
+              required = false)
+          LocalDate dateFrom,
+      @ToolParam(
+              description = "inclusive range end on booking_date; wins over period when set together with dateFrom",
+              required = false)
+          LocalDate dateTo) {
     Result<Record> rows =
-        db.fetch(COUNTERPARTY_TRANSACTIONS_SQL, counterpartyId, period, period);
+        db.fetch(
+            COUNTERPARTY_TRANSACTIONS_SQL,
+            counterpartyId,
+            dateFrom,
+            dateTo,
+            dateFrom,
+            dateTo,
+            dateFrom,
+            dateTo,
+            period,
+            period);
     List<TransactionView> transactions = new ArrayList<>();
     for (Record row : rows) {
       transactions.add(
