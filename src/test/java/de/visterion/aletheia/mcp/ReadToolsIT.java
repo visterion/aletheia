@@ -77,7 +77,7 @@ class ReadToolsIT extends AbstractPostgresIT {
   }
 
   @Test
-  void listCounterpartiesOrdersBySpendLast365dDescendingByDefault() {
+  void listCounterpartiesOrdersByDebitLast365dDescendingByDefault() {
     long imp = importId();
     // Big spender: 2 debits totalling 500 in the last year.
     insertTxn(imp, "hash-big-1", LocalDate.now().minusDays(10), "250.00", "DBIT", "CDTR-BIG", null, "Big Spender");
@@ -97,6 +97,24 @@ class ReadToolsIT extends AbstractPostgresIT {
   }
 
   @Test
+  void listCounterpartiesSpendDescRanksByDebitOnlySpendNotDirectionBlindTotal() {
+    long imp = importId();
+    // Salary: a single large credit, no debits at all.
+    insertTxn(imp, "hash-salary-1", LocalDate.now().minusDays(15), "5000.00", "CRDT", "CDTR-SALARY", null, "Salary");
+    // Streaming Co: a modest debit.
+    insertTxn(imp, "hash-streamingco-1", LocalDate.now().minusDays(20), "200.00", "DBIT", "CDTR-STREAM", null, "Streaming Co");
+
+    resolver.run(null);
+
+    List<CounterpartySummary> summaries =
+        readTools.listCounterparties(null, CounterpartySort.spend_desc);
+
+    assertThat(summaries).hasSize(2);
+    assertThat(summaries.get(0).displayName()).isEqualTo("Streaming Co");
+    assertThat(summaries.get(1).displayName()).isEqualTo("Salary");
+  }
+
+  @Test
   void listCounterpartiesFiltersByHasRecurring() {
     long imp = importId();
     insertTxn(imp, "hash-r1", LocalDate.now().minusMonths(1), "10.00", "DBIT", "CDTR-REC", null, "Recurring Co");
@@ -111,7 +129,8 @@ class ReadToolsIT extends AbstractPostgresIT {
         .set(RECURRING.SOURCE, "auto")
         .execute();
 
-    List<CounterpartySummary> filtered = readTools.listCounterparties("has_recurring", null);
+    List<CounterpartySummary> filtered =
+        readTools.listCounterparties(CounterpartyFilter.has_recurring, null);
 
     assertThat(filtered).hasSize(1);
     assertThat(filtered.get(0).displayName()).isEqualTo("Recurring Co");
@@ -129,7 +148,7 @@ class ReadToolsIT extends AbstractPostgresIT {
     long confirmedId = counterpartyIdFor("CDTR-CONF");
     db.update(COUNTERPARTIES).set(COUNTERPARTIES.STATUS, "confirmed").where(COUNTERPARTIES.ID.eq(confirmedId)).execute();
 
-    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null);
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
 
     assertThat(queue).hasSize(1);
     assertThat(queue.get(0).displayName()).isEqualTo("Open Co");
@@ -151,12 +170,71 @@ class ReadToolsIT extends AbstractPostgresIT {
         .set(RECURRING.SOURCE, "auto")
         .execute();
 
-    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null);
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
 
     assertThat(queue).hasSize(2);
     assertThat(queue.get(0).displayName()).isEqualTo("Recurring Small");
     assertThat(queue.get(0).annualCostEstimate()).isEqualByComparingTo("120.00");
     assertThat(queue.get(1).displayName()).isEqualTo("Plain Spender");
+  }
+
+  @Test
+  void getReviewQueueExcludesCrdtPredominantCounterparties() {
+    long imp = importId();
+    // Salary: predominant CRDT, open status -- must not clutter the obligations queue.
+    insertTxn(imp, "hash-sal-1", LocalDate.now().minusDays(5), "3000.00", "CRDT", "CDTR-SALARY", null, "Salary");
+    insertTxn(imp, "hash-sal-2", LocalDate.now().minusDays(35), "3000.00", "CRDT", "CDTR-SALARY", null, "Salary");
+    // A normal DBIT-predominant open counterparty, must still appear.
+    insertTxn(imp, "hash-obl-1", LocalDate.now().minusDays(5), "20.00", "DBIT", "CDTR-OBL", null, "Obligation Co");
+    resolver.run(null);
+
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
+
+    assertThat(queue).extracting(ReviewQueueEntry::displayName).containsExactly("Obligation Co");
+  }
+
+  @Test
+  void getReviewQueueKeepsOpenCounterpartyWithNoEvidenceRow() {
+    // No transactions at all -- the v_counterparty_evidence LEFT JOIN yields NULL/direction NULL.
+    // Must still appear: "nothing skips human review".
+    db.insertInto(COUNTERPARTIES)
+        .set(COUNTERPARTIES.IDENTITY_TYPE, "creditor_id")
+        .set(COUNTERPARTIES.IDENTITY_VALUE, "CDTR-NOEVIDENCE")
+        .set(COUNTERPARTIES.DISPLAY_NAME, "No Evidence Co")
+        .set(COUNTERPARTIES.STATUS, "open")
+        .execute();
+
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
+
+    assertThat(queue).extracting(ReviewQueueEntry::displayName).containsExactly("No Evidence Co");
+  }
+
+  @Test
+  void getReviewQueueCompactDefaultOmitsEvidenceAndRecurringBlobs() {
+    long imp = importId();
+    insertTxn(imp, "hash-compact-1", LocalDate.now().minusDays(5), "10.00", "DBIT", "CDTR-COMPACT", null, "Compact Co");
+    resolver.run(null);
+    db.insertInto(RECURRING)
+        .set(RECURRING.COUNTERPARTY_ID, counterpartyIdFor("CDTR-COMPACT"))
+        .set(RECURRING.CADENCE, "monthly")
+        .set(RECURRING.TYPICAL_AMOUNT, new BigDecimal("10.00"))
+        .set(RECURRING.SOURCE, "auto")
+        .execute();
+
+    List<ReviewQueueEntry> compact = readTools.getReviewQueue(null, false);
+
+    assertThat(compact).hasSize(1);
+    ReviewQueueEntry entry = compact.get(0);
+    assertThat(entry.evidence()).isNull();
+    assertThat(entry.recurring()).isNull();
+    assertThat(entry.cadence()).isEqualTo("monthly");
+    assertThat(entry.annualCostEstimate()).isEqualByComparingTo("120.00");
+    assertThat(entry.txnCount()).isEqualTo(1);
+    assertThat(entry.lastSeen()).isEqualTo(LocalDate.now().minusDays(5));
+
+    List<ReviewQueueEntry> verbose = readTools.getReviewQueue(null, true);
+    assertThat(verbose.get(0).evidence()).isNotNull();
+    assertThat(verbose.get(0).recurring()).isNotNull();
   }
 
   @Test
@@ -199,11 +277,48 @@ class ReadToolsIT extends AbstractPostgresIT {
 
     long id = counterpartyIdFor("CDTR-T");
 
-    List<TransactionView> txns = readTools.counterpartyTransactions(id, null);
+    List<TransactionView> txns = readTools.counterpartyTransactions(id, null, null, null);
 
     assertThat(txns).hasSize(2);
     assertThat(txns).extracting(TransactionView::amount).allMatch(a -> a.compareTo(new BigDecimal("10.00")) == 0);
     assertThat(txns.get(0).bookingDate()).isEqualTo(LocalDate.of(2026, 2, 1)); // DESC order
+  }
+
+  @Test
+  void counterpartyTransactionsWithAbsoluteRangeReturnsOnlyBookingsInThatRange() {
+    long imp = importId();
+    insertTxn(imp, "hash-r2024", LocalDate.of(2024, 6, 1), "10.00", "DBIT", "CDTR-RANGE", null, "Range Co");
+    insertTxn(imp, "hash-r2025-1", LocalDate.of(2025, 1, 15), "10.00", "DBIT", "CDTR-RANGE", null, "Range Co");
+    insertTxn(imp, "hash-r2025-2", LocalDate.of(2025, 12, 20), "10.00", "DBIT", "CDTR-RANGE", null, "Range Co");
+    resolver.run(null);
+
+    long id = counterpartyIdFor("CDTR-RANGE");
+
+    List<TransactionView> txns =
+        readTools.counterpartyTransactions(id, null, LocalDate.of(2025, 1, 1), LocalDate.of(2025, 12, 31));
+
+    assertThat(txns).hasSize(2);
+    assertThat(txns)
+        .extracting(TransactionView::bookingDate)
+        .containsExactlyInAnyOrder(LocalDate.of(2025, 1, 15), LocalDate.of(2025, 12, 20));
+  }
+
+  @Test
+  void counterpartyTransactionsAbsoluteRangeWinsOverPeriod() {
+    long imp = importId();
+    insertTxn(imp, "hash-w2024", LocalDate.of(2024, 6, 1), "10.00", "DBIT", "CDTR-WINS", null, "Wins Co");
+    insertTxn(imp, "hash-w2025", LocalDate.of(2025, 6, 1), "10.00", "DBIT", "CDTR-WINS", null, "Wins Co");
+    resolver.run(null);
+
+    long id = counterpartyIdFor("CDTR-WINS");
+
+    // period=3650 (~10 years) would normally include both, but the absolute range should win
+    // and restrict to 2025 only.
+    List<TransactionView> txns =
+        readTools.counterpartyTransactions(id, 3650, LocalDate.of(2025, 1, 1), LocalDate.of(2025, 12, 31));
+
+    assertThat(txns).hasSize(1);
+    assertThat(txns.get(0).bookingDate()).isEqualTo(LocalDate.of(2025, 6, 1));
   }
 
   @Test

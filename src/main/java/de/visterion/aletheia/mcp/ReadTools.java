@@ -8,12 +8,16 @@ import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
@@ -36,15 +40,32 @@ import org.springframework.stereotype.Component;
 @Component
 public class ReadTools {
 
-  /** {@code recurring.cadence} -> occurrences/year, used to estimate annual cost (spec §5). */
-  private static final Map<String, Integer> CADENCE_PERIODS_PER_YEAR =
-      Map.of(
-          "monthly", 12,
-          "quarterly", 4,
-          "half_yearly", 2,
-          "yearly", 1);
-
   private static final int DEFAULT_REVIEW_QUEUE_LIMIT = 50;
+
+  /** The exact set of tables/views {@link #describeSchema()} exposes. Auth/oauth tables are
+   * deliberately excluded (spec §6/§9): {@code sql_query} needs to discover the register/evidence
+   * schema, never the auth schema. */
+  private static final List<String> SCHEMA_TABLES =
+      List.of(
+          "transactions",
+          "counterparties",
+          "counterparty_tags",
+          "recurring",
+          "contracts",
+          "counterparty_history",
+          "imports",
+          "v_counterparty_evidence");
+
+  private static final Map<String, String> COLUMN_DOCS =
+      Map.of(
+          "transactions.direction",
+              "DBIT (outgoing) | CRDT (incoming); amount is always positive",
+          "transactions.content_hash", "SHA-256 idempotency natural key",
+          "counterparties.identity_type", "creditor_id | iban | name",
+          "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)",
+          "recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular",
+          "v_counterparty_evidence.direction",
+              "predominant direction across the counterparty's bookings");
 
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
 
@@ -81,32 +102,231 @@ public class ReadTools {
       ) i
       JOIN counterparties c ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value
       WHERE c.id = ?
-        AND (CAST(? AS integer) IS NULL OR i.booking_date >= CURRENT_DATE - (CAST(? AS integer) * INTERVAL '1 day'))
+        AND (
+          (CAST(? AS date) IS NOT NULL AND CAST(? AS date) IS NOT NULL
+              AND i.booking_date BETWEEN CAST(? AS date) AND CAST(? AS date))
+          OR ((CAST(? AS date) IS NULL OR CAST(? AS date) IS NULL)
+              AND (CAST(? AS integer) IS NULL
+                  OR i.booking_date >= CURRENT_DATE - (CAST(? AS integer) * INTERVAL '1 day')))
+        )
       ORDER BY i.booking_date DESC
+      """;
+
+  /**
+   * The identity-CASE derived-table body reused by {@link #aggregate} (spec §5, M-1 join-scope
+   * rule): copied from the {@code i} subquery inside {@link #COUNTERPARTY_TRANSACTIONS_SQL}
+   * rather than shared, so a future change to one read path cannot silently change the other's
+   * join semantics.
+   */
+  // language=SQL
+  private static final String IDENTITY_RESOLVED_TRANSACTIONS_SQL =
+      """
+      SELECT t.*,
+          CASE
+              WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+              WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
+              WHEN t.counterparty_name IS NOT NULL THEN 'name'
+          END AS identity_type,
+          CASE
+              WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+              WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
+              WHEN t.counterparty_name IS NOT NULL THEN
+                  upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
+          END AS identity_value
+      FROM transactions t
       """;
 
   private final DSLContext db;
   private final DSLContext roDsl;
+  private final CounterpartySelectorResolver selectorResolver;
 
-  public ReadTools(DSLContext db, @Qualifier("roDsl") DSLContext roDsl) {
+  public ReadTools(
+      DSLContext db,
+      @Qualifier("roDsl") DSLContext roDsl,
+      CounterpartySelectorResolver selectorResolver) {
     this.db = db;
     this.roDsl = roDsl;
+    this.selectorResolver = selectorResolver;
+  }
+
+  @Tool(
+      name = "aggregate",
+      description =
+          "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date"
+              + " range -- replaces in-head arithmetic. Value expression: for a single direction"
+              + " (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to"
+              + " that direction; for direction=BOTH there is no direction filter and the amount"
+              + " is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) ="
+              + " credit total minus debit total (can be negative). COUNT is always count(*),"
+              + " unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and"
+              + " where are omitted AND byCounterparty=false, the aggregate runs directly over"
+              + " transactions with no counterparty-identity join, so unresolved bookings (cash"
+              + " withdrawals/fees with no creditor_id, iban, or name) are still counted."
+              + " Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins"
+              + " through the identity-CASE resolution (creditor_id > iban > normalized name)"
+              + " and therefore excludes unresolved bookings. When byCounterparty=true, buckets"
+              + " are keyed on counterparties.id (never displayName -- two distinct identities,"
+              + " e.g. a creditor_id and an iban, can share one display name).")
+  public List<AggregateBucket> aggregate(
+      @ToolParam(description = "inclusive range start") LocalDate dateFrom,
+      @ToolParam(description = "inclusive range end") LocalDate dateTo,
+      @ToolParam(description = "TOTAL | MONTH | QUARTER | YEAR") AggregateGroupBy groupBy,
+      @ToolParam(description = "SUM | AVG | MEDIAN | COUNT") AggregateMetric metric,
+      @ToolParam(description = "DBIT | CRDT | BOTH (BOTH nets signed amounts, no direction filter)")
+          Direction direction,
+      @ToolParam(
+              description = "also split buckets per counterparty, keyed on id",
+              required = false)
+          Boolean byCounterparty,
+      @ToolParam(
+              description = "explicit counterparty id scope; takes precedence over where",
+              required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(
+              description = "declarative counterparty selector, resolved when counterpartyIds is absent",
+              required = false)
+          CounterpartySelector where) {
+    boolean effectiveByCounterparty = Boolean.TRUE.equals(byCounterparty);
+    List<Long> ids = resolveAggregateScope(counterpartyIds, where);
+    boolean joinIdentity = ids != null || effectiveByCounterparty;
+    if (joinIdentity && ids != null && ids.isEmpty()) {
+      return List.of();
+    }
+
+    String dateRef = joinIdentity ? "i.booking_date" : "booking_date";
+    String directionRef = joinIdentity ? "i.direction" : "direction";
+    String amountRef = joinIdentity ? "i.amount" : "amount";
+
+    String period = periodExpr(groupBy, dateRef);
+    String amountExpr = signedAmountExpr(direction, amountRef, directionRef);
+    String valueExpr = "CAST(" + valueExpr(metric, amountExpr) + " AS numeric)";
+
+    StringBuilder sql = new StringBuilder("SELECT ").append(period).append(" AS period");
+    if (effectiveByCounterparty) {
+      sql.append(", c.id AS counterparty_id, c.display_name AS display_name");
+    }
+    sql.append(", ").append(valueExpr).append(" AS value ");
+
+    if (joinIdentity) {
+      sql.append("FROM (")
+          .append(IDENTITY_RESOLVED_TRANSACTIONS_SQL)
+          .append(") i JOIN counterparties c"
+              + " ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value ");
+    } else {
+      sql.append("FROM transactions ");
+    }
+
+    List<Object> binds = new ArrayList<>();
+    sql.append("WHERE ").append(dateRef).append(" BETWEEN ? AND ? ");
+    binds.add(dateFrom);
+    binds.add(dateTo);
+
+    if (direction != Direction.BOTH) {
+      sql.append("AND ").append(directionRef).append(" = ? ");
+      binds.add(direction.name());
+    }
+
+    if (joinIdentity && ids != null) {
+      sql.append("AND c.id IN (")
+          .append(ids.stream().map(id -> "?").collect(Collectors.joining(",")))
+          .append(") ");
+      binds.addAll(ids);
+    }
+
+    // A TOTAL period is the string literal 'total', not a real column expression -- Postgres
+    // rejects a bare string constant in GROUP BY (same rule as ORDER BY above), and it doesn't
+    // need to be there anyway: a constant in the SELECT list is always allowed regardless of
+    // GROUP BY. So the period expression is only added to GROUP BY for MONTH/QUARTER/YEAR.
+    List<String> groupByCols = new ArrayList<>();
+    if (groupBy != AggregateGroupBy.TOTAL) {
+      groupByCols.add(period);
+    }
+    if (effectiveByCounterparty) {
+      groupByCols.add("c.id");
+      groupByCols.add("c.display_name");
+    }
+    if (!groupByCols.isEmpty()) {
+      sql.append("GROUP BY ").append(String.join(", ", groupByCols)).append(' ');
+    }
+
+    // Order by the "period" output name, not the raw expression: a TOTAL period is the string
+    // literal 'total', and Postgres rejects a bare string constant in ORDER BY (it looks for an
+    // integer ordinal), while an output-column-name reference works for any expression.
+    sql.append("ORDER BY period");
+    if (effectiveByCounterparty) {
+      sql.append(", c.id");
+    }
+
+    Result<Record> rows = db.fetch(sql.toString(), binds.toArray());
+    List<AggregateBucket> buckets = new ArrayList<>();
+    for (Record row : rows) {
+      buckets.add(
+          new AggregateBucket(
+              row.get("period", String.class),
+              effectiveByCounterparty ? row.get("counterparty_id", Long.class) : null,
+              effectiveByCounterparty ? row.get("display_name", String.class) : null,
+              row.get("value", BigDecimal.class)));
+    }
+    return buckets;
+  }
+
+  /**
+   * M-1 join-scope resolution: {@code counterpartyIds} wins when non-null and non-empty; else
+   * {@code where} is resolved via {@link CounterpartySelectorResolver}; else {@code null}
+   * (unscoped -- see {@link #aggregate} for what that means for the join).
+   */
+  private List<Long> resolveAggregateScope(List<Long> counterpartyIds, CounterpartySelector where) {
+    if (counterpartyIds != null && !counterpartyIds.isEmpty()) {
+      return counterpartyIds;
+    }
+    if (where != null) {
+      return selectorResolver.resolve(where);
+    }
+    return null;
+  }
+
+  private static String periodExpr(AggregateGroupBy groupBy, String dateColumnRef) {
+    if (groupBy == AggregateGroupBy.TOTAL) {
+      return "'total'";
+    }
+    String unit = groupBy.name().toLowerCase(java.util.Locale.ROOT);
+    return "to_char(date_trunc('" + unit + "', " + dateColumnRef + "), 'YYYY-MM-DD')";
+  }
+
+  /** BOTH nets a signed amount (DBIT negated); a single direction uses the positive amount as-is
+   * (the direction filter already restricts rows to that direction). */
+  private static String signedAmountExpr(Direction direction, String amountRef, String directionRef) {
+    if (direction == Direction.BOTH) {
+      return "CASE WHEN " + directionRef + " = 'DBIT' THEN -" + amountRef + " ELSE " + amountRef + " END";
+    }
+    return amountRef;
+  }
+
+  /**
+   * SUM and COUNT are wrapped in {@code COALESCE(..., 0)} so an empty range (or an empty group)
+   * reads as zero, matching a charting tool's expectation of "nothing happened" rather than
+   * {@code null}. AVG and MEDIAN are deliberately left as-is: an average/median over an empty set
+   * has no defined value, so {@code null} is the correct answer there.
+   */
+  private static String valueExpr(AggregateMetric metric, String amountExpr) {
+    return switch (metric) {
+      case SUM -> "COALESCE(sum(" + amountExpr + "), 0)";
+      case AVG -> "avg(" + amountExpr + ")";
+      case MEDIAN -> "percentile_cont(0.5) WITHIN GROUP (ORDER BY " + amountExpr + ")";
+      case COUNT -> "COALESCE(count(*), 0)";
+    };
   }
 
   @Tool(
       name = "list_counterparties",
       description =
           "List counterparties with their evidence aggregates, current tags, recurring series"
-              + " and contract-link status. filter: untagged | unreviewed | has_recurring | all"
-              + " (default all). sort: spend_desc (default) | recent.")
+              + " and contract-link status.")
   public List<CounterpartySummary> listCounterparties(
-      @ToolParam(
-              description = "untagged | unreviewed | has_recurring | all (default all)",
-              required = false)
-          String filter,
-      @ToolParam(description = "spend_desc (default) | recent", required = false) String sort) {
-    String effectiveFilter = normalize(filter, "all");
-    String effectiveSort = normalize(sort, "spend_desc");
+      @ToolParam(description = "default all", required = false) CounterpartyFilter filter,
+      @ToolParam(description = "default spend_desc", required = false) CounterpartySort sort) {
+    CounterpartyFilter effectiveFilter = filter == null ? CounterpartyFilter.all : filter;
+    CounterpartySort effectiveSort = sort == null ? CounterpartySort.spend_desc : sort;
 
     var query =
         db.select(
@@ -139,6 +359,9 @@ public class ReadTools {
                 V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
                 V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
                 V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
                 DSL.field(
                     DSL.exists(
                         DSL.selectOne()
@@ -153,22 +376,22 @@ public class ReadTools {
 
     var conditionalQuery =
         switch (effectiveFilter) {
-          case "untagged" ->
+          case untagged ->
               query.where(
                   DSL.notExists(
                       DSL.selectOne()
                           .from(COUNTERPARTY_TAGS)
                           .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
-          case "unreviewed" -> query.where(COUNTERPARTIES.REVIEWED.eq(false));
-          case "has_recurring" -> query.where(RECURRING.ID.isNotNull());
-          default -> query.where(DSL.trueCondition());
+          case unreviewed -> query.where(COUNTERPARTIES.REVIEWED.eq(false));
+          case has_recurring -> query.where(RECURRING.ID.isNotNull());
+          case all -> query.where(DSL.trueCondition());
         };
 
     var sortedQuery =
         switch (effectiveSort) {
-          case "recent" -> conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.desc().nullsLast());
-          default ->
-              conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D.desc().nullsLast());
+          case recent -> conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.desc().nullsLast());
+          case spend_desc ->
+              conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D.desc().nullsLast());
         };
 
     Result<Record> rows = sortedQuery.fetch();
@@ -199,11 +422,24 @@ public class ReadTools {
       description =
           "The counterparties still needing a human decision (status='open'), ordered"
               + " descending by estimated annual cost (recurring.typical_amount * periods/year,"
-              + " or spend_last_365d if no recurring series is recorded yet).")
+              + " or the DBIT-only spend of the last 365 days if no recurring series is"
+              + " recorded yet). Excludes CRDT-predominant counterparties (salary, incoming"
+              + " transfers -- see list_income); a counterparty with no evidence row yet"
+              + " (unknown direction) stays in the queue, since nothing should skip human"
+              + " review. Compact by default ({id, displayName, identityType, cadence,"
+              + " annualCostEstimate, txnCount, lastSeen}); pass verbose=true for the full"
+              + " evidence/recurring blob.")
   public List<ReviewQueueEntry> getReviewQueue(
       @ToolParam(description = "max rows to return (default 50)", required = false)
-          Integer limit) {
+          Integer limit,
+      @ToolParam(
+              description =
+                  "false (default): compact rows without the evidence/recurring blob; true:"
+                      + " full evidence/recurring detail",
+              required = false)
+          Boolean verbose) {
     int effectiveLimit = limit != null && limit > 0 ? limit : DEFAULT_REVIEW_QUEUE_LIMIT;
+    boolean effectiveVerbose = Boolean.TRUE.equals(verbose);
 
     var rows =
         db.select(
@@ -232,13 +468,25 @@ public class ReadTools {
                 V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
                 V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
                 V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
-                V_COUNTERPARTY_EVIDENCE.DIRECTION)
+                V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL)
             .from(COUNTERPARTIES)
             .leftJoin(RECURRING)
             .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
             .where(COUNTERPARTIES.STATUS.eq("open"))
+            // The evidence view is a LEFT JOIN: a bare `= 'DBIT'` would behave like an inner
+            // join and silently drop an open counterparty with no evidence row yet. The IS
+            // NULL branch keeps unknown-direction counterparties in the queue -- nothing
+            // skips human review.
+            .and(
+                V_COUNTERPARTY_EVIDENCE
+                    .DIRECTION
+                    .eq("DBIT")
+                    .or(V_COUNTERPARTY_EVIDENCE.DIRECTION.isNull()))
             .fetch();
 
     List<ReviewQueueEntry> entries = new ArrayList<>();
@@ -246,14 +494,20 @@ public class ReadTools {
       long id = row.get(COUNTERPARTIES.ID);
       CounterpartyEvidence evidence = mapEvidence(row, id);
       RecurringView recurring = mapRecurring(row);
+      String cadence = recurring == null ? null : recurring.cadence();
+      Integer txnCount = evidence == null ? null : evidence.txnCount();
+      LocalDate lastSeen = evidence == null ? null : evidence.lastSeen();
       entries.add(
           new ReviewQueueEntry(
               id,
               row.get(COUNTERPARTIES.DISPLAY_NAME),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
-              evidence,
-              recurring,
-              annualCostEstimate(recurring, evidence)));
+              effectiveVerbose ? evidence : null,
+              effectiveVerbose ? recurring : null,
+              AnnualCost.estimate(recurring, evidence),
+              cadence,
+              txnCount,
+              lastSeen));
     }
 
     entries.sort(Comparator.comparing(ReviewQueueEntry::annualCostEstimate).reversed());
@@ -309,13 +563,37 @@ public class ReadTools {
       name = "counterparty_transactions",
       description =
           "The underlying bookings for one counterparty (evidence detail), optionally limited to"
-              + " the last N days via period.")
+              + " the last N days via period, or to an inclusive [dateFrom, dateTo] absolute"
+              + " range on booking_date. When dateFrom and dateTo are both given, the absolute"
+              + " range wins over period (period is ignored).")
   public List<TransactionView> counterpartyTransactions(
       @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(description = "restrict to the last N days; omit for all history", required = false)
-          Integer period) {
+      @ToolParam(
+              description =
+                  "restrict to the last N days; omit for all history; ignored when dateFrom and"
+                      + " dateTo are both given",
+              required = false)
+          Integer period,
+      @ToolParam(
+              description = "inclusive range start on booking_date; wins over period when set together with dateTo",
+              required = false)
+          LocalDate dateFrom,
+      @ToolParam(
+              description = "inclusive range end on booking_date; wins over period when set together with dateFrom",
+              required = false)
+          LocalDate dateTo) {
     Result<Record> rows =
-        db.fetch(COUNTERPARTY_TRANSACTIONS_SQL, counterpartyId, period, period);
+        db.fetch(
+            COUNTERPARTY_TRANSACTIONS_SQL,
+            counterpartyId,
+            dateFrom,
+            dateTo,
+            dateFrom,
+            dateTo,
+            dateFrom,
+            dateTo,
+            period,
+            period);
     List<TransactionView> transactions = new ArrayList<>();
     for (Record row : rows) {
       transactions.add(
@@ -333,6 +611,160 @@ public class ReadTools {
               row.get("creditor_id", String.class)));
     }
     return transactions;
+  }
+
+  @Tool(
+      name = "taxonomy",
+      description =
+          "The emergent tag vocabulary already in use, per dimension (domain|nature|necessity),"
+              + " with counts -- reuse these values instead of inventing synonyms.")
+  public List<TaxonomyDimension> taxonomy() {
+    var rows =
+        db.select(
+                COUNTERPARTY_TAGS.DIMENSION,
+                COUNTERPARTY_TAGS.VALUE,
+                DSL.count().as("value_count"))
+            .from(COUNTERPARTY_TAGS)
+            .groupBy(COUNTERPARTY_TAGS.DIMENSION, COUNTERPARTY_TAGS.VALUE)
+            .orderBy(COUNTERPARTY_TAGS.DIMENSION, DSL.field("value_count", Integer.class).desc())
+            .fetch();
+
+    Map<String, List<TaxonomyValue>> valuesByDimension = new LinkedHashMap<>();
+    for (var row : rows) {
+      valuesByDimension
+          .computeIfAbsent(row.get(COUNTERPARTY_TAGS.DIMENSION), key -> new ArrayList<>())
+          .add(
+              new TaxonomyValue(
+                  row.get(COUNTERPARTY_TAGS.VALUE), row.get("value_count", Integer.class)));
+    }
+
+    List<TaxonomyDimension> dimensions = new ArrayList<>();
+    for (var entry : valuesByDimension.entrySet()) {
+      dimensions.add(new TaxonomyDimension(entry.getKey(), entry.getValue()));
+    }
+    return dimensions;
+  }
+
+  @Tool(
+      name = "obligations_register",
+      description =
+          "The documented obligations register: confirmed recurring outgoing (DBIT) obligations"
+              + " with annual cost, tags and contract-link status, ordered by annual cost, plus"
+              + " the total.")
+  public ObligationsRegister obligationsRegister() {
+    var rows =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                RECURRING.ID,
+                RECURRING.CADENCE,
+                RECURRING.TYPICAL_AMOUNT,
+                RECURRING.AMOUNT_MIN,
+                RECURRING.AMOUNT_MAX,
+                RECURRING.FIRST_SEEN,
+                RECURRING.LAST_SEEN,
+                RECURRING.OCCURRENCE_COUNT,
+                RECURRING.SOURCE,
+                RECURRING.CONFIDENCE,
+                V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.SPAN_DAYS,
+                V_COUNTERPARTY_EVIDENCE.TOTAL_AMOUNT,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MIN,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_AVG,
+                V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
+                V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
+                V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
+                CONTRACTS.COUNTERPARTY_ID,
+                CONTRACTS.HIVEMEM_CELL_ID)
+            .from(COUNTERPARTIES)
+            .join(RECURRING)
+            .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .join(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .leftJoin(CONTRACTS)
+            .on(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(COUNTERPARTIES.STATUS.eq("confirmed"))
+            .and(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("DBIT"))
+            .fetch();
+
+    Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();
+
+    List<ObligationRow> obligationRows = new ArrayList<>();
+    for (Record row : rows) {
+      long id = row.get(COUNTERPARTIES.ID);
+      CounterpartyEvidence evidence = mapEvidence(row, id);
+      RecurringView recurring = mapRecurring(row);
+      boolean hasContract = row.get(CONTRACTS.COUNTERPARTY_ID) != null;
+      obligationRows.add(
+          new ObligationRow(
+              id,
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              recurring == null ? null : recurring.cadence(),
+              AnnualCost.estimate(recurring, evidence),
+              tagsByCounterparty.getOrDefault(id, List.of()),
+              hasContract,
+              row.get(CONTRACTS.HIVEMEM_CELL_ID)));
+    }
+
+    obligationRows.sort(Comparator.comparing(ObligationRow::annualCost).reversed());
+
+    BigDecimal total =
+        obligationRows.stream()
+            .map(ObligationRow::annualCost)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+    return new ObligationsRegister(obligationRows, total);
+  }
+
+  @Tool(
+      name = "list_income",
+      description =
+          "Incoming payments (CRDT): counterparties whose predominant direction is credit"
+              + " (salary, transfers received) -- kept out of the obligations queue but available"
+              + " here, ordered by total received.")
+  public List<IncomeRow> listIncome() {
+    var rows =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN)
+            .from(COUNTERPARTIES)
+            .join(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT"))
+            .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc())
+            .fetch();
+
+    List<IncomeRow> income = new ArrayList<>();
+    for (Record row : rows) {
+      Long txnCount = row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT);
+      income.add(
+          new IncomeRow(
+              row.get(COUNTERPARTIES.ID),
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              txnCount == null ? 0 : txnCount,
+              row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),
+              row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL),
+              row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN),
+              row.get(V_COUNTERPARTY_EVIDENCE.LAST_SEEN)));
+    }
+    return income;
   }
 
   @Tool(
@@ -357,6 +789,65 @@ public class ReadTools {
       rowMaps.add(rowMap);
     }
     return new SqlQueryResult(columns, rowMaps);
+  }
+
+  @Tool(
+      name = "describe_schema",
+      description =
+          "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query"
+              + " can be written without guessing. No data rows.")
+  public List<SchemaColumn> describeSchema() {
+    Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY");
+    Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY");
+
+    var columnRows =
+        db.select(
+                DSL.field("table_name", String.class),
+                DSL.field("column_name", String.class),
+                DSL.field("data_type", String.class),
+                DSL.field("is_nullable", String.class))
+            .from(DSL.table("information_schema.columns"))
+            .where(DSL.field("table_schema", String.class).eq("public"))
+            .and(DSL.field("table_name", String.class).in(SCHEMA_TABLES))
+            .orderBy(DSL.field("table_name"), DSL.field("ordinal_position"))
+            .fetch();
+
+    List<SchemaColumn> columns = new ArrayList<>();
+    for (var row : columnRows) {
+      String table = row.get("table_name", String.class);
+      String column = row.get("column_name", String.class);
+      List<String> key = List.of(table, column);
+      columns.add(
+          new SchemaColumn(
+              table,
+              column,
+              row.get("data_type", String.class),
+              "YES".equals(row.get("is_nullable", String.class)),
+              primaryKeys.contains(key),
+              foreignKeys.contains(key),
+              COLUMN_DOCS.get(table + "." + column)));
+    }
+    return columns;
+  }
+
+  private Set<List<String>> fetchKeyColumns(String constraintType) {
+    var rows =
+        db.select(
+                DSL.field("tc.table_name", String.class), DSL.field("kcu.column_name", String.class))
+            .from(DSL.table("information_schema.table_constraints").as("tc"))
+            .join(DSL.table("information_schema.key_column_usage").as("kcu"))
+            .on(DSL.field("tc.constraint_name", String.class)
+                .eq(DSL.field("kcu.constraint_name", String.class)))
+            .where(DSL.field("tc.constraint_type", String.class).eq(constraintType))
+            .and(DSL.field("tc.table_name", String.class).in(SCHEMA_TABLES))
+            .fetch();
+    Set<List<String>> keys = new HashSet<>();
+    for (var row : rows) {
+      keys.add(
+          List.of(
+              row.get("tc.table_name", String.class), row.get("kcu.column_name", String.class)));
+    }
+    return keys;
   }
 
   /**
@@ -417,10 +908,6 @@ public class ReadTools {
     return result.toString();
   }
 
-  private static String normalize(String value, String defaultValue) {
-    return value == null || value.isBlank() ? defaultValue : value;
-  }
-
   private Map<Long, List<CounterpartyTagView>> fetchTagsByCounterparty() {
     Map<Long, List<CounterpartyTagView>> byCounterparty = new LinkedHashMap<>();
     db.selectFrom(COUNTERPARTY_TAGS)
@@ -439,7 +926,7 @@ public class ReadTools {
   }
 
   /** Returns {@code null} when the left-joined evidence row is absent (no matched transactions). */
-  private static CounterpartyEvidence mapEvidence(Record row, long counterpartyId) {
+  static CounterpartyEvidence mapEvidence(Record row, long counterpartyId) {
     Long evidenceCounterpartyId = row.get(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID);
     if (evidenceCounterpartyId == null) {
       return null;
@@ -459,11 +946,14 @@ public class ReadTools {
         row.get(V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV),
         row.get(V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS),
         row.get(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D),
-        row.get(V_COUNTERPARTY_EVIDENCE.DIRECTION));
+        row.get(V_COUNTERPARTY_EVIDENCE.DIRECTION),
+        row.get(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D),
+        row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),
+        row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL));
   }
 
   /** Returns {@code null} when the left-joined recurring row is absent. */
-  private static RecurringView mapRecurring(Record row) {
+  static RecurringView mapRecurring(Record row) {
     Long recurringId = row.get(RECURRING.ID);
     if (recurringId == null) {
       return null;
@@ -479,20 +969,5 @@ public class ReadTools {
         row.get(RECURRING.OCCURRENCE_COUNT),
         row.get(RECURRING.SOURCE),
         row.get(RECURRING.CONFIDENCE));
-  }
-
-  /**
-   * spec §5: annual cost = {@code typical_amount * periods/year} for a non-irregular recurring
-   * series, else {@code spend_last_365d}. {@code irregular} has no clean periods/year, so it
-   * falls back to the same {@code spend_last_365d} proxy used before any recurring is marked.
-   */
-  private static BigDecimal annualCostEstimate(RecurringView recurring, CounterpartyEvidence evidence) {
-    if (recurring != null && recurring.typicalAmount() != null) {
-      Integer periodsPerYear = CADENCE_PERIODS_PER_YEAR.get(recurring.cadence());
-      if (periodsPerYear != null) {
-        return recurring.typicalAmount().multiply(BigDecimal.valueOf(periodsPerYear));
-      }
-    }
-    return evidence != null && evidence.spendLast365d() != null ? evidence.spendLast365d() : BigDecimal.ZERO;
   }
 }

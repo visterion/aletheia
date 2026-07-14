@@ -86,7 +86,8 @@ real Subsembly field names rather than guessed. The project is waiting on the ex
 **Read:** `list_recurring`, `query_spending`, `merchant_history`, `get_review_queue`,
 `list_unmatched_recurring`, `sql_query` (read-only escape hatch).
 
-**Write:** `classify_merchant`, `confirm_merchant`, `link_contract`, `dismiss`.
+**Write:** `classify_counterparty`, `mark_recurring`, `confirm_counterparty`, `link_contract`,
+`dismiss_counterparty`.
 
 ## Security
 

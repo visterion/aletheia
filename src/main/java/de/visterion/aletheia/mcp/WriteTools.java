@@ -14,6 +14,7 @@ import org.jooq.DSLContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 
@@ -25,90 +26,143 @@ import org.springframework.web.context.request.RequestContextHolder;
  * append-only audit log). {@code source=auto} never sets {@code counterparties.reviewed} or
  * flips {@code status} to {@code confirmed}: {@link #classifyCounterparty} and {@link
  * #markRecurring} only ever touch {@code counterparty_tags}/{@code recurring} plus history --
- * {@code counterparties.status}/{@code reviewed} are exclusively owned by {@link #confirm} and
- * {@link #dismiss} (spec §5, "the workflow").
+ * {@code counterparties.status}/{@code reviewed} are exclusively owned by {@link
+ * #confirmCounterparty} and {@link #dismissCounterparty} (spec §5, "the workflow").
  */
 @Component
 public class WriteTools {
 
-  private final DSLContext db;
+  private static final int MAX_BATCH_SIZE = 1000;
+  private static final int CONFIRM_REQUIRED_THRESHOLD = 200;
 
-  public WriteTools(DSLContext db) {
+  private final DSLContext db;
+  private final CounterpartySelectorResolver selectorResolver;
+
+  public WriteTools(DSLContext db, CounterpartySelectorResolver selectorResolver) {
     this.db = db;
+    this.selectorResolver = selectorResolver;
   }
 
   @Tool(
       name = "classify_counterparty",
       description =
-          "Set/replace the tags for one dimension on a counterparty (domain | nature |"
-              + " necessity). source: auto | confirmed. Never sets counterparties.reviewed or"
-              + " status -- only confirm/dismiss do that.")
-  public WriteAck classifyCounterparty(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
+          "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit"
+              + " ids or a where-selector). Never sets counterparties.reviewed or status -- only"
+              + " confirm/dismiss do that. Batches of 200+ require confirm=true; batches over"
+              + " 1000 are always rejected.")
+  @Transactional
+  public BatchWriteAck classifyCounterparty(
+      @ToolParam(description = "explicit counterparties.id list, optional", required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(description = "selector to resolve target ids, optional", required = false)
+          CounterpartySelector where,
       @ToolParam(description = "the {dimension, value} pairs to set") List<TagInput> tags,
-      @ToolParam(description = "auto | confirmed") String source,
-      @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
-    requireExistingCounterparty(counterpartyId);
+      @ToolParam(description = "provenance of this classification") TagSource source,
+      @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence,
+      @ToolParam(
+              description = "must be true to run a batch of 200 or more",
+              required = false)
+          Boolean confirm) {
+    boolean effectiveConfirm = Boolean.TRUE.equals(confirm);
+    List<Long> ids = resolveTargetIds(counterpartyIds, where);
+    enforceBatchCaps(ids, effectiveConfirm);
+
     if (tags == null || tags.isEmpty()) {
-      return new WriteAck(counterpartyId, "no tags supplied, nothing changed");
+      return new BatchWriteAck(0, List.of());
     }
 
     // "Set/replace" (spec §5): for every dimension present in the request, drop the existing
     // tags for that (counterparty, dimension) and insert the new ones -- not a per-row upsert,
     // since `value` is part of the primary key and a replace must be able to drop stale values.
     List<String> dimensions = tags.stream().map(TagInput::dimension).distinct().toList();
-    for (String dimension : dimensions) {
-      List<String> oldValues =
-          db.select(COUNTERPARTY_TAGS.VALUE)
-              .from(COUNTERPARTY_TAGS)
-              .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
-              .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
-              .fetch(COUNTERPARTY_TAGS.VALUE);
+    for (long counterpartyId : ids) {
+      requireExistingCounterparty(counterpartyId);
+      for (String dimension : dimensions) {
+        List<String> oldValues =
+            db.select(COUNTERPARTY_TAGS.VALUE)
+                .from(COUNTERPARTY_TAGS)
+                .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
+                .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
+                .fetch(COUNTERPARTY_TAGS.VALUE);
 
-      db.deleteFrom(COUNTERPARTY_TAGS)
-          .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
-          .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
-          .execute();
-
-      List<String> newValues =
-          tags.stream().filter(t -> t.dimension().equals(dimension)).map(TagInput::value).toList();
-      for (String value : newValues) {
-        db.insertInto(COUNTERPARTY_TAGS)
-            .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, counterpartyId)
-            .set(COUNTERPARTY_TAGS.DIMENSION, dimension)
-            .set(COUNTERPARTY_TAGS.VALUE, value)
-            .set(COUNTERPARTY_TAGS.SOURCE, source)
-            .set(COUNTERPARTY_TAGS.CONFIDENCE, confidence)
+        db.deleteFrom(COUNTERPARTY_TAGS)
+            .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
+            .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
             .execute();
-      }
 
-      insertHistory(
-          counterpartyId,
-          "tag:" + dimension,
-          String.join(",", oldValues),
-          String.join(",", newValues),
-          source);
+        List<String> newValues =
+            tags.stream()
+                .filter(t -> t.dimension().equals(dimension))
+                .map(TagInput::value)
+                .toList();
+        for (String value : newValues) {
+          db.insertInto(COUNTERPARTY_TAGS)
+              .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, counterpartyId)
+              .set(COUNTERPARTY_TAGS.DIMENSION, dimension)
+              .set(COUNTERPARTY_TAGS.VALUE, value)
+              .set(COUNTERPARTY_TAGS.SOURCE, source.name())
+              .set(COUNTERPARTY_TAGS.CONFIDENCE, confidence)
+              .execute();
+        }
+
+        insertHistory(
+            counterpartyId,
+            "tag:" + dimension,
+            String.join(",", oldValues),
+            String.join(",", newValues),
+            source.name());
+      }
     }
 
-    return new WriteAck(counterpartyId, "tags updated for " + dimensions.size() + " dimension(s)");
+    return new BatchWriteAck(ids.size(), dimensions);
+  }
+
+  /**
+   * Resolves the batch target id set: explicit {@code counterpartyIds} win if non-empty, else the
+   * {@code where}-selector is resolved; rejects if neither is supplied.
+   */
+  private List<Long> resolveTargetIds(List<Long> counterpartyIds, CounterpartySelector where) {
+    if (counterpartyIds != null && !counterpartyIds.isEmpty()) {
+      return counterpartyIds.stream().distinct().toList();
+    }
+    if (where != null) {
+      return selectorResolver.resolve(where);
+    }
+    throw new IllegalArgumentException(
+        "either counterpartyIds or where must be supplied to select a target");
+  }
+
+  /**
+   * Safety caps on the resolved batch size (spec §5, HiveMem-style guardrails): more than {@link
+   * #MAX_BATCH_SIZE} is always rejected (even with {@code confirm=true}); {@link
+   * #CONFIRM_REQUIRED_THRESHOLD} or more requires an explicit {@code confirm=true}.
+   */
+  private void enforceBatchCaps(List<Long> ids, boolean confirm) {
+    int count = ids.size();
+    if (count > MAX_BATCH_SIZE) {
+      throw new IllegalArgumentException(
+          "selector/ids resolved to " + count + " matches, narrow the selector (max " + MAX_BATCH_SIZE + ")");
+    }
+    if (count >= CONFIRM_REQUIRED_THRESHOLD && !confirm) {
+      throw new IllegalArgumentException(
+          count + " matches; pass confirm=true to run a batch this large");
+    }
   }
 
   @Tool(
       name = "mark_recurring",
       description =
           "Record/replace the recurring series for a counterparty (upsert on counterparty_id)."
-              + " cadence: monthly | quarterly | half_yearly | yearly | irregular. source: auto |"
-              + " confirmed. Never sets counterparties.reviewed or status.")
+              + " Never sets counterparties.reviewed or status.")
   public WriteAck markRecurring(
       @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(description = "monthly | quarterly | half_yearly | yearly | irregular")
-          String cadence,
+      @ToolParam(description = "recurrence interval") Cadence cadence,
       @ToolParam(description = "the representative amount per occurrence") BigDecimal typicalAmount,
       @ToolParam(description = "smallest observed amount, optional", required = false)
           BigDecimal amountMin,
       @ToolParam(description = "largest observed amount, optional", required = false)
           BigDecimal amountMax,
-      @ToolParam(description = "auto | confirmed") String source,
+      @ToolParam(description = "provenance of this classification") TagSource source,
       @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
     requireExistingCounterparty(counterpartyId);
 
@@ -120,19 +174,19 @@ public class WriteTools {
 
     db.insertInto(RECURRING)
         .set(RECURRING.COUNTERPARTY_ID, counterpartyId)
-        .set(RECURRING.CADENCE, cadence)
+        .set(RECURRING.CADENCE, cadence.name())
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
         .set(RECURRING.AMOUNT_MIN, amountMin)
         .set(RECURRING.AMOUNT_MAX, amountMax)
-        .set(RECURRING.SOURCE, source)
+        .set(RECURRING.SOURCE, source.name())
         .set(RECURRING.CONFIDENCE, confidence)
         .onConflict(RECURRING.COUNTERPARTY_ID)
         .doUpdate()
-        .set(RECURRING.CADENCE, cadence)
+        .set(RECURRING.CADENCE, cadence.name())
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
         .set(RECURRING.AMOUNT_MIN, amountMin)
         .set(RECURRING.AMOUNT_MAX, amountMax)
-        .set(RECURRING.SOURCE, source)
+        .set(RECURRING.SOURCE, source.name())
         .set(RECURRING.CONFIDENCE, confidence)
         .execute();
 
@@ -141,18 +195,19 @@ public class WriteTools {
         "recurring",
         oldTypicalAmount == null ? null : oldTypicalAmount.toPlainString(),
         typicalAmount == null ? null : typicalAmount.toPlainString(),
-        source);
+        source.name());
 
-    return new WriteAck(counterpartyId, "recurring series set to " + cadence);
+    return new WriteAck(counterpartyId, "recurring series set to " + cadence.name());
   }
 
   @Tool(
-      name = "confirm",
+      name = "confirm_counterparty",
       description =
           "The human's 'yes': flip this counterparty's auto tags/recurring to confirmed, set"
               + " reviewed=true and status='confirmed'. Drains the review queue for this"
               + " counterparty.")
-  public WriteAck confirm(@ToolParam(description = "counterparties.id") long counterpartyId) {
+  public WriteAck confirmCounterparty(
+      @ToolParam(description = "counterparties.id") long counterpartyId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
     db.update(COUNTERPARTY_TAGS)
@@ -180,7 +235,10 @@ public class WriteTools {
 
   @Tool(
       name = "link_contract",
-      description = "Link this counterparty to a HiveMem contract cell (insert/update contracts).")
+      description =
+          "Link this counterparty to a HiveMem contract cell (insert/update contracts). Find"
+              + " the cell id via HiveMem:search with where.realm=contracts (or the topic"
+              + " documenting the contract).")
   public WriteAck linkContract(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(description = "the HiveMem cell id") String hivememCellId,
@@ -216,11 +274,11 @@ public class WriteTools {
   }
 
   @Tool(
-      name = "dismiss",
+      name = "dismiss_counterparty",
       description =
           "This counterparty is not an obligation / not recurring: status='dismissed',"
               + " dismissed_reason=reason.")
-  public WriteAck dismiss(
+  public WriteAck dismissCounterparty(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(description = "why this counterparty was dismissed") String reason) {
     String oldStatus = requireExistingCounterparty(counterpartyId);

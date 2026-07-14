@@ -24,6 +24,10 @@ import java.time.LocalDate;
  * @param spendLast365d total amount for transactions in the last 365 days (relative to {@code
  *     CURRENT_DATE})
  * @param direction majority booking direction ({@code DBIT} or {@code CRDT})
+ * @param debitLast365d {@code DBIT}-only total for the last 365 days (spec M2: direction-split,
+ *     unaffected by {@code CRDT} refunds)
+ * @param creditLast365d {@code CRDT}-only total for the last 365 days
+ * @param creditTotal {@code CRDT}-only total across all time
  */
 public record CounterpartyEvidence(
     long counterpartyId,
@@ -38,4 +42,7 @@ public record CounterpartyEvidence(
     BigDecimal amountStddev,
     Double medianGapDays,
     BigDecimal spendLast365d,
-    String direction) {}
+    String direction,
+    BigDecimal debitLast365d,
+    BigDecimal creditLast365d,
+    BigDecimal creditTotal) {}
