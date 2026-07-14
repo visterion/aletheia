@@ -40,7 +40,12 @@ public class ToolPermissionService {
 
   /** Additional write-scope tools (spec §5 "Write"), on top of everything READER can do. */
   private static final Set<String> WRITE_TOOLS =
-      tools("classify_counterparty", "mark_recurring", "confirm", "link_contract", "dismiss");
+      tools(
+          "classify_counterparty",
+          "mark_recurring",
+          "confirm_counterparty",
+          "link_contract",
+          "dismiss_counterparty");
 
   private static final Set<String> WRITER_TOOLS = union(READ_TOOLS, WRITE_TOOLS);
 

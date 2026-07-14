@@ -171,7 +171,7 @@ class WriteToolsIT extends AbstractPostgresIT {
         List.of(id), null, List.of(new TagInput("domain", "telecom")), TagSource.auto, null, false);
     writeTools.markRecurring(id, Cadence.monthly, new BigDecimal("10.00"), null, null, TagSource.auto, null);
 
-    writeTools.confirm(id);
+    writeTools.confirmCounterparty(id);
 
     Record counterparty =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -198,7 +198,7 @@ class WriteToolsIT extends AbstractPostgresIT {
                 .fetchOne(COUNTERPARTIES.STATUS))
         .isEqualTo("open");
 
-    writeTools.confirm(id);
+    writeTools.confirmCounterparty(id);
 
     assertThat(
             db.fetchCount(
@@ -240,7 +240,7 @@ class WriteToolsIT extends AbstractPostgresIT {
   void dismissSetsStatusAndReason() {
     long id = counterpartyWithOneTransaction("CDTR-DISMISS", "Dismiss Co");
 
-    writeTools.dismiss(id, "one-off refund, not recurring");
+    writeTools.dismissCounterparty(id, "one-off refund, not recurring");
 
     Record row =
         db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.DISMISSED_REASON)
@@ -256,7 +256,7 @@ class WriteToolsIT extends AbstractPostgresIT {
 
   @Test
   void writeToolsRejectAnUnknownCounterpartyId() {
-    assertThatThrownBy(() -> writeTools.dismiss(999_999L, "no such counterparty"))
+    assertThatThrownBy(() -> writeTools.dismissCounterparty(999_999L, "no such counterparty"))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }

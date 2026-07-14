@@ -26,8 +26,8 @@ import org.springframework.web.context.request.RequestContextHolder;
  * append-only audit log). {@code source=auto} never sets {@code counterparties.reviewed} or
  * flips {@code status} to {@code confirmed}: {@link #classifyCounterparty} and {@link
  * #markRecurring} only ever touch {@code counterparty_tags}/{@code recurring} plus history --
- * {@code counterparties.status}/{@code reviewed} are exclusively owned by {@link #confirm} and
- * {@link #dismiss} (spec §5, "the workflow").
+ * {@code counterparties.status}/{@code reviewed} are exclusively owned by {@link
+ * #confirmCounterparty} and {@link #dismissCounterparty} (spec §5, "the workflow").
  */
 @Component
 public class WriteTools {
@@ -197,12 +197,13 @@ public class WriteTools {
   }
 
   @Tool(
-      name = "confirm",
+      name = "confirm_counterparty",
       description =
           "The human's 'yes': flip this counterparty's auto tags/recurring to confirmed, set"
               + " reviewed=true and status='confirmed'. Drains the review queue for this"
               + " counterparty.")
-  public WriteAck confirm(@ToolParam(description = "counterparties.id") long counterpartyId) {
+  public WriteAck confirmCounterparty(
+      @ToolParam(description = "counterparties.id") long counterpartyId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
     db.update(COUNTERPARTY_TAGS)
@@ -230,7 +231,10 @@ public class WriteTools {
 
   @Tool(
       name = "link_contract",
-      description = "Link this counterparty to a HiveMem contract cell (insert/update contracts).")
+      description =
+          "Link this counterparty to a HiveMem contract cell (insert/update contracts). Find"
+              + " the cell id via HiveMem:search with where.realm=contracts (or the topic"
+              + " documenting the contract).")
   public WriteAck linkContract(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(description = "the HiveMem cell id") String hivememCellId,
@@ -266,11 +270,11 @@ public class WriteTools {
   }
 
   @Tool(
-      name = "dismiss",
+      name = "dismiss_counterparty",
       description =
           "This counterparty is not an obligation / not recurring: status='dismissed',"
               + " dismissed_reason=reason.")
-  public WriteAck dismiss(
+  public WriteAck dismissCounterparty(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(description = "why this counterparty was dismissed") String reason) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
