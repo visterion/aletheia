@@ -156,7 +156,11 @@ public class WriteTools {
               + " contract_id) -- pass contractId (a contracts.id) to target that specific"
               + " contract's series, or null for the counterparty's mandate-less series. An"
               + " auto-source call can never overwrite an already-confirmed row. Never sets"
-              + " counterparties.reviewed or status.")
+              + " counterparties.reviewed or status. Note: on a MANDATE contract (a contractId"
+              + " whose contracts row has a mandate_id), measured values such as typical_amount"
+              + " are refreshed from transactions by ContractResolver on every startup, so a"
+              + " manual override here is not durable for mandate contracts -- mandate-less"
+              + " series (contractId=null) are not resolver-owned.")
   public WriteAck markRecurring(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(
@@ -219,6 +223,10 @@ public class WriteTools {
           source.name());
     }
 
+    if (affected == 0) {
+      return new WriteAck(counterpartyId, "no change: recurring series is confirmed");
+    }
+
     return new WriteAck(counterpartyId, "recurring series set to " + cadence.name());
   }
 
@@ -243,8 +251,13 @@ public class WriteTools {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
     if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
-      long targetContract =
-          contractId != null ? contractId : materializeMandatelessContract(counterpartyId);
+      long targetContract;
+      if (contractId != null) {
+        requireContractOwnedBy(counterpartyId, contractId);
+        targetContract = contractId;
+      } else {
+        targetContract = materializeMandatelessContract(counterpartyId);
+      }
       confirmContractRow(counterpartyId, targetContract);
       return new WriteAck(counterpartyId, "contract " + targetContract + " confirmed");
     }
@@ -255,9 +268,15 @@ public class WriteTools {
         .and(COUNTERPARTY_TAGS.SOURCE.eq("auto"))
         .execute();
 
+    // Only counterparty-level (mandate-less) recurring rows belong to this legacy path --
+    // mandate-linked rows (contract_id set) are exclusively owned by the per-contract confirm
+    // path above and must not be silently flipped here (a split counterparty whose recurring is
+    // entirely mandate-linked would otherwise desync recurring.source='confirmed' from
+    // contracts.status='open').
     db.update(RECURRING)
         .set(RECURRING.SOURCE, "confirmed")
         .where(RECURRING.COUNTERPARTY_ID.eq(counterpartyId))
+        .and(RECURRING.CONTRACT_ID.isNull())
         .and(RECURRING.SOURCE.eq("auto"))
         .execute();
 
@@ -370,11 +389,13 @@ public class WriteTools {
             .where(CONTRACTS.ID.eq(contractId))
             .fetchOne(CONTRACTS.HIVEMEM_CELL_ID);
 
-    db.update(CONTRACTS)
-        .set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId)
-        .set(CONTRACTS.NOTES, notes)
-        .where(CONTRACTS.ID.eq(contractId))
-        .execute();
+    var update = db.update(CONTRACTS).set(CONTRACTS.HIVEMEM_CELL_ID, hivememCellId);
+    // Only overwrite NOTES when a value is actually supplied -- notes=null on a re-link means
+    // "unchanged", not "clear the existing notes".
+    if (notes != null) {
+      update = update.set(CONTRACTS.NOTES, notes);
+    }
+    update.where(CONTRACTS.ID.eq(contractId)).execute();
 
     insertHistory(counterpartyId, "contract", oldCellId, hivememCellId, "confirmed");
 
@@ -401,8 +422,13 @@ public class WriteTools {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
     if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
-      long targetContract =
-          contractId != null ? contractId : materializeMandatelessContract(counterpartyId);
+      long targetContract;
+      if (contractId != null) {
+        requireContractOwnedBy(counterpartyId, contractId);
+        targetContract = contractId;
+      } else {
+        targetContract = materializeMandatelessContract(counterpartyId);
+      }
       String oldContractStatus =
           db.select(CONTRACTS.STATUS)
               .from(CONTRACTS)
@@ -431,6 +457,28 @@ public class WriteTools {
     insertHistory(counterpartyId, "status", oldStatus, "dismissed", "confirmed");
 
     return new WriteAck(counterpartyId, "dismissed: " + reason);
+  }
+
+  /**
+   * Guards the per-contract confirm/dismiss paths (spec §5): a caller-supplied {@code
+   * contractId} must exist and must belong to the {@code counterpartyId} it was called with --
+   * otherwise {@code confirm_counterparty(cpA, contractOfCpB)} could confirm another
+   * counterparty's contract while writing the history row under {@code cpA}, or a nonexistent
+   * {@code contractId} could update 0 rows yet still ack success.
+   */
+  private void requireContractOwnedBy(long counterpartyId, long contractId) {
+    Long ownerId =
+        db.select(CONTRACTS.COUNTERPARTY_ID)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.COUNTERPARTY_ID);
+    if (ownerId == null) {
+      throw new IllegalArgumentException("contract " + contractId + " not found");
+    }
+    if (ownerId != counterpartyId) {
+      throw new IllegalArgumentException(
+          "contract " + contractId + " belongs to a different counterparty");
+    }
   }
 
   private String requireExistingCounterparty(long counterpartyId) {

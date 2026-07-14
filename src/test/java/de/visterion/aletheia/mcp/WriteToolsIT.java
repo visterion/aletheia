@@ -235,6 +235,19 @@ class WriteToolsIT extends AbstractPostgresIT {
   }
 
   @Test
+  void linkContractPreservesExistingNotesWhenNotesParamIsOmittedOnRelink() {
+    long id = counterpartyWithOneTransaction("CDTR-RELINK", "Relink Co");
+    long contractId = seedContract(id, "MANDATE-1");
+
+    writeTools.linkContract(contractId, "hivemem-cell-1", "keep me");
+    writeTools.linkContract(contractId, "hivemem-cell-2", null);
+
+    Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractId)).fetchOne();
+    assertThat(contract.get(CONTRACTS.HIVEMEM_CELL_ID)).isEqualTo("hivemem-cell-2");
+    assertThat(contract.get(CONTRACTS.NOTES)).isEqualTo("keep me");
+  }
+
+  @Test
   void linkContractRejectsAnUnknownContractId() {
     assertThatThrownBy(() -> writeTools.linkContract(999_999L, "cell", null))
         .isInstanceOf(IllegalArgumentException.class);

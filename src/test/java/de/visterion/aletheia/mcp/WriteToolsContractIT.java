@@ -8,6 +8,7 @@ import static de.visterion.aletheia.jooq.Tables.RECURRING;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
@@ -221,6 +222,117 @@ class WriteToolsContractIT extends AbstractPostgresIT {
         db.fetchCount(
             db.selectFrom(COUNTERPARTY_HISTORY).where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id)));
     assertThat(historyAfter).isEqualTo(historyBefore);
+  }
+
+  @Test
+  void confirmWithNoContractIdDoesNotFlipMandateLinkedRecurringWhenNoMandatelessRowExists() {
+    // The Debeka case (final-review Fix #1): a split counterparty whose recurring rows are ALL
+    // mandate-linked (no contract_id IS NULL row) must NOT fall into the legacy
+    // tag/recurring-wide confirm -- only the per-contract path may confirm mandate contracts.
+    long id = counterpartyWithOneTransaction("CDTR-SPLIT-MANDATE", "Split Mandate Co");
+    long contractA = seedContract(id, "MANDATE-A");
+    long contractB = seedContract(id, "MANDATE-B");
+    seedRecurring(id, contractA, "auto", "9.99");
+    seedRecurring(id, contractB, "auto", "19.99");
+
+    writeTools.confirmCounterparty(id, null);
+
+    Record recurringA =
+        db.selectFrom(RECURRING).where(RECURRING.CONTRACT_ID.eq(contractA)).fetchOne();
+    assertThat(recurringA.get(RECURRING.SOURCE)).isEqualTo("auto");
+    Record recurringB =
+        db.selectFrom(RECURRING).where(RECURRING.CONTRACT_ID.eq(contractB)).fetchOne();
+    assertThat(recurringB.get(RECURRING.SOURCE)).isEqualTo("auto");
+
+    Record a = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractA)).fetchOne();
+    assertThat(a.get(CONTRACTS.STATUS)).isEqualTo("open");
+    Record b = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractB)).fetchOne();
+    assertThat(b.get(CONTRACTS.STATUS)).isEqualTo("open");
+  }
+
+  @Test
+  void confirmCounterpartyRejectsAContractBelongingToAnotherCounterparty() {
+    long cpA = counterpartyWithOneTransaction("CDTR-OWNER-A", "Owner A Co");
+    long cpB = counterpartyWithOneTransaction("CDTR-OWNER-B", "Owner B Co");
+    long contractOfB = seedContract(cpB, "MANDATE-B");
+
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(cpA, contractOfB))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractOfB)).fetchOne();
+    assertThat(contract.get(CONTRACTS.STATUS)).isEqualTo("open");
+    assertThat(
+            db.fetchCount(
+                db.selectFrom(COUNTERPARTY_HISTORY)
+                    .where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(cpA))))
+        .isZero();
+  }
+
+  @Test
+  void confirmCounterpartyRejectsANonexistentContractId() {
+    long id = counterpartyWithOneTransaction("CDTR-NOCONTRACT", "No Contract Co");
+
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(id, 999_999L))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    assertThat(
+            db.fetchCount(
+                db.selectFrom(COUNTERPARTY_HISTORY)
+                    .where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id))))
+        .isZero();
+    Record counterparty =
+        db.select(COUNTERPARTIES.STATUS)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.ID.eq(id))
+            .fetchOne();
+    assertThat(counterparty.get(COUNTERPARTIES.STATUS)).isEqualTo("open");
+  }
+
+  @Test
+  void dismissCounterpartyRejectsAContractBelongingToAnotherCounterparty() {
+    long cpA = counterpartyWithOneTransaction("CDTR-DISM-OWNER-A", "Dismiss Owner A Co");
+    long cpB = counterpartyWithOneTransaction("CDTR-DISM-OWNER-B", "Dismiss Owner B Co");
+    long contractOfB = seedContract(cpB, "MANDATE-B");
+
+    assertThatThrownBy(() -> writeTools.dismissCounterparty(cpA, "wrong owner", contractOfB))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractOfB)).fetchOne();
+    assertThat(contract.get(CONTRACTS.STATUS)).isEqualTo("open");
+  }
+
+  @Test
+  void dismissCounterpartyRejectsANonexistentContractId() {
+    long id = counterpartyWithOneTransaction("CDTR-DISM-NOCONTRACT", "Dismiss No Contract Co");
+
+    assertThatThrownBy(() -> writeTools.dismissCounterparty(id, "reason", 999_999L))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    assertThat(
+            db.fetchCount(
+                db.selectFrom(COUNTERPARTY_HISTORY)
+                    .where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id))))
+        .isZero();
+  }
+
+  @Test
+  void markRecurringAckIndicatesNoOpWhenGuardedUpsertAffectsZeroRows() {
+    long id = counterpartyWithOneTransaction("CDTR-GUARD-ACK", "Guard Ack Co");
+    long contractA = seedContract(id, "MANDATE-A");
+    seedRecurring(id, contractA, "confirmed", "42.00");
+
+    WriteAck ack =
+        writeTools.markRecurring(
+            id,
+            contractA,
+            Cadence.monthly,
+            new BigDecimal("1.23"),
+            null,
+            null,
+            TagSource.auto,
+            new BigDecimal("0.500"));
+
+    assertThat(ack.message()).containsIgnoringCase("no change");
   }
 
   @Test
