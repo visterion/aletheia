@@ -10,9 +10,11 @@ import de.visterion.aletheia.substrate.CounterpartyEvidence;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.jooq.DSLContext;
 import org.jooq.Field;
@@ -37,6 +39,31 @@ import org.springframework.stereotype.Component;
 public class ReadTools {
 
   private static final int DEFAULT_REVIEW_QUEUE_LIMIT = 50;
+
+  /** The exact set of tables/views {@link #describeSchema()} exposes. Auth/oauth tables are
+   * deliberately excluded (spec §6/§9): {@code sql_query} needs to discover the register/evidence
+   * schema, never the auth schema. */
+  private static final List<String> SCHEMA_TABLES =
+      List.of(
+          "transactions",
+          "counterparties",
+          "counterparty_tags",
+          "recurring",
+          "contracts",
+          "counterparty_history",
+          "imports",
+          "v_counterparty_evidence");
+
+  private static final Map<String, String> COLUMN_DOCS =
+      Map.of(
+          "transactions.direction",
+              "DBIT (outgoing) | CRDT (incoming); amount is always positive",
+          "transactions.content_hash", "SHA-256 idempotency natural key",
+          "counterparties.identity_type", "creditor_id | iban | name",
+          "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)",
+          "recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular",
+          "v_counterparty_evidence.direction",
+              "predominant direction across the counterparty's bookings");
 
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
 
@@ -351,6 +378,65 @@ public class ReadTools {
       rowMaps.add(rowMap);
     }
     return new SqlQueryResult(columns, rowMaps);
+  }
+
+  @Tool(
+      name = "describe_schema",
+      description =
+          "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query"
+              + " can be written without guessing. No data rows.")
+  public List<SchemaColumn> describeSchema() {
+    Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY");
+    Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY");
+
+    var columnRows =
+        db.select(
+                DSL.field("table_name", String.class),
+                DSL.field("column_name", String.class),
+                DSL.field("data_type", String.class),
+                DSL.field("is_nullable", String.class))
+            .from(DSL.table("information_schema.columns"))
+            .where(DSL.field("table_schema", String.class).eq("public"))
+            .and(DSL.field("table_name", String.class).in(SCHEMA_TABLES))
+            .orderBy(DSL.field("table_name"), DSL.field("ordinal_position"))
+            .fetch();
+
+    List<SchemaColumn> columns = new ArrayList<>();
+    for (var row : columnRows) {
+      String table = row.get("table_name", String.class);
+      String column = row.get("column_name", String.class);
+      List<String> key = List.of(table, column);
+      columns.add(
+          new SchemaColumn(
+              table,
+              column,
+              row.get("data_type", String.class),
+              "YES".equals(row.get("is_nullable", String.class)),
+              primaryKeys.contains(key),
+              foreignKeys.contains(key),
+              COLUMN_DOCS.get(table + "." + column)));
+    }
+    return columns;
+  }
+
+  private Set<List<String>> fetchKeyColumns(String constraintType) {
+    var rows =
+        db.select(
+                DSL.field("tc.table_name", String.class), DSL.field("kcu.column_name", String.class))
+            .from(DSL.table("information_schema.table_constraints").as("tc"))
+            .join(DSL.table("information_schema.key_column_usage").as("kcu"))
+            .on(DSL.field("tc.constraint_name", String.class)
+                .eq(DSL.field("kcu.constraint_name", String.class)))
+            .where(DSL.field("tc.constraint_type", String.class).eq(constraintType))
+            .and(DSL.field("tc.table_name", String.class).in(SCHEMA_TABLES))
+            .fetch();
+    Set<List<String>> keys = new HashSet<>();
+    for (var row : rows) {
+      keys.add(
+          List.of(
+              row.get("tc.table_name", String.class), row.get("kcu.column_name", String.class)));
+    }
+    return keys;
   }
 
   /**
