@@ -666,6 +666,47 @@ public class ReadTools {
   }
 
   @Tool(
+      name = "list_income",
+      description =
+          "Incoming payments (CRDT): counterparties whose predominant direction is credit"
+              + " (salary, transfers received) -- kept out of the obligations queue but available"
+              + " here, ordered by total received.")
+  public List<IncomeRow> listIncome() {
+    var rows =
+        db.select(
+                COUNTERPARTIES.ID,
+                COUNTERPARTIES.DISPLAY_NAME,
+                COUNTERPARTIES.IDENTITY_TYPE,
+                V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
+                V_COUNTERPARTY_EVIDENCE.FIRST_SEEN,
+                V_COUNTERPARTY_EVIDENCE.LAST_SEEN)
+            .from(COUNTERPARTIES)
+            .join(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT"))
+            .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc())
+            .fetch();
+
+    List<IncomeRow> income = new ArrayList<>();
+    for (Record row : rows) {
+      Long txnCount = row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT);
+      income.add(
+          new IncomeRow(
+              row.get(COUNTERPARTIES.ID),
+              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              txnCount == null ? 0 : txnCount,
+              row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),
+              row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL),
+              row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN),
+              row.get(V_COUNTERPARTY_EVIDENCE.LAST_SEEN)));
+    }
+    return income;
+  }
+
+  @Tool(
       name = "sql_query",
       description =
           "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."
