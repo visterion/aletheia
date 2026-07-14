@@ -111,7 +111,8 @@ class ReadToolsIT extends AbstractPostgresIT {
         .set(RECURRING.SOURCE, "auto")
         .execute();
 
-    List<CounterpartySummary> filtered = readTools.listCounterparties("has_recurring", null);
+    List<CounterpartySummary> filtered =
+        readTools.listCounterparties(CounterpartyFilter.has_recurring, null);
 
     assertThat(filtered).hasSize(1);
     assertThat(filtered.get(0).displayName()).isEqualTo("Recurring Co");

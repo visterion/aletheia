@@ -89,16 +89,12 @@ public class ReadTools {
       name = "list_counterparties",
       description =
           "List counterparties with their evidence aggregates, current tags, recurring series"
-              + " and contract-link status. filter: untagged | unreviewed | has_recurring | all"
-              + " (default all). sort: spend_desc (default) | recent.")
+              + " and contract-link status.")
   public List<CounterpartySummary> listCounterparties(
-      @ToolParam(
-              description = "untagged | unreviewed | has_recurring | all (default all)",
-              required = false)
-          String filter,
-      @ToolParam(description = "spend_desc (default) | recent", required = false) String sort) {
-    String effectiveFilter = normalize(filter, "all");
-    String effectiveSort = normalize(sort, "spend_desc");
+      @ToolParam(description = "default all", required = false) CounterpartyFilter filter,
+      @ToolParam(description = "default spend_desc", required = false) CounterpartySort sort) {
+    CounterpartyFilter effectiveFilter = filter == null ? CounterpartyFilter.all : filter;
+    CounterpartySort effectiveSort = sort == null ? CounterpartySort.spend_desc : sort;
 
     var query =
         db.select(
@@ -148,21 +144,21 @@ public class ReadTools {
 
     var conditionalQuery =
         switch (effectiveFilter) {
-          case "untagged" ->
+          case untagged ->
               query.where(
                   DSL.notExists(
                       DSL.selectOne()
                           .from(COUNTERPARTY_TAGS)
                           .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
-          case "unreviewed" -> query.where(COUNTERPARTIES.REVIEWED.eq(false));
-          case "has_recurring" -> query.where(RECURRING.ID.isNotNull());
-          default -> query.where(DSL.trueCondition());
+          case unreviewed -> query.where(COUNTERPARTIES.REVIEWED.eq(false));
+          case has_recurring -> query.where(RECURRING.ID.isNotNull());
+          case all -> query.where(DSL.trueCondition());
         };
 
     var sortedQuery =
         switch (effectiveSort) {
-          case "recent" -> conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.desc().nullsLast());
-          default ->
+          case recent -> conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.desc().nullsLast());
+          case spend_desc ->
               conditionalQuery.orderBy(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D.desc().nullsLast());
         };
 
@@ -413,10 +409,6 @@ public class ReadTools {
       }
     }
     return result.toString();
-  }
-
-  private static String normalize(String value, String defaultValue) {
-    return value == null || value.isBlank() ? defaultValue : value;
   }
 
   private Map<Long, List<CounterpartyTagView>> fetchTagsByCounterparty() {

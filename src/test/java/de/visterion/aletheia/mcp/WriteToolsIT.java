@@ -77,7 +77,7 @@ class WriteToolsIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-CLASSIFY", "Classify Co");
 
     writeTools.classifyCounterparty(
-        id, List.of(new TagInput("domain", "telecom")), "auto", new BigDecimal("0.900"));
+        id, List.of(new TagInput("domain", "telecom")), TagSource.auto, new BigDecimal("0.900"));
 
     var tags =
         db.selectFrom(COUNTERPARTY_TAGS).where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(id)).fetch();
@@ -95,7 +95,7 @@ class WriteToolsIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-AUTO", "Auto Co");
 
     writeTools.classifyCounterparty(
-        id, List.of(new TagInput("nature", "subscription")), "auto", null);
+        id, List.of(new TagInput("nature", "subscription")), TagSource.auto, null);
 
     Record row =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -109,9 +109,11 @@ class WriteToolsIT extends AbstractPostgresIT {
   @Test
   void classifyCounterpartyReplacesTagsForTheSameDimension() {
     long id = counterpartyWithOneTransaction("CDTR-REPLACE", "Replace Co");
-    writeTools.classifyCounterparty(id, List.of(new TagInput("domain", "old-value")), "auto", null);
+    writeTools.classifyCounterparty(
+        id, List.of(new TagInput("domain", "old-value")), TagSource.auto, null);
 
-    writeTools.classifyCounterparty(id, List.of(new TagInput("domain", "new-value")), "confirmed", null);
+    writeTools.classifyCounterparty(
+        id, List.of(new TagInput("domain", "new-value")), TagSource.confirmed, null);
 
     var tags =
         db.selectFrom(COUNTERPARTY_TAGS).where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(id)).fetch();
@@ -124,7 +126,7 @@ class WriteToolsIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-RECUR", "Recur Co");
 
     writeTools.markRecurring(
-        id, "monthly", new BigDecimal("9.99"), null, null, "auto", new BigDecimal("0.800"));
+        id, Cadence.monthly, new BigDecimal("9.99"), null, null, TagSource.auto, new BigDecimal("0.800"));
 
     Record row = db.selectFrom(RECURRING).where(RECURRING.COUNTERPARTY_ID.eq(id)).fetchOne();
     assertThat(row.get(RECURRING.CADENCE)).isEqualTo("monthly");
@@ -132,7 +134,7 @@ class WriteToolsIT extends AbstractPostgresIT {
 
     // Second call upserts (UNIQUE(counterparty_id)) rather than duplicating.
     writeTools.markRecurring(
-        id, "yearly", new BigDecimal("99.00"), null, null, "confirmed", new BigDecimal("1.000"));
+        id, Cadence.yearly, new BigDecimal("99.00"), null, null, TagSource.confirmed, new BigDecimal("1.000"));
 
     var rows = db.selectFrom(RECURRING).where(RECURRING.COUNTERPARTY_ID.eq(id)).fetch();
     assertThat(rows).hasSize(1);
@@ -146,7 +148,7 @@ class WriteToolsIT extends AbstractPostgresIT {
   void markRecurringWithSourceAutoNeverSetsReviewedOrStatus() {
     long id = counterpartyWithOneTransaction("CDTR-RECUR-AUTO", "Recur Auto Co");
 
-    writeTools.markRecurring(id, "monthly", new BigDecimal("5.00"), null, null, "auto", null);
+    writeTools.markRecurring(id, Cadence.monthly, new BigDecimal("5.00"), null, null, TagSource.auto, null);
 
     Record row =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -160,8 +162,8 @@ class WriteToolsIT extends AbstractPostgresIT {
   @Test
   void confirmFlipsAutoTagsAndRecurringToConfirmedAndSetsReviewedAndStatus() {
     long id = counterpartyWithOneTransaction("CDTR-CONFIRM", "Confirm Co");
-    writeTools.classifyCounterparty(id, List.of(new TagInput("domain", "telecom")), "auto", null);
-    writeTools.markRecurring(id, "monthly", new BigDecimal("10.00"), null, null, "auto", null);
+    writeTools.classifyCounterparty(id, List.of(new TagInput("domain", "telecom")), TagSource.auto, null);
+    writeTools.markRecurring(id, Cadence.monthly, new BigDecimal("10.00"), null, null, TagSource.auto, null);
 
     writeTools.confirm(id);
 
