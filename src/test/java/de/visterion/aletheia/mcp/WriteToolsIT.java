@@ -131,15 +131,15 @@ class WriteToolsIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-RECUR", "Recur Co");
 
     writeTools.markRecurring(
-        id, Cadence.monthly, new BigDecimal("9.99"), null, null, TagSource.auto, new BigDecimal("0.800"));
+        id, null, Cadence.monthly, new BigDecimal("9.99"), null, null, TagSource.auto, new BigDecimal("0.800"));
 
     Record row = db.selectFrom(RECURRING).where(RECURRING.COUNTERPARTY_ID.eq(id)).fetchOne();
     assertThat(row.get(RECURRING.CADENCE)).isEqualTo("monthly");
     assertThat(row.get(RECURRING.TYPICAL_AMOUNT)).isEqualByComparingTo("9.99");
 
-    // Second call upserts (UNIQUE(counterparty_id)) rather than duplicating.
+    // Second call upserts (UNIQUE(counterparty_id, contract_id)) rather than duplicating.
     writeTools.markRecurring(
-        id, Cadence.yearly, new BigDecimal("99.00"), null, null, TagSource.confirmed, new BigDecimal("1.000"));
+        id, null, Cadence.yearly, new BigDecimal("99.00"), null, null, TagSource.confirmed, new BigDecimal("1.000"));
 
     var rows = db.selectFrom(RECURRING).where(RECURRING.COUNTERPARTY_ID.eq(id)).fetch();
     assertThat(rows).hasSize(1);
@@ -153,7 +153,8 @@ class WriteToolsIT extends AbstractPostgresIT {
   void markRecurringWithSourceAutoNeverSetsReviewedOrStatus() {
     long id = counterpartyWithOneTransaction("CDTR-RECUR-AUTO", "Recur Auto Co");
 
-    writeTools.markRecurring(id, Cadence.monthly, new BigDecimal("5.00"), null, null, TagSource.auto, null);
+    writeTools.markRecurring(
+        id, null, Cadence.monthly, new BigDecimal("5.00"), null, null, TagSource.auto, null);
 
     Record row =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -165,13 +166,14 @@ class WriteToolsIT extends AbstractPostgresIT {
   }
 
   @Test
-  void confirmFlipsAutoTagsAndRecurringToConfirmedAndSetsReviewedAndStatus() {
+  void confirmWithoutContractIdOrRecurringFlipsAutoTagsAndSetsReviewedAndStatus() {
+    // No recurring row at all -> legacy tag-confirm path (no mandate-less series to
+    // materialize into a contract).
     long id = counterpartyWithOneTransaction("CDTR-CONFIRM", "Confirm Co");
     writeTools.classifyCounterparty(
         List.of(id), null, List.of(new TagInput("domain", "telecom")), TagSource.auto, null, false);
-    writeTools.markRecurring(id, Cadence.monthly, new BigDecimal("10.00"), null, null, TagSource.auto, null);
 
-    writeTools.confirmCounterparty(id);
+    writeTools.confirmCounterparty(id, null);
 
     Record counterparty =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -183,9 +185,6 @@ class WriteToolsIT extends AbstractPostgresIT {
 
     Record tag = db.selectFrom(COUNTERPARTY_TAGS).where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(id)).fetchOne();
     assertThat(tag.get(COUNTERPARTY_TAGS.SOURCE)).isEqualTo("confirmed");
-
-    Record recurring = db.selectFrom(RECURRING).where(RECURRING.COUNTERPARTY_ID.eq(id)).fetchOne();
-    assertThat(recurring.get(RECURRING.SOURCE)).isEqualTo("confirmed");
   }
 
   @Test
@@ -198,7 +197,7 @@ class WriteToolsIT extends AbstractPostgresIT {
                 .fetchOne(COUNTERPARTIES.STATUS))
         .isEqualTo("open");
 
-    writeTools.confirmCounterparty(id);
+    writeTools.confirmCounterparty(id, null);
 
     assertThat(
             db.fetchCount(
@@ -206,16 +205,27 @@ class WriteToolsIT extends AbstractPostgresIT {
         .isZero();
   }
 
+  private long seedContract(long counterpartyId, String mandateId) {
+    return db.insertInto(CONTRACTS)
+        .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
+        .set(CONTRACTS.MANDATE_ID, mandateId)
+        .set(CONTRACTS.SOURCE, "auto")
+        .set(CONTRACTS.STATUS, "open")
+        .returning(CONTRACTS.ID)
+        .fetchOne(CONTRACTS.ID);
+  }
+
   @Test
-  void linkContractInsertsThenUpdatesTheContractsRow() {
+  void linkContractUpdatesTheTargetedContractsRow() {
     long id = counterpartyWithOneTransaction("CDTR-CONTRACT", "Contract Co");
+    long contractId = seedContract(id, "MANDATE-1");
 
-    writeTools.linkContract(id, "hivemem-cell-1", "first link");
+    writeTools.linkContract(contractId, "hivemem-cell-1", "first link");
 
-    Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.COUNTERPARTY_ID.eq(id)).fetchOne();
+    Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractId)).fetchOne();
     assertThat(contract.get(CONTRACTS.HIVEMEM_CELL_ID)).isEqualTo("hivemem-cell-1");
 
-    writeTools.linkContract(id, "hivemem-cell-2", "updated link");
+    writeTools.linkContract(contractId, "hivemem-cell-2", "updated link");
 
     var contracts = db.selectFrom(CONTRACTS).where(CONTRACTS.COUNTERPARTY_ID.eq(id)).fetch();
     assertThat(contracts).hasSize(1);
@@ -225,22 +235,16 @@ class WriteToolsIT extends AbstractPostgresIT {
   }
 
   @Test
-  void linkContractCalledTwiceProducesExactlyOneContractsRow() {
-    long id = counterpartyWithOneTransaction("CDTR-CONTRACT-DUP", "Contract Dup Co");
-
-    writeTools.linkContract(id, "hivemem-cell-a", "first link");
-    writeTools.linkContract(id, "hivemem-cell-b", "second link");
-
-    var contracts = db.selectFrom(CONTRACTS).where(CONTRACTS.COUNTERPARTY_ID.eq(id)).fetch();
-    assertThat(contracts).hasSize(1);
-    assertThat(contracts.get(0).get(CONTRACTS.HIVEMEM_CELL_ID)).isEqualTo("hivemem-cell-b");
+  void linkContractRejectsAnUnknownContractId() {
+    assertThatThrownBy(() -> writeTools.linkContract(999_999L, "cell", null))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
-  void dismissSetsStatusAndReason() {
+  void dismissWithoutContractIdOrRecurringSetsStatusAndReason() {
     long id = counterpartyWithOneTransaction("CDTR-DISMISS", "Dismiss Co");
 
-    writeTools.dismissCounterparty(id, "one-off refund, not recurring");
+    writeTools.dismissCounterparty(id, "one-off refund, not recurring", null);
 
     Record row =
         db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.DISMISSED_REASON)
@@ -256,7 +260,7 @@ class WriteToolsIT extends AbstractPostgresIT {
 
   @Test
   void writeToolsRejectAnUnknownCounterpartyId() {
-    assertThatThrownBy(() -> writeTools.dismissCounterparty(999_999L, "no such counterparty"))
+    assertThatThrownBy(() -> writeTools.dismissCounterparty(999_999L, "no such counterparty", null))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }
