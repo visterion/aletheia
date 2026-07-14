@@ -33,4 +33,19 @@ public final class AnnualCost {
         ? evidence.debitLast365d()
         : BigDecimal.ZERO;
   }
+
+  /**
+   * Contract-grain estimate: {@code typical_amount * periods/year} for a non-irregular series,
+   * else the caller-supplied per-contract {@code debit_last_365d} (spec review M1 — never the
+   * counterparty's whole debit).
+   */
+  public static BigDecimal estimate(RecurringView recurring, BigDecimal debitFallback) {
+    if (recurring != null && recurring.typicalAmount() != null) {
+      Integer periodsPerYear = CADENCE_PERIODS_PER_YEAR.get(recurring.cadence());
+      if (periodsPerYear != null) {
+        return recurring.typicalAmount().multiply(BigDecimal.valueOf(periodsPerYear));
+      }
+    }
+    return debitFallback != null ? debitFallback : BigDecimal.ZERO;
+  }
 }
