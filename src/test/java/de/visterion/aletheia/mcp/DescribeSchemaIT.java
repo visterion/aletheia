@@ -28,19 +28,13 @@ class DescribeSchemaIT extends AbstractPostgresIT {
         .doesNotContain("api_tokens", "oauth_tokens", "oauth_clients", "oauth_authorization_codes");
     // a known column with its curated description
     assertThat(cols)
-        .anySatisfy(
-            c -> {
-              if (c.table().equals("transactions") && c.column().equals("direction")) {
-                assertThat(c.description()).contains("DBIT");
-              }
-            });
+        .filteredOn(c -> c.table().equals("transactions") && c.column().equals("direction"))
+        .singleElement()
+        .satisfies(c -> assertThat(c.description()).contains("DBIT"));
     // primary key flagged
     assertThat(cols)
-        .anySatisfy(
-            c -> {
-              if (c.table().equals("counterparties") && c.column().equals("id")) {
-                assertThat(c.primaryKey()).isTrue();
-              }
-            });
+        .filteredOn(c -> c.table().equals("counterparties") && c.column().equals("id"))
+        .singleElement()
+        .satisfies(c -> assertThat(c.primaryKey()).isTrue());
   }
 }
