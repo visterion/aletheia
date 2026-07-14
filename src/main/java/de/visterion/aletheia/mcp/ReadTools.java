@@ -8,6 +8,7 @@ import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
@@ -104,12 +106,200 @@ public class ReadTools {
       ORDER BY i.booking_date DESC
       """;
 
+  /**
+   * The identity-CASE derived-table body reused by {@link #aggregate} (spec §5, M-1 join-scope
+   * rule): copied from the {@code i} subquery inside {@link #COUNTERPARTY_TRANSACTIONS_SQL}
+   * rather than shared, so a future change to one read path cannot silently change the other's
+   * join semantics.
+   */
+  // language=SQL
+  private static final String IDENTITY_RESOLVED_TRANSACTIONS_SQL =
+      """
+      SELECT t.*,
+          CASE
+              WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+              WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
+              WHEN t.counterparty_name IS NOT NULL THEN 'name'
+          END AS identity_type,
+          CASE
+              WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+              WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
+              WHEN t.counterparty_name IS NOT NULL THEN
+                  upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
+          END AS identity_value
+      FROM transactions t
+      """;
+
   private final DSLContext db;
   private final DSLContext roDsl;
+  private final CounterpartySelectorResolver selectorResolver;
 
-  public ReadTools(DSLContext db, @Qualifier("roDsl") DSLContext roDsl) {
+  public ReadTools(
+      DSLContext db,
+      @Qualifier("roDsl") DSLContext roDsl,
+      CounterpartySelectorResolver selectorResolver) {
     this.db = db;
     this.roDsl = roDsl;
+    this.selectorResolver = selectorResolver;
+  }
+
+  @Tool(
+      name = "aggregate",
+      description =
+          "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date"
+              + " range -- replaces in-head arithmetic. Value expression: for a single direction"
+              + " (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to"
+              + " that direction; for direction=BOTH there is no direction filter and the amount"
+              + " is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) ="
+              + " credit total minus debit total (can be negative). COUNT is always count(*),"
+              + " unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and"
+              + " where are omitted AND byCounterparty=false, the aggregate runs directly over"
+              + " transactions with no counterparty-identity join, so unresolved bookings (cash"
+              + " withdrawals/fees with no creditor_id, iban, or name) are still counted."
+              + " Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins"
+              + " through the identity-CASE resolution (creditor_id > iban > normalized name)"
+              + " and therefore excludes unresolved bookings. When byCounterparty=true, buckets"
+              + " are keyed on counterparties.id (never displayName -- two distinct identities,"
+              + " e.g. a creditor_id and an iban, can share one display name).")
+  public List<AggregateBucket> aggregate(
+      @ToolParam(description = "inclusive range start") LocalDate dateFrom,
+      @ToolParam(description = "inclusive range end") LocalDate dateTo,
+      @ToolParam(description = "TOTAL | MONTH | QUARTER | YEAR") AggregateGroupBy groupBy,
+      @ToolParam(description = "SUM | AVG | MEDIAN | COUNT") AggregateMetric metric,
+      @ToolParam(description = "DBIT | CRDT | BOTH (BOTH nets signed amounts, no direction filter)")
+          Direction direction,
+      @ToolParam(description = "also split buckets per counterparty, keyed on id")
+          boolean byCounterparty,
+      @ToolParam(
+              description = "explicit counterparty id scope; takes precedence over where",
+              required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(
+              description = "declarative counterparty selector, resolved when counterpartyIds is absent",
+              required = false)
+          CounterpartySelector where) {
+    List<Long> ids = resolveAggregateScope(counterpartyIds, where);
+    boolean joinIdentity = ids != null || byCounterparty;
+    if (joinIdentity && ids != null && ids.isEmpty()) {
+      return List.of();
+    }
+
+    String dateRef = joinIdentity ? "i.booking_date" : "booking_date";
+    String directionRef = joinIdentity ? "i.direction" : "direction";
+    String amountRef = joinIdentity ? "i.amount" : "amount";
+
+    String period = periodExpr(groupBy, dateRef);
+    String amountExpr = signedAmountExpr(direction, amountRef, directionRef);
+    String valueExpr = "CAST(" + valueExpr(metric, amountExpr) + " AS numeric)";
+
+    StringBuilder sql = new StringBuilder("SELECT ").append(period).append(" AS period");
+    if (byCounterparty) {
+      sql.append(", c.id AS counterparty_id, c.display_name AS display_name");
+    }
+    sql.append(", ").append(valueExpr).append(" AS value ");
+
+    if (joinIdentity) {
+      sql.append("FROM (")
+          .append(IDENTITY_RESOLVED_TRANSACTIONS_SQL)
+          .append(") i JOIN counterparties c"
+              + " ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value ");
+    } else {
+      sql.append("FROM transactions ");
+    }
+
+    List<Object> binds = new ArrayList<>();
+    sql.append("WHERE ").append(dateRef).append(" BETWEEN ? AND ? ");
+    binds.add(dateFrom);
+    binds.add(dateTo);
+
+    if (direction != Direction.BOTH) {
+      sql.append("AND ").append(directionRef).append(" = ? ");
+      binds.add(direction.name());
+    }
+
+    if (joinIdentity && ids != null) {
+      sql.append("AND c.id IN (")
+          .append(ids.stream().map(id -> "?").collect(Collectors.joining(",")))
+          .append(") ");
+      binds.addAll(ids);
+    }
+
+    // A TOTAL period is the string literal 'total', not a real column expression -- Postgres
+    // rejects a bare string constant in GROUP BY (same rule as ORDER BY above), and it doesn't
+    // need to be there anyway: a constant in the SELECT list is always allowed regardless of
+    // GROUP BY. So the period expression is only added to GROUP BY for MONTH/QUARTER/YEAR.
+    List<String> groupByCols = new ArrayList<>();
+    if (groupBy != AggregateGroupBy.TOTAL) {
+      groupByCols.add(period);
+    }
+    if (byCounterparty) {
+      groupByCols.add("c.id");
+      groupByCols.add("c.display_name");
+    }
+    if (!groupByCols.isEmpty()) {
+      sql.append("GROUP BY ").append(String.join(", ", groupByCols)).append(' ');
+    }
+
+    // Order by the "period" output name, not the raw expression: a TOTAL period is the string
+    // literal 'total', and Postgres rejects a bare string constant in ORDER BY (it looks for an
+    // integer ordinal), while an output-column-name reference works for any expression.
+    sql.append("ORDER BY period");
+    if (byCounterparty) {
+      sql.append(", c.id");
+    }
+
+    Result<Record> rows = db.fetch(sql.toString(), binds.toArray());
+    List<AggregateBucket> buckets = new ArrayList<>();
+    for (Record row : rows) {
+      buckets.add(
+          new AggregateBucket(
+              row.get("period", String.class),
+              byCounterparty ? row.get("counterparty_id", Long.class) : null,
+              byCounterparty ? row.get("display_name", String.class) : null,
+              row.get("value", BigDecimal.class)));
+    }
+    return buckets;
+  }
+
+  /**
+   * M-1 join-scope resolution: {@code counterpartyIds} wins when non-null and non-empty; else
+   * {@code where} is resolved via {@link CounterpartySelectorResolver}; else {@code null}
+   * (unscoped -- see {@link #aggregate} for what that means for the join).
+   */
+  private List<Long> resolveAggregateScope(List<Long> counterpartyIds, CounterpartySelector where) {
+    if (counterpartyIds != null && !counterpartyIds.isEmpty()) {
+      return counterpartyIds;
+    }
+    if (where != null) {
+      return selectorResolver.resolve(where);
+    }
+    return null;
+  }
+
+  private static String periodExpr(AggregateGroupBy groupBy, String dateColumnRef) {
+    if (groupBy == AggregateGroupBy.TOTAL) {
+      return "'total'";
+    }
+    String unit = groupBy.name().toLowerCase(java.util.Locale.ROOT);
+    return "to_char(date_trunc('" + unit + "', " + dateColumnRef + "), 'YYYY-MM-DD')";
+  }
+
+  /** BOTH nets a signed amount (DBIT negated); a single direction uses the positive amount as-is
+   * (the direction filter already restricts rows to that direction). */
+  private static String signedAmountExpr(Direction direction, String amountRef, String directionRef) {
+    if (direction == Direction.BOTH) {
+      return "CASE WHEN " + directionRef + " = 'DBIT' THEN -" + amountRef + " ELSE " + amountRef + " END";
+    }
+    return amountRef;
+  }
+
+  private static String valueExpr(AggregateMetric metric, String amountExpr) {
+    return switch (metric) {
+      case SUM -> "sum(" + amountExpr + ")";
+      case AVG -> "avg(" + amountExpr + ")";
+      case MEDIAN -> "percentile_cont(0.5) WITHIN GROUP (ORDER BY " + amountExpr + ")";
+      case COUNT -> "count(*)";
+    };
   }
 
   @Tool(
