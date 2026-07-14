@@ -74,9 +74,10 @@ class ToolScopeEnforcementIT {
               new CallToolRequest(
                   "classify_counterparty",
                   Map.of(
-                      "counterpartyId", counterpartyId,
+                      "counterpartyIds", List.of(counterpartyId),
                       "tags", List.of(Map.of("dimension", "domain", "value", "telecom")),
-                      "source", "auto")));
+                      "source", "auto",
+                      "confirm", false)));
 
       assertThat(result.isError()).isTrue();
       assertThat(textOf(result)).contains("not permitted").contains("classify_counterparty");
@@ -103,9 +104,10 @@ class ToolScopeEnforcementIT {
               new CallToolRequest(
                   "classify_counterparty",
                   Map.of(
-                      "counterpartyId", counterpartyId,
+                      "counterpartyIds", List.of(counterpartyId),
                       "tags", List.of(Map.of("dimension", "domain", "value", "telecom")),
-                      "source", "auto")));
+                      "source", "auto",
+                      "confirm", false)));
 
       assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
     }

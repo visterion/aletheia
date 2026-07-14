@@ -35,8 +35,10 @@ public class CounterpartyResolver implements ApplicationRunner {
       SELECT
           identity_type,
           identity_value,
-          (array_agg(counterparty_name ORDER BY booking_date, counterparty_name)
-              FILTER (WHERE counterparty_name IS NOT NULL))[1] AS display_name
+          trim(regexp_replace(normalize(
+              (array_agg(counterparty_name ORDER BY booking_date, counterparty_name)
+                  FILTER (WHERE counterparty_name IS NOT NULL))[1], NFC), '\\s+', ' ', 'g'))
+              AS display_name
       FROM (
           SELECT
               CASE
