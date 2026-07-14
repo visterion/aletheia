@@ -259,7 +259,7 @@ class ReadToolsIT extends AbstractPostgresIT {
         .set(RECURRING.TYPICAL_AMOUNT, new BigDecimal("25.00"))
         .set(RECURRING.SOURCE, "auto")
         .execute();
-    db.insertInto(CONTRACTS).set(CONTRACTS.COUNTERPARTY_ID, matchedId).set(CONTRACTS.STATUS, "linked").execute();
+    db.insertInto(CONTRACTS).set(CONTRACTS.COUNTERPARTY_ID, matchedId).set(CONTRACTS.STATUS, "open").execute();
 
     List<UnmatchedRecurringEntry> unmatched = readTools.listUnmatchedRecurring();
 

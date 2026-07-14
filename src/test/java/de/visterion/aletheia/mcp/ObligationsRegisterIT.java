@@ -76,18 +76,24 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
         .fetchOne(COUNTERPARTIES.ID);
   }
 
-  // Directly flips status in the DB (no WriteTools call) since this test only needs the
-  // resulting state, not the confirmCounterparty write-tool's side effects.
-  private void confirm(long counterpartyId) {
-    db.update(COUNTERPARTIES)
-        .set(COUNTERPARTIES.STATUS, "confirmed")
-        .where(COUNTERPARTIES.ID.eq(counterpartyId))
-        .execute();
+  /**
+   * Directly seeds a CONFIRMED, mandate-less contract row (no WriteTools/ContractResolver call)
+   * since these tests only need the resulting contract-grain state, not the resolvers'/write
+   * tool's side effects.
+   */
+  private long confirmedContract(long counterpartyId) {
+    return db.insertInto(CONTRACTS)
+        .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
+        .set(CONTRACTS.STATUS, "confirmed")
+        .returning(CONTRACTS.ID)
+        .fetchOne(CONTRACTS.ID);
   }
 
-  private void insertRecurring(long counterpartyId, String cadence, String typicalAmount) {
+  private void insertRecurring(
+      long counterpartyId, Long contractId, String cadence, String typicalAmount) {
     db.insertInto(RECURRING)
         .set(RECURRING.COUNTERPARTY_ID, counterpartyId)
+        .set(RECURRING.CONTRACT_ID, contractId)
         .set(RECURRING.CADENCE, cadence)
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount == null ? null : new BigDecimal(typicalAmount))
         .set(RECURRING.SOURCE, "auto")
@@ -95,19 +101,19 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
   }
 
   @Test
-  void includesOnlyConfirmedRecurringPredominantlyDebitCounterparties() {
+  void includesOnlyConfirmedContracts() {
     long imp = importId();
 
-    // (A) confirmed + recurring + DBIT -> included.
+    // (A) confirmed contract + recurring + DBIT -> included.
     insertTxn(imp, "hash-a1", LocalDate.now().minusDays(5), "10.00", "DBIT", "CDTR-A", null, "Included Co");
     insertTxn(imp, "hash-a2", LocalDate.now().minusDays(35), "10.00", "DBIT", "CDTR-A", null, "Included Co");
 
-    // (B) confirmed + recurring but predominant CRDT -> excluded.
+    // (B) no contract row at all -> excluded, even though the counterparty is confirmed.
     insertTxn(imp, "hash-b1", LocalDate.now().minusDays(5), "10.00", "CRDT", "CDTR-B", null, "Credit Co");
     insertTxn(imp, "hash-b2", LocalDate.now().minusDays(35), "10.00", "CRDT", "CDTR-B", null, "Credit Co");
     insertTxn(imp, "hash-b3", LocalDate.now().minusDays(65), "10.00", "CRDT", "CDTR-B", null, "Credit Co");
 
-    // (C) open + recurring + DBIT -> excluded (not confirmed).
+    // (C) no contract row at all -> excluded.
     insertTxn(imp, "hash-c1", LocalDate.now().minusDays(5), "999.00", "DBIT", "CDTR-C", null, "Open Co");
     insertTxn(imp, "hash-c2", LocalDate.now().minusDays(35), "999.00", "DBIT", "CDTR-C", null, "Open Co");
 
@@ -117,13 +123,12 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     long idB = counterpartyIdFor("CDTR-B");
     long idC = counterpartyIdFor("CDTR-C");
 
-    confirm(idA);
-    confirm(idB);
-    // idC stays open.
+    long contractA = confirmedContract(idA);
+    // idB, idC get no contract row at all -> never appear in the register.
 
-    insertRecurring(idA, "monthly", "10.00");
-    insertRecurring(idB, "monthly", "10.00");
-    insertRecurring(idC, "monthly", "999.00");
+    insertRecurring(idA, contractA, "monthly", "10.00");
+    // B and C have no contract to attach recurring to for this test's purposes -- irrelevant,
+    // since only a confirmed CONTRACTS row roots a register row.
 
     db.insertInto(COUNTERPARTY_TAGS)
         .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, idA)
@@ -132,10 +137,9 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
         .set(COUNTERPARTY_TAGS.SOURCE, "confirmed")
         .execute();
 
-    db.insertInto(CONTRACTS)
-        .set(CONTRACTS.COUNTERPARTY_ID, idA)
-        .set(CONTRACTS.STATUS, "linked")
+    db.update(CONTRACTS)
         .set(CONTRACTS.HIVEMEM_CELL_ID, "cell-a")
+        .where(CONTRACTS.ID.eq(contractA))
         .execute();
 
     ObligationsRegister register = readTools.obligationsRegister();
@@ -143,6 +147,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     assertThat(register.rows()).hasSize(1);
     ObligationRow row = register.rows().get(0);
     assertThat(row.counterpartyId()).isEqualTo(idA);
+    assertThat(row.contractId()).isEqualTo(contractA);
+    assertThat(row.mandateId()).isNull();
     assertThat(row.displayName()).isEqualTo("Included Co");
     assertThat(row.annualCost()).isEqualByComparingTo("120.00");
     assertThat(row.tags()).extracting(CounterpartyTagView::value).containsExactly("insurance");
@@ -173,9 +179,11 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     resolver.run(null);
 
     long idMix = counterpartyIdFor("CDTR-MIX");
-    confirm(idMix);
-    // No cadence recorded (irregular) so AnnualCost falls back to debit_last_365d.
-    insertRecurring(idMix, "irregular", null);
+    long contractMix = confirmedContract(idMix);
+    // No cadence recorded (irregular) so AnnualCost falls back to the mandate-less contract's
+    // debit fallback, which is the counterparty's own debit_last_365d (v_contract_evidence has
+    // no match for a NULL mandate_id).
+    insertRecurring(idMix, contractMix, "irregular", null);
 
     ObligationsRegister register = readTools.obligationsRegister();
 
@@ -200,10 +208,10 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
 
     long idLow = counterpartyIdFor("CDTR-LOW");
     long idHigh = counterpartyIdFor("CDTR-HIGH");
-    confirm(idLow);
-    confirm(idHigh);
-    insertRecurring(idLow, "monthly", "5.00");
-    insertRecurring(idHigh, "monthly", "100.00");
+    long contractLow = confirmedContract(idLow);
+    long contractHigh = confirmedContract(idHigh);
+    insertRecurring(idLow, contractLow, "monthly", "5.00");
+    insertRecurring(idHigh, contractHigh, "monthly", "100.00");
 
     ObligationsRegister register = readTools.obligationsRegister();
 
