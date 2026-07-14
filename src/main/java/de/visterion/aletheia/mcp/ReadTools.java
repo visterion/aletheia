@@ -293,12 +293,18 @@ public class ReadTools {
     return amountRef;
   }
 
+  /**
+   * SUM and COUNT are wrapped in {@code COALESCE(..., 0)} so an empty range (or an empty group)
+   * reads as zero, matching a charting tool's expectation of "nothing happened" rather than
+   * {@code null}. AVG and MEDIAN are deliberately left as-is: an average/median over an empty set
+   * has no defined value, so {@code null} is the correct answer there.
+   */
   private static String valueExpr(AggregateMetric metric, String amountExpr) {
     return switch (metric) {
-      case SUM -> "sum(" + amountExpr + ")";
+      case SUM -> "COALESCE(sum(" + amountExpr + "), 0)";
       case AVG -> "avg(" + amountExpr + ")";
       case MEDIAN -> "percentile_cont(0.5) WITHIN GROUP (ORDER BY " + amountExpr + ")";
-      case COUNT -> "count(*)";
+      case COUNT -> "COALESCE(count(*), 0)";
     };
   }
 

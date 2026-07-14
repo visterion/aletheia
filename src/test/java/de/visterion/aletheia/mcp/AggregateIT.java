@@ -138,4 +138,63 @@ class AggregateIT extends AbstractPostgresIT {
     assertThat(out).hasSize(1);
     assertThat(out.get(0).value()).isEqualByComparingTo("20.00");
   }
+
+  @Test
+  void medianOfEvenCountInterpolatesMidpoint() {
+    long imp = importId();
+    insertTxn(imp, "hash-m1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    insertTxn(imp, "hash-m2", LocalDate.of(2025, 2, 5), "20.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    insertTxn(imp, "hash-m3", LocalDate.of(2025, 3, 5), "30.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    insertTxn(imp, "hash-m4", LocalDate.of(2025, 4, 5), "100.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    resolver.run(null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.MEDIAN, Direction.DBIT, false, null,
+            null);
+
+    assertThat(out).hasSize(1);
+    // percentile_cont(0.5) over {10,20,30,100} interpolates the even-count midpoint: (20+30)/2.
+    assertThat(out.get(0).value()).isEqualByComparingTo("25.00");
+  }
+
+  @Test
+  void medianOfOddCountReturnsMiddleValue() {
+    long imp = importId();
+    insertTxn(imp, "hash-o1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    insertTxn(imp, "hash-o2", LocalDate.of(2025, 2, 5), "20.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    insertTxn(imp, "hash-o3", LocalDate.of(2025, 3, 5), "100.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    resolver.run(null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.MEDIAN, Direction.DBIT, false, null,
+            null);
+
+    assertThat(out).hasSize(1);
+    assertThat(out.get(0).value()).isEqualByComparingTo("20.00");
+  }
+
+  @Test
+  void emptyRangeSumAndCountReturnZeroNotNull() {
+    long imp = importId();
+    insertTxn(imp, "hash-outside", LocalDate.of(2024, 1, 5), "10.00", "DBIT", "CDTR-A", null, "Alpha Co");
+    resolver.run(null);
+
+    var sumOut =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.SUM, Direction.DBIT, false, null,
+            null);
+
+    assertThat(sumOut).hasSize(1);
+    assertThat(sumOut.get(0).value()).isEqualByComparingTo("0");
+
+    var countOut =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.COUNT, Direction.DBIT, false, null,
+            null);
+
+    assertThat(countOut).hasSize(1);
+    assertThat(countOut.get(0).value()).isEqualByComparingTo("0");
+  }
 }
