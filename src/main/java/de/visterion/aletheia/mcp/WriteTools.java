@@ -14,6 +14,7 @@ import org.jooq.DSLContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 
@@ -31,65 +32,117 @@ import org.springframework.web.context.request.RequestContextHolder;
 @Component
 public class WriteTools {
 
-  private final DSLContext db;
+  private static final int MAX_BATCH_SIZE = 1000;
+  private static final int CONFIRM_REQUIRED_THRESHOLD = 200;
 
-  public WriteTools(DSLContext db) {
+  private final DSLContext db;
+  private final CounterpartySelectorResolver selectorResolver;
+
+  public WriteTools(DSLContext db, CounterpartySelectorResolver selectorResolver) {
     this.db = db;
+    this.selectorResolver = selectorResolver;
   }
 
   @Tool(
       name = "classify_counterparty",
       description =
-          "Set/replace the tags for one dimension on a counterparty. Never sets"
-              + " counterparties.reviewed or status -- only confirm/dismiss do that.")
-  public WriteAck classifyCounterparty(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
+          "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit"
+              + " ids or a where-selector). Never sets counterparties.reviewed or status -- only"
+              + " confirm/dismiss do that. Batches of 200+ require confirm=true; batches over"
+              + " 1000 are always rejected.")
+  @Transactional
+  public BatchWriteAck classifyCounterparty(
+      @ToolParam(description = "explicit counterparties.id list, optional", required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(description = "selector to resolve target ids, optional", required = false)
+          CounterpartySelector where,
       @ToolParam(description = "the {dimension, value} pairs to set") List<TagInput> tags,
       @ToolParam(description = "provenance of this classification") TagSource source,
-      @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
-    requireExistingCounterparty(counterpartyId);
+      @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence,
+      @ToolParam(description = "must be true to run a batch of 200 or more") boolean confirm) {
+    List<Long> ids = resolveTargetIds(counterpartyIds, where);
+    enforceBatchCaps(ids, confirm);
+
     if (tags == null || tags.isEmpty()) {
-      return new WriteAck(counterpartyId, "no tags supplied, nothing changed");
+      return new BatchWriteAck(ids.size(), List.of());
     }
 
     // "Set/replace" (spec §5): for every dimension present in the request, drop the existing
     // tags for that (counterparty, dimension) and insert the new ones -- not a per-row upsert,
     // since `value` is part of the primary key and a replace must be able to drop stale values.
     List<String> dimensions = tags.stream().map(TagInput::dimension).distinct().toList();
-    for (String dimension : dimensions) {
-      List<String> oldValues =
-          db.select(COUNTERPARTY_TAGS.VALUE)
-              .from(COUNTERPARTY_TAGS)
-              .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
-              .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
-              .fetch(COUNTERPARTY_TAGS.VALUE);
+    for (long counterpartyId : ids) {
+      requireExistingCounterparty(counterpartyId);
+      for (String dimension : dimensions) {
+        List<String> oldValues =
+            db.select(COUNTERPARTY_TAGS.VALUE)
+                .from(COUNTERPARTY_TAGS)
+                .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
+                .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
+                .fetch(COUNTERPARTY_TAGS.VALUE);
 
-      db.deleteFrom(COUNTERPARTY_TAGS)
-          .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
-          .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
-          .execute();
-
-      List<String> newValues =
-          tags.stream().filter(t -> t.dimension().equals(dimension)).map(TagInput::value).toList();
-      for (String value : newValues) {
-        db.insertInto(COUNTERPARTY_TAGS)
-            .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, counterpartyId)
-            .set(COUNTERPARTY_TAGS.DIMENSION, dimension)
-            .set(COUNTERPARTY_TAGS.VALUE, value)
-            .set(COUNTERPARTY_TAGS.SOURCE, source.name())
-            .set(COUNTERPARTY_TAGS.CONFIDENCE, confidence)
+        db.deleteFrom(COUNTERPARTY_TAGS)
+            .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(counterpartyId))
+            .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
             .execute();
-      }
 
-      insertHistory(
-          counterpartyId,
-          "tag:" + dimension,
-          String.join(",", oldValues),
-          String.join(",", newValues),
-          source.name());
+        List<String> newValues =
+            tags.stream()
+                .filter(t -> t.dimension().equals(dimension))
+                .map(TagInput::value)
+                .toList();
+        for (String value : newValues) {
+          db.insertInto(COUNTERPARTY_TAGS)
+              .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, counterpartyId)
+              .set(COUNTERPARTY_TAGS.DIMENSION, dimension)
+              .set(COUNTERPARTY_TAGS.VALUE, value)
+              .set(COUNTERPARTY_TAGS.SOURCE, source.name())
+              .set(COUNTERPARTY_TAGS.CONFIDENCE, confidence)
+              .execute();
+        }
+
+        insertHistory(
+            counterpartyId,
+            "tag:" + dimension,
+            String.join(",", oldValues),
+            String.join(",", newValues),
+            source.name());
+      }
     }
 
-    return new WriteAck(counterpartyId, "tags updated for " + dimensions.size() + " dimension(s)");
+    return new BatchWriteAck(ids.size(), dimensions);
+  }
+
+  /**
+   * Resolves the batch target id set: explicit {@code counterpartyIds} win if non-empty, else the
+   * {@code where}-selector is resolved; rejects if neither is supplied.
+   */
+  private List<Long> resolveTargetIds(List<Long> counterpartyIds, CounterpartySelector where) {
+    if (counterpartyIds != null && !counterpartyIds.isEmpty()) {
+      return counterpartyIds;
+    }
+    if (where != null) {
+      return selectorResolver.resolve(where);
+    }
+    throw new IllegalArgumentException(
+        "either counterpartyIds or where must be supplied to select a target");
+  }
+
+  /**
+   * Safety caps on the resolved batch size (spec §5, HiveMem-style guardrails): more than {@link
+   * #MAX_BATCH_SIZE} is always rejected (even with {@code confirm=true}); {@link
+   * #CONFIRM_REQUIRED_THRESHOLD} or more requires an explicit {@code confirm=true}.
+   */
+  private void enforceBatchCaps(List<Long> ids, boolean confirm) {
+    int count = ids.size();
+    if (count > MAX_BATCH_SIZE) {
+      throw new IllegalArgumentException(
+          "selector/ids resolved to " + count + " matches, narrow the selector (max " + MAX_BATCH_SIZE + ")");
+    }
+    if (count >= CONFIRM_REQUIRED_THRESHOLD && !confirm) {
+      throw new IllegalArgumentException(
+          count + " matches; pass confirm=true to run a batch this large");
+    }
   }
 
   @Tool(
