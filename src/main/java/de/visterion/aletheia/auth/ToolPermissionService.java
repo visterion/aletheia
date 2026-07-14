@@ -33,7 +33,8 @@ public class ToolPermissionService {
           "counterparty_transactions",
           "sql_query",
           "describe_schema",
-          "taxonomy");
+          "taxonomy",
+          "aggregate");
 
   /** Additional write-scope tools (spec §5 "Write"), on top of everything READER can do. */
   private static final Set<String> WRITE_TOOLS =
