@@ -76,6 +76,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
         .fetchOne(COUNTERPARTIES.ID);
   }
 
+  // Directly flips status in the DB (no WriteTools call) since this test only needs the
+  // resulting state, not the confirmCounterparty write-tool's side effects.
   private void confirm(long counterpartyId) {
     db.update(COUNTERPARTIES)
         .set(COUNTERPARTIES.STATUS, "confirmed")
