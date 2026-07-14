@@ -207,6 +207,36 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
   }
 
   @Test
+  void crdtPredominantMandatelessContractShowsZeroAnnualCostNeverTheIncomingAmount() {
+    long imp = importId();
+    // Predominantly CRDT (incoming, e.g. salary) -- no mandate_id, so ContractResolver never
+    // creates a contract automatically. Recurring pattern so it looks confirmable.
+    insertTxn(imp, "hash-crdt-1", LocalDate.now().minusDays(10), "2000.00", "CRDT", "CDTR-SALARY", null, "Salary Inc");
+    insertTxn(imp, "hash-crdt-2", LocalDate.now().minusDays(40), "2000.00", "CRDT", "CDTR-SALARY", null, "Salary Inc");
+    resolveAll();
+
+    long id = counterpartyIdFor("CDTR-SALARY");
+    assertThat(contractIdFor(id, null)).isNull();
+
+    // Confirm as a mandate-less obligation -- v_contract_evidence.debit_last_365d and
+    // v_counterparty_evidence.debit_last_365d are themselves DBIT-only filtered, so this
+    // mistakenly-confirmed CRDT-predominant mandate-less contract must surface as 0.00, never
+    // leaking the incoming amount as a cost.
+    writeTools.markRecurring(id, null, Cadence.irregular, null, null, null, TagSource.auto, null);
+    writeTools.confirmCounterparty(id, null);
+
+    Long materializedContractId = contractIdFor(id, null);
+    assertThat(materializedContractId).isNotNull();
+
+    ObligationsRegister register = readTools.obligationsRegister();
+
+    assertThat(register.rows()).hasSize(1);
+    ObligationRow row = register.rows().get(0);
+    assertThat(row.contractId()).isEqualTo(materializedContractId);
+    assertThat(row.annualCost()).isEqualByComparingTo("0.00");
+  }
+
+  @Test
   void getReviewQueueListsOpenContractsRankedByAnnualCostDesc() {
     long debekaId = seedTwoContractCounterparty();
     long contractA = contractIdFor(debekaId, "MANDATE-1"); // 60.00, stays open.
