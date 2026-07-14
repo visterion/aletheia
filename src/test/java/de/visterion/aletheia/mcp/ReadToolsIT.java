@@ -130,7 +130,7 @@ class ReadToolsIT extends AbstractPostgresIT {
     long confirmedId = counterpartyIdFor("CDTR-CONF");
     db.update(COUNTERPARTIES).set(COUNTERPARTIES.STATUS, "confirmed").where(COUNTERPARTIES.ID.eq(confirmedId)).execute();
 
-    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null);
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
 
     assertThat(queue).hasSize(1);
     assertThat(queue.get(0).displayName()).isEqualTo("Open Co");
@@ -152,12 +152,71 @@ class ReadToolsIT extends AbstractPostgresIT {
         .set(RECURRING.SOURCE, "auto")
         .execute();
 
-    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null);
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
 
     assertThat(queue).hasSize(2);
     assertThat(queue.get(0).displayName()).isEqualTo("Recurring Small");
     assertThat(queue.get(0).annualCostEstimate()).isEqualByComparingTo("120.00");
     assertThat(queue.get(1).displayName()).isEqualTo("Plain Spender");
+  }
+
+  @Test
+  void getReviewQueueExcludesCrdtPredominantCounterparties() {
+    long imp = importId();
+    // Salary: predominant CRDT, open status -- must not clutter the obligations queue.
+    insertTxn(imp, "hash-sal-1", LocalDate.now().minusDays(5), "3000.00", "CRDT", "CDTR-SALARY", null, "Salary");
+    insertTxn(imp, "hash-sal-2", LocalDate.now().minusDays(35), "3000.00", "CRDT", "CDTR-SALARY", null, "Salary");
+    // A normal DBIT-predominant open counterparty, must still appear.
+    insertTxn(imp, "hash-obl-1", LocalDate.now().minusDays(5), "20.00", "DBIT", "CDTR-OBL", null, "Obligation Co");
+    resolver.run(null);
+
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
+
+    assertThat(queue).extracting(ReviewQueueEntry::displayName).containsExactly("Obligation Co");
+  }
+
+  @Test
+  void getReviewQueueKeepsOpenCounterpartyWithNoEvidenceRow() {
+    // No transactions at all -- the v_counterparty_evidence LEFT JOIN yields NULL/direction NULL.
+    // Must still appear: "nothing skips human review".
+    db.insertInto(COUNTERPARTIES)
+        .set(COUNTERPARTIES.IDENTITY_TYPE, "creditor_id")
+        .set(COUNTERPARTIES.IDENTITY_VALUE, "CDTR-NOEVIDENCE")
+        .set(COUNTERPARTIES.DISPLAY_NAME, "No Evidence Co")
+        .set(COUNTERPARTIES.STATUS, "open")
+        .execute();
+
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
+
+    assertThat(queue).extracting(ReviewQueueEntry::displayName).containsExactly("No Evidence Co");
+  }
+
+  @Test
+  void getReviewQueueCompactDefaultOmitsEvidenceAndRecurringBlobs() {
+    long imp = importId();
+    insertTxn(imp, "hash-compact-1", LocalDate.now().minusDays(5), "10.00", "DBIT", "CDTR-COMPACT", null, "Compact Co");
+    resolver.run(null);
+    db.insertInto(RECURRING)
+        .set(RECURRING.COUNTERPARTY_ID, counterpartyIdFor("CDTR-COMPACT"))
+        .set(RECURRING.CADENCE, "monthly")
+        .set(RECURRING.TYPICAL_AMOUNT, new BigDecimal("10.00"))
+        .set(RECURRING.SOURCE, "auto")
+        .execute();
+
+    List<ReviewQueueEntry> compact = readTools.getReviewQueue(null, false);
+
+    assertThat(compact).hasSize(1);
+    ReviewQueueEntry entry = compact.get(0);
+    assertThat(entry.evidence()).isNull();
+    assertThat(entry.recurring()).isNull();
+    assertThat(entry.cadence()).isEqualTo("monthly");
+    assertThat(entry.annualCostEstimate()).isEqualByComparingTo("120.00");
+    assertThat(entry.txnCount()).isEqualTo(1);
+    assertThat(entry.lastSeen()).isEqualTo(LocalDate.now().minusDays(5));
+
+    List<ReviewQueueEntry> verbose = readTools.getReviewQueue(null, true);
+    assertThat(verbose.get(0).evidence()).isNotNull();
+    assertThat(verbose.get(0).recurring()).isNotNull();
   }
 
   @Test

@@ -92,7 +92,7 @@ class EvidenceDirectionSplitIT extends AbstractPostgresIT {
     }
     insertTxn(imp, "c0", LocalDate.now().minusDays(5), "30.00", "CRDT", "CDTR-MIX2", null, "Mix2");
     resolver.run(null);
-    var queue = readTools.getReviewQueue(null);
+    var queue = readTools.getReviewQueue(null, true);
     var mix = queue.stream().filter(e -> e.displayName().equals("Mix2")).findFirst().orElseThrow();
     assertThat(mix.annualCostEstimate()).isEqualByComparingTo("110.00"); // refund NOT added
   }

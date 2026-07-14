@@ -419,10 +419,21 @@ public class ReadTools {
       description =
           "The counterparties still needing a human decision (status='open'), ordered"
               + " descending by estimated annual cost (recurring.typical_amount * periods/year,"
-              + " or spend_last_365d if no recurring series is recorded yet).")
+              + " or spend_last_365d if no recurring series is recorded yet). Excludes"
+              + " CRDT-predominant counterparties (salary, incoming transfers -- see"
+              + " list_income); a counterparty with no evidence row yet (unknown direction)"
+              + " stays in the queue, since nothing should skip human review. Compact by"
+              + " default ({id, displayName, identityType, cadence, annualCostEstimate,"
+              + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring"
+              + " blob.")
   public List<ReviewQueueEntry> getReviewQueue(
       @ToolParam(description = "max rows to return (default 50)", required = false)
-          Integer limit) {
+          Integer limit,
+      @ToolParam(
+              description =
+                  "false (default): compact rows without the evidence/recurring blob; true:"
+                      + " full evidence/recurring detail")
+          boolean verbose) {
     int effectiveLimit = limit != null && limit > 0 ? limit : DEFAULT_REVIEW_QUEUE_LIMIT;
 
     var rows =
@@ -462,6 +473,15 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
             .where(COUNTERPARTIES.STATUS.eq("open"))
+            // The evidence view is a LEFT JOIN: a bare `= 'DBIT'` would behave like an inner
+            // join and silently drop an open counterparty with no evidence row yet. The IS
+            // NULL branch keeps unknown-direction counterparties in the queue -- nothing
+            // skips human review.
+            .and(
+                V_COUNTERPARTY_EVIDENCE
+                    .DIRECTION
+                    .eq("DBIT")
+                    .or(V_COUNTERPARTY_EVIDENCE.DIRECTION.isNull()))
             .fetch();
 
     List<ReviewQueueEntry> entries = new ArrayList<>();
@@ -469,14 +489,20 @@ public class ReadTools {
       long id = row.get(COUNTERPARTIES.ID);
       CounterpartyEvidence evidence = mapEvidence(row, id);
       RecurringView recurring = mapRecurring(row);
+      String cadence = recurring == null ? null : recurring.cadence();
+      Integer txnCount = evidence == null ? null : evidence.txnCount();
+      LocalDate lastSeen = evidence == null ? null : evidence.lastSeen();
       entries.add(
           new ReviewQueueEntry(
               id,
               row.get(COUNTERPARTIES.DISPLAY_NAME),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
-              evidence,
-              recurring,
-              AnnualCost.estimate(recurring, evidence)));
+              verbose ? evidence : null,
+              verbose ? recurring : null,
+              AnnualCost.estimate(recurring, evidence),
+              cadence,
+              txnCount,
+              lastSeen));
     }
 
     entries.sort(Comparator.comparing(ReviewQueueEntry::annualCostEstimate).reversed());
