@@ -357,6 +357,38 @@ public class ReadTools {
   }
 
   @Tool(
+      name = "taxonomy",
+      description =
+          "The emergent tag vocabulary already in use, per dimension (domain|nature|necessity),"
+              + " with counts -- reuse these values instead of inventing synonyms.")
+  public List<TaxonomyDimension> taxonomy() {
+    var rows =
+        db.select(
+                COUNTERPARTY_TAGS.DIMENSION,
+                COUNTERPARTY_TAGS.VALUE,
+                DSL.count().as("value_count"))
+            .from(COUNTERPARTY_TAGS)
+            .groupBy(COUNTERPARTY_TAGS.DIMENSION, COUNTERPARTY_TAGS.VALUE)
+            .orderBy(COUNTERPARTY_TAGS.DIMENSION, DSL.field("value_count", Integer.class).desc())
+            .fetch();
+
+    Map<String, List<TaxonomyValue>> valuesByDimension = new LinkedHashMap<>();
+    for (var row : rows) {
+      valuesByDimension
+          .computeIfAbsent(row.get(COUNTERPARTY_TAGS.DIMENSION), key -> new ArrayList<>())
+          .add(
+              new TaxonomyValue(
+                  row.get(COUNTERPARTY_TAGS.VALUE), row.get("value_count", Integer.class)));
+    }
+
+    List<TaxonomyDimension> dimensions = new ArrayList<>();
+    for (var entry : valuesByDimension.entrySet()) {
+      dimensions.add(new TaxonomyDimension(entry.getKey(), entry.getValue()));
+    }
+    return dimensions;
+  }
+
+  @Tool(
       name = "sql_query",
       description =
           "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."

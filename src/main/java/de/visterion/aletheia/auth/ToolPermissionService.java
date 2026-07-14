@@ -32,7 +32,8 @@ public class ToolPermissionService {
           "list_unmatched_recurring",
           "counterparty_transactions",
           "sql_query",
-          "describe_schema");
+          "describe_schema",
+          "taxonomy");
 
   /** Additional write-scope tools (spec §5 "Write"), on top of everything READER can do. */
   private static final Set<String> WRITE_TOOLS =
