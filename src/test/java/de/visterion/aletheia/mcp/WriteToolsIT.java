@@ -77,7 +77,12 @@ class WriteToolsIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-CLASSIFY", "Classify Co");
 
     writeTools.classifyCounterparty(
-        id, List.of(new TagInput("domain", "telecom")), TagSource.auto, new BigDecimal("0.900"));
+        List.of(id),
+        null,
+        List.of(new TagInput("domain", "telecom")),
+        TagSource.auto,
+        new BigDecimal("0.900"),
+        false);
 
     var tags =
         db.selectFrom(COUNTERPARTY_TAGS).where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(id)).fetch();
@@ -95,7 +100,7 @@ class WriteToolsIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-AUTO", "Auto Co");
 
     writeTools.classifyCounterparty(
-        id, List.of(new TagInput("nature", "subscription")), TagSource.auto, null);
+        List.of(id), null, List.of(new TagInput("nature", "subscription")), TagSource.auto, null, false);
 
     Record row =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -110,10 +115,10 @@ class WriteToolsIT extends AbstractPostgresIT {
   void classifyCounterpartyReplacesTagsForTheSameDimension() {
     long id = counterpartyWithOneTransaction("CDTR-REPLACE", "Replace Co");
     writeTools.classifyCounterparty(
-        id, List.of(new TagInput("domain", "old-value")), TagSource.auto, null);
+        List.of(id), null, List.of(new TagInput("domain", "old-value")), TagSource.auto, null, false);
 
     writeTools.classifyCounterparty(
-        id, List.of(new TagInput("domain", "new-value")), TagSource.confirmed, null);
+        List.of(id), null, List.of(new TagInput("domain", "new-value")), TagSource.confirmed, null, false);
 
     var tags =
         db.selectFrom(COUNTERPARTY_TAGS).where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(id)).fetch();
@@ -162,7 +167,8 @@ class WriteToolsIT extends AbstractPostgresIT {
   @Test
   void confirmFlipsAutoTagsAndRecurringToConfirmedAndSetsReviewedAndStatus() {
     long id = counterpartyWithOneTransaction("CDTR-CONFIRM", "Confirm Co");
-    writeTools.classifyCounterparty(id, List.of(new TagInput("domain", "telecom")), TagSource.auto, null);
+    writeTools.classifyCounterparty(
+        List.of(id), null, List.of(new TagInput("domain", "telecom")), TagSource.auto, null, false);
     writeTools.markRecurring(id, Cadence.monthly, new BigDecimal("10.00"), null, null, TagSource.auto, null);
 
     writeTools.confirm(id);
