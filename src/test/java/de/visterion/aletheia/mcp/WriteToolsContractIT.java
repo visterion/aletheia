@@ -2,6 +2,7 @@ package de.visterion.aletheia.mcp;
 
 import static de.visterion.aletheia.jooq.Tables.CONTRACTS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.IMPORTS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
@@ -195,6 +196,10 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     long contractA = seedContract(id, "MANDATE-A");
     seedRecurring(id, contractA, "confirmed", "42.00");
 
+    int historyBefore =
+        db.fetchCount(
+            db.selectFrom(COUNTERPARTY_HISTORY).where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id)));
+
     writeTools.markRecurring(
         id,
         contractA,
@@ -209,5 +214,30 @@ class WriteToolsContractIT extends AbstractPostgresIT {
         db.selectFrom(RECURRING).where(RECURRING.CONTRACT_ID.eq(contractA)).fetchOne();
     assertThat(row.get(RECURRING.TYPICAL_AMOUNT)).isEqualByComparingTo("42.00");
     assertThat(row.get(RECURRING.SOURCE)).isEqualTo("confirmed");
+
+    // The guarded upsert performed no update, so no phantom old->new change should have been
+    // recorded in counterparty_history.
+    int historyAfter =
+        db.fetchCount(
+            db.selectFrom(COUNTERPARTY_HISTORY).where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id)));
+    assertThat(historyAfter).isEqualTo(historyBefore);
+  }
+
+  @Test
+  void confirmContractRecordsTheRealPriorStatusAsHistoryOldValue() {
+    long id = counterpartyWithOneTransaction("CDTR-HISTORY", "History Co");
+    long contractA = seedContract(id, "MANDATE-A");
+    seedRecurring(id, contractA, "auto", "9.99");
+
+    writeTools.confirmCounterparty(id, contractA);
+
+    Record history =
+        db.selectFrom(COUNTERPARTY_HISTORY)
+            .where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id))
+            .and(COUNTERPARTY_HISTORY.FIELD.eq("contract:" + contractA))
+            .fetchOne();
+    assertThat(history).isNotNull();
+    assertThat(history.get(COUNTERPARTY_HISTORY.OLD_VALUE)).isEqualTo("open");
+    assertThat(history.get(COUNTERPARTY_HISTORY.NEW_VALUE)).isEqualTo("confirmed");
   }
 }

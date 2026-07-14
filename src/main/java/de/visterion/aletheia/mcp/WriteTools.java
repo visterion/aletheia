@@ -185,33 +185,39 @@ public class WriteTools {
     BigDecimal oldTypicalAmount =
         db.select(RECURRING.TYPICAL_AMOUNT).from(RECURRING).where(key).fetchOne(RECURRING.TYPICAL_AMOUNT);
 
-    db.insertInto(RECURRING)
-        .set(RECURRING.COUNTERPARTY_ID, counterpartyId)
-        .set(RECURRING.CONTRACT_ID, contractId)
-        .set(RECURRING.CADENCE, cadence.name())
-        .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
-        .set(RECURRING.AMOUNT_MIN, amountMin)
-        .set(RECURRING.AMOUNT_MAX, amountMax)
-        .set(RECURRING.SOURCE, source.name())
-        .set(RECURRING.CONFIDENCE, confidence)
-        .onConflict(RECURRING.COUNTERPARTY_ID, RECURRING.CONTRACT_ID)
-        .doUpdate()
-        .set(RECURRING.CADENCE, cadence.name())
-        .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
-        .set(RECURRING.AMOUNT_MIN, amountMin)
-        .set(RECURRING.AMOUNT_MAX, amountMax)
-        .set(RECURRING.SOURCE, source.name())
-        .set(RECURRING.CONFIDENCE, confidence)
-        // GUARD: an auto-source call can never overwrite a row a human already confirmed.
-        .where(RECURRING.SOURCE.eq("auto"))
-        .execute();
+    int affected =
+        db.insertInto(RECURRING)
+            .set(RECURRING.COUNTERPARTY_ID, counterpartyId)
+            .set(RECURRING.CONTRACT_ID, contractId)
+            .set(RECURRING.CADENCE, cadence.name())
+            .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
+            .set(RECURRING.AMOUNT_MIN, amountMin)
+            .set(RECURRING.AMOUNT_MAX, amountMax)
+            .set(RECURRING.SOURCE, source.name())
+            .set(RECURRING.CONFIDENCE, confidence)
+            .onConflict(RECURRING.COUNTERPARTY_ID, RECURRING.CONTRACT_ID)
+            .doUpdate()
+            .set(RECURRING.CADENCE, cadence.name())
+            .set(RECURRING.TYPICAL_AMOUNT, typicalAmount)
+            .set(RECURRING.AMOUNT_MIN, amountMin)
+            .set(RECURRING.AMOUNT_MAX, amountMax)
+            .set(RECURRING.SOURCE, source.name())
+            .set(RECURRING.CONFIDENCE, confidence)
+            // GUARD: an auto-source call can never overwrite a row a human already confirmed.
+            .where(RECURRING.SOURCE.eq("auto"))
+            .execute();
 
-    insertHistory(
-        counterpartyId,
-        "recurring",
-        oldTypicalAmount == null ? null : oldTypicalAmount.toPlainString(),
-        typicalAmount == null ? null : typicalAmount.toPlainString(),
-        source.name());
+    // Postgres returns 0 rows affected when the ON CONFLICT DO UPDATE ... WHERE guard matches no
+    // row (i.e. the existing row is confirmed and this call is auto) -- a suppressed no-op, so
+    // recording history here would be a phantom old->new change.
+    if (affected > 0) {
+      insertHistory(
+          counterpartyId,
+          "recurring",
+          oldTypicalAmount == null ? null : oldTypicalAmount.toPlainString(),
+          typicalAmount == null ? null : typicalAmount.toPlainString(),
+          source.name());
+    }
 
     return new WriteAck(counterpartyId, "recurring series set to " + cadence.name());
   }
@@ -267,6 +273,12 @@ public class WriteTools {
   }
 
   private void confirmContractRow(long counterpartyId, long contractId) {
+    String oldStatus =
+        db.select(CONTRACTS.STATUS)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.STATUS);
+
     db.update(CONTRACTS)
         .set(CONTRACTS.STATUS, "confirmed")
         .set(CONTRACTS.SOURCE, "confirmed")
@@ -279,7 +291,7 @@ public class WriteTools {
         .where(RECURRING.CONTRACT_ID.eq(contractId))
         .execute();
 
-    insertHistory(counterpartyId, "contract:" + contractId, "open", "confirmed", "confirmed");
+    insertHistory(counterpartyId, "contract:" + contractId, oldStatus, "confirmed", "confirmed");
   }
 
   /**
@@ -391,12 +403,22 @@ public class WriteTools {
     if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
       long targetContract =
           contractId != null ? contractId : materializeMandatelessContract(counterpartyId);
+      String oldContractStatus =
+          db.select(CONTRACTS.STATUS)
+              .from(CONTRACTS)
+              .where(CONTRACTS.ID.eq(targetContract))
+              .fetchOne(CONTRACTS.STATUS);
       db.update(CONTRACTS)
           .set(CONTRACTS.STATUS, "dismissed")
           .set(CONTRACTS.DISMISSED_REASON, reason)
           .where(CONTRACTS.ID.eq(targetContract))
           .execute();
-      insertHistory(counterpartyId, "contract:" + targetContract, "open", "dismissed", "confirmed");
+      insertHistory(
+          counterpartyId,
+          "contract:" + targetContract,
+          oldContractStatus,
+          "dismissed",
+          "confirmed");
       return new WriteAck(counterpartyId, "contract " + targetContract + " dismissed: " + reason);
     }
 
