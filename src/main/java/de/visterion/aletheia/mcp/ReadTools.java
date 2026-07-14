@@ -36,14 +36,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class ReadTools {
 
-  /** {@code recurring.cadence} -> occurrences/year, used to estimate annual cost (spec §5). */
-  private static final Map<String, Integer> CADENCE_PERIODS_PER_YEAR =
-      Map.of(
-          "monthly", 12,
-          "quarterly", 4,
-          "half_yearly", 2,
-          "yearly", 1);
-
   private static final int DEFAULT_REVIEW_QUEUE_LIMIT = 50;
 
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
@@ -139,6 +131,9 @@ public class ReadTools {
                 V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
                 V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
                 V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL,
                 DSL.field(
                     DSL.exists(
                         DSL.selectOne()
@@ -232,7 +227,10 @@ public class ReadTools {
                 V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV,
                 V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS,
                 V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D,
-                V_COUNTERPARTY_EVIDENCE.DIRECTION)
+                V_COUNTERPARTY_EVIDENCE.DIRECTION,
+                V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
+                V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL)
             .from(COUNTERPARTIES)
             .leftJoin(RECURRING)
             .on(RECURRING.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
@@ -253,7 +251,7 @@ public class ReadTools {
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               evidence,
               recurring,
-              annualCostEstimate(recurring, evidence)));
+              AnnualCost.estimate(recurring, evidence)));
     }
 
     entries.sort(Comparator.comparing(ReviewQueueEntry::annualCostEstimate).reversed());
@@ -459,7 +457,10 @@ public class ReadTools {
         row.get(V_COUNTERPARTY_EVIDENCE.AMOUNT_STDDEV),
         row.get(V_COUNTERPARTY_EVIDENCE.MEDIAN_GAP_DAYS),
         row.get(V_COUNTERPARTY_EVIDENCE.SPEND_LAST_365D),
-        row.get(V_COUNTERPARTY_EVIDENCE.DIRECTION));
+        row.get(V_COUNTERPARTY_EVIDENCE.DIRECTION),
+        row.get(V_COUNTERPARTY_EVIDENCE.DEBIT_LAST_365D),
+        row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),
+        row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL));
   }
 
   /** Returns {@code null} when the left-joined recurring row is absent. */
@@ -479,20 +480,5 @@ public class ReadTools {
         row.get(RECURRING.OCCURRENCE_COUNT),
         row.get(RECURRING.SOURCE),
         row.get(RECURRING.CONFIDENCE));
-  }
-
-  /**
-   * spec §5: annual cost = {@code typical_amount * periods/year} for a non-irregular recurring
-   * series, else {@code spend_last_365d}. {@code irregular} has no clean periods/year, so it
-   * falls back to the same {@code spend_last_365d} proxy used before any recurring is marked.
-   */
-  private static BigDecimal annualCostEstimate(RecurringView recurring, CounterpartyEvidence evidence) {
-    if (recurring != null && recurring.typicalAmount() != null) {
-      Integer periodsPerYear = CADENCE_PERIODS_PER_YEAR.get(recurring.cadence());
-      if (periodsPerYear != null) {
-        return recurring.typicalAmount().multiply(BigDecimal.valueOf(periodsPerYear));
-      }
-    }
-    return evidence != null && evidence.spendLast365d() != null ? evidence.spendLast365d() : BigDecimal.ZERO;
   }
 }
