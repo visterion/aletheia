@@ -35,7 +35,8 @@ public class ToolPermissionService {
           "describe_schema",
           "taxonomy",
           "aggregate",
-          "obligations_register");
+          "obligations_register",
+          "list_income");
 
   /** Additional write-scope tools (spec §5 "Write"), on top of everything READER can do. */
   private static final Set<String> WRITE_TOOLS =
