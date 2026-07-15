@@ -83,4 +83,36 @@ class DisplayNameNormalizationIT extends AbstractPostgresIT {
             .fetchOne(COUNTERPARTIES.DISPLAY_NAME);
     assertThat(name).isEqualTo("Padded Name Co");
   }
+
+  @Test
+  void selectedLatestNameIsNfcAndWhitespaceNormalizedWithoutChangingCase() {
+    long imp = importId();
+    insertTxn(
+        imp,
+        "normalized-old",
+        LocalDate.of(2026, 1, 1),
+        "10.00",
+        "DBIT",
+        "CDTR-NFC",
+        null,
+        "Old Name");
+    insertTxn(
+        imp,
+        "normalized-new",
+        LocalDate.of(2026, 2, 1),
+        "10.00",
+        "DBIT",
+        "CDTR-NFC",
+        null,
+        "  Ma\u0308rkt\t GmbH\nNord  ");
+
+    resolver.run(null);
+
+    String name =
+        db.select(COUNTERPARTIES.DISPLAY_NAME)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-NFC"))
+            .fetchOne(COUNTERPARTIES.DISPLAY_NAME);
+    assertThat(name).isEqualTo("Märkt GmbH Nord");
+  }
 }

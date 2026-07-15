@@ -108,6 +108,258 @@ class CounterpartyResolverIT extends AbstractPostgresIT {
   }
 
   @Test
+  void newestUsableNameWinsAndDelayedOlderBookingCannotRollItBack() {
+    long initialImport = importId();
+    insertTxn(
+        initialImport,
+        "latest-old",
+        LocalDate.of(2026, 1, 1),
+        "10.00",
+        "DBIT",
+        "CDTR-LATEST",
+        null,
+        "Old Name");
+    insertTxn(
+        initialImport,
+        "latest-current",
+        LocalDate.of(2026, 3, 1),
+        "10.00",
+        "DBIT",
+        "CDTR-LATEST",
+        null,
+        "Current Name");
+
+    resolver.run(null);
+
+    assertThat(
+            db.select(COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-LATEST"))
+                .fetchOne(COUNTERPARTIES.DISPLAY_NAME))
+        .isEqualTo("Current Name");
+
+    long delayedImport = importId();
+    insertTxn(
+        delayedImport,
+        "latest-delayed",
+        LocalDate.of(2025, 12, 1),
+        "10.00",
+        "DBIT",
+        "CDTR-LATEST",
+        null,
+        "Historical Name");
+
+    resolver.run(null);
+
+    assertThat(
+            db.select(COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-LATEST"))
+                .fetchOne(COUNTERPARTIES.DISPLAY_NAME))
+        .isEqualTo("Current Name");
+  }
+
+  @Test
+  void sameDayNameTieUsesAlphabeticalOrderRegardlessOfInsertionOrder() {
+    long imp = importId();
+    LocalDate date = LocalDate.of(2026, 4, 1);
+
+    insertTxn(imp, "tie-a-zebra", date, "10.00", "DBIT", "CDTR-TIE-A", null, "Zebra Name");
+    insertTxn(imp, "tie-a-alpha", date, "10.00", "DBIT", "CDTR-TIE-A", null, "Alpha Name");
+    insertTxn(imp, "tie-b-alpha", date, "10.00", "DBIT", "CDTR-TIE-B", null, "Alpha Name");
+    insertTxn(imp, "tie-b-zebra", date, "10.00", "DBIT", "CDTR-TIE-B", null, "Zebra Name");
+
+    resolver.run(null);
+
+    assertThat(
+            db.select(COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-TIE-A"))
+                .fetchOne(COUNTERPARTIES.DISPLAY_NAME))
+        .isEqualTo("Alpha Name");
+    assertThat(
+            db.select(COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-TIE-B"))
+                .fetchOne(COUNTERPARTIES.DISPLAY_NAME))
+        .isEqualTo("Alpha Name");
+  }
+
+  @Test
+  void unusableNamesNeitherEraseDisplayNameNorCreateNameIdentity() {
+    long imp = importId();
+
+    insertTxn(
+        imp,
+        "usable-known",
+        LocalDate.of(2026, 1, 1),
+        "10.00",
+        "DBIT",
+        "CDTR-USABLE",
+        null,
+        "Known Name");
+    insertTxn(imp, "usable-null", LocalDate.of(2026, 2, 1), "10.00", "DBIT", "CDTR-USABLE", null, null);
+    insertTxn(imp, "usable-empty", LocalDate.of(2026, 2, 2), "10.00", "DBIT", "CDTR-USABLE", null, "");
+    insertTxn(imp, "usable-spaces", LocalDate.of(2026, 2, 3), "10.00", "DBIT", "CDTR-USABLE", null, "   ");
+    insertTxn(imp, "usable-tabs", LocalDate.of(2026, 2, 4), "10.00", "DBIT", "CDTR-USABLE", null, "\t\t");
+    insertTxn(imp, "usable-newlines", LocalDate.of(2026, 2, 5), "10.00", "DBIT", "CDTR-USABLE", null, "\n\r\n");
+
+    insertTxn(imp, "name-empty", LocalDate.of(2026, 3, 1), "5.00", "DBIT", null, null, "");
+    insertTxn(imp, "name-spaces", LocalDate.of(2026, 3, 2), "5.00", "DBIT", null, null, "   ");
+    insertTxn(imp, "name-tabs", LocalDate.of(2026, 3, 3), "5.00", "DBIT", null, null, "\t");
+    insertTxn(imp, "name-newlines", LocalDate.of(2026, 3, 4), "5.00", "DBIT", null, null, "\n");
+
+    resolver.run(null);
+
+    assertThat(
+            db.select(COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-USABLE"))
+                .fetchOne(COUNTERPARTIES.DISPLAY_NAME))
+        .isEqualTo("Known Name");
+    assertThat(
+            db.fetchExists(
+                db.selectOne()
+                    .from(COUNTERPARTIES)
+                    .where(COUNTERPARTIES.IDENTITY_TYPE.eq("name"))))
+        .isFalse();
+  }
+
+  @Test
+  void unusableNamesDoNotEraseExistingDisplayName() {
+    db.execute(
+        """
+        INSERT INTO counterparties (identity_type, identity_value, display_name)
+        VALUES ('creditor_id', 'CDTR-KNOWN', 'Known Name')
+        """);
+
+    long imp = importId();
+    insertTxn(imp, "known-null", LocalDate.of(2026, 1, 1), "10.00", "DBIT", "CDTR-KNOWN", null, null);
+    insertTxn(imp, "known-empty", LocalDate.of(2026, 2, 1), "10.00", "DBIT", "CDTR-KNOWN", null, "");
+    insertTxn(imp, "known-whitespace", LocalDate.of(2026, 3, 1), "10.00", "DBIT", "CDTR-KNOWN", null, " \t\n ");
+
+    resolver.run(null);
+
+    assertThat(
+            db.select(COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-KNOWN"))
+                .fetchOne(COUNTERPARTIES.DISPLAY_NAME))
+        .isEqualTo("Known Name");
+  }
+
+  @Test
+  void refreshChangesOnlyDisplayNameAndPreservesRelatedState() {
+    long counterpartyId =
+        db.fetchOne(
+                """
+                INSERT INTO counterparties
+                    (identity_type, identity_value, display_name, reviewed, status, dismissed_reason)
+                VALUES ('creditor_id', 'CDTR-STATE', 'Stale Name', true, 'dismissed',
+                        'Synthetic test reason')
+                RETURNING id
+                """)
+            .get("id", Long.class);
+
+    db.execute(
+        """
+        INSERT INTO counterparty_tags
+            (counterparty_id, dimension, value, source, confidence)
+        VALUES (?, 'nature', 'synthetic-service', 'confirmed', 0.999)
+        """,
+        counterpartyId);
+    long contractId =
+        db.fetchOne(
+                """
+                INSERT INTO contracts
+                    (counterparty_id, mandate_id, source, confidence, status,
+                     dismissed_reason, hivemem_cell_id, notes)
+                VALUES (?, 'MANDATE-STATE', 'confirmed', 0.999, 'dismissed',
+                        'Synthetic contract reason', 'synthetic-cell', 'Synthetic notes')
+                RETURNING id
+                """,
+                counterpartyId)
+            .get("id", Long.class);
+    db.execute(
+        """
+        INSERT INTO recurring
+            (counterparty_id, contract_id, cadence, typical_amount, amount_min, amount_max,
+             first_seen, last_seen, occurrence_count, source, confidence)
+        VALUES (?, ?, 'monthly', 12.34, 12.34, 12.34,
+                DATE '2026-01-01', DATE '2026-02-01', 2, 'confirmed', 0.999)
+        """,
+        counterpartyId,
+        contractId);
+    db.execute(
+        """
+        INSERT INTO counterparty_history
+            (counterparty_id, field, old_value, new_value, source, actor)
+        VALUES (?, 'status', 'open', 'dismissed', 'confirmed', 'synthetic-test')
+        """,
+        counterpartyId);
+
+    Record counterpartyBefore =
+        db.selectFrom(COUNTERPARTIES)
+            .where(COUNTERPARTIES.ID.eq(counterpartyId))
+            .fetchOne();
+    Record tagBefore =
+        db.fetchOne("SELECT * FROM counterparty_tags WHERE counterparty_id = ?", counterpartyId);
+    Record contractBefore = db.fetchOne("SELECT * FROM contracts WHERE id = ?", contractId);
+    Record recurringBefore =
+        db.fetchOne(
+            "SELECT * FROM recurring WHERE counterparty_id = ? AND contract_id = ?",
+            counterpartyId,
+            contractId);
+    Record historyBefore =
+        db.fetchOne("SELECT * FROM counterparty_history WHERE counterparty_id = ?", counterpartyId);
+
+    long imp = importId();
+    insertTxn(
+        imp,
+        "state-latest",
+        LocalDate.of(2026, 4, 1),
+        "12.34",
+        "DBIT",
+        "CDTR-STATE",
+        null,
+        "Latest Bank Name");
+
+    resolver.run(null);
+
+    Record counterpartyAfter =
+        db.selectFrom(COUNTERPARTIES)
+            .where(COUNTERPARTIES.ID.eq(counterpartyId))
+            .fetchOne();
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.DISPLAY_NAME)).isEqualTo("Latest Bank Name");
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.ID))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.ID));
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.IDENTITY_TYPE))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.IDENTITY_TYPE));
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.IDENTITY_VALUE))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.IDENTITY_VALUE));
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.REVIEWED))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.REVIEWED));
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.STATUS))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.STATUS));
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.DISMISSED_REASON))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.DISMISSED_REASON));
+    assertThat(counterpartyAfter.get(COUNTERPARTIES.CREATED_AT))
+        .isEqualTo(counterpartyBefore.get(COUNTERPARTIES.CREATED_AT));
+    assertThat(db.fetchOne("SELECT * FROM counterparty_tags WHERE counterparty_id = ?", counterpartyId))
+        .isEqualTo(tagBefore);
+    assertThat(db.fetchOne("SELECT * FROM contracts WHERE id = ?", contractId))
+        .isEqualTo(contractBefore);
+    assertThat(
+            db.fetchOne(
+                "SELECT * FROM recurring WHERE counterparty_id = ? AND contract_id = ?",
+                counterpartyId,
+                contractId))
+        .isEqualTo(recurringBefore);
+    assertThat(db.fetchOne("SELECT * FROM counterparty_history WHERE counterparty_id = ?", counterpartyId))
+        .isEqualTo(historyBefore);
+  }
+
+  @Test
   void emptyTransactionsIsANoOp() {
     resolver.run(null);
     assertThat(db.fetchCount(COUNTERPARTIES)).isZero();
