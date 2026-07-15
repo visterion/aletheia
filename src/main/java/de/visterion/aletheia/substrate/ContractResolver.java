@@ -13,9 +13,9 @@ import org.springframework.stereotype.Component;
  * layer from {@code transactions}: a {@code mandate_id} booked in >= 2 distinct calendar
  * months under a {@code creditor_id}-identity counterparty is a contract.
  *
- * <p>Only raw/imported rows are considered (TP2): {@code split_parent_content_hash IS NULL}
- * (or {@code import_id IS NOT NULL}). This prevents creating contracts from logical split
- * children (purchase parts must not trigger new contracts via resolver).
+ * <p>Only raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}. This
+ * prevents creating contracts from logical split children (purchase parts must not trigger new
+ * contracts via resolver).
  *
  * <p>Idempotent. {@code contracts} holds no measured fields, so its upsert is {@code DO
  * NOTHING} (skipping preserves a confirmed row). {@code recurring} holds the measured series,
@@ -38,11 +38,12 @@ public class ContractResolver implements ApplicationRunner {
       FROM transactions t
       JOIN counterparties c
           ON c.identity_type = 'creditor_id' AND c.identity_value = t.creditor_id
-      -- TP2: ignore split children so purchase parts (with copied creditor/mandate) do not
-      -- trigger auto contracts. Only raw rows: split_parent_content_hash IS NULL (or import_id IS NOT NULL).
       WHERE t.creditor_id IS NOT NULL
         AND t.mandate_id IS NOT NULL
-        AND (t.split_parent_content_hash IS NULL OR t.import_id IS NOT NULL)
+        AND t."""
+          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          + "\n"
+          + """
       GROUP BY c.id, t.mandate_id
       HAVING count(DISTINCT date_trunc('month', t.booking_date)) >= 2
       ON CONFLICT (counterparty_id, mandate_id) DO NOTHING
@@ -78,10 +79,12 @@ public class ContractResolver implements ApplicationRunner {
               max(t.booking_date) AS last_seen,
               count(*) AS occurrence_count
           FROM transactions t
-          -- TP2: ignore split children (see UPSERT_CONTRACTS).
           WHERE t.creditor_id IS NOT NULL
             AND t.mandate_id IS NOT NULL
-            AND (t.split_parent_content_hash IS NULL OR t.import_id IS NOT NULL)
+            AND t."""
+          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          + "\n"
+          + """
           GROUP BY t.creditor_id, t.mandate_id
       ) m ON m.creditor_id = c.identity_value AND m.mandate_id = ct.mandate_id
       WHERE ct.mandate_id IS NOT NULL
@@ -101,10 +104,12 @@ public class ContractResolver implements ApplicationRunner {
       SELECT count(*) FROM (
           SELECT t.mandate_id
           FROM transactions t
-          -- TP2: ignore split children for orphan detection as well.
           WHERE t.mandate_id IS NOT NULL
             AND (t.creditor_id IS NULL OR t.creditor_id = '')
-            AND (t.split_parent_content_hash IS NULL OR t.import_id IS NOT NULL)
+            AND t."""
+          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          + "\n"
+          + """
           GROUP BY t.mandate_id
           HAVING count(DISTINCT date_trunc('month', t.booking_date)) >= 2
       ) q
