@@ -29,7 +29,10 @@ public class IngestService {
   private final TransactionTemplate tx;
   private final SubsemblyParser parser;
 
-  public IngestService(DSLContext db, PlatformTransactionManager txManager, SubsemblyParser parser) {
+  public IngestService(
+      DSLContext db,
+      PlatformTransactionManager txManager,
+      SubsemblyParser parser) {
     this.db = db;
     this.tx = new TransactionTemplate(txManager);
     this.parser = parser;
@@ -94,7 +97,11 @@ public class IngestService {
     return new ImportSummary(importId, rowsBooked, rowsNew, rowsSkipped, pendingIgnored, false);
   }
 
-  private void insertBooking(SubsemblyBooking b, String hash, int idx, long importId) {
+  private void insertBooking(
+      SubsemblyBooking b,
+      String hash,
+      int idx,
+      long importId) {
     db.insertInto(TRANSACTIONS)
         .set(TRANSACTIONS.CONTENT_HASH, hash)
         .set(TRANSACTIONS.OCCURRENCE_INDEX, idx)

@@ -31,6 +31,15 @@ class DescribeSchemaIT extends AbstractPostgresIT {
         .filteredOn(c -> c.table().equals("transactions") && c.column().equals("direction"))
         .singleElement()
         .satisfies(c -> assertThat(c.description()).contains("DBIT"));
+    // TP2 split columns documented for sql_query users (logical view explained in docs)
+    assertThat(cols)
+        .filteredOn(c -> c.table().equals("transactions") && c.column().equals("split_parent_content_hash"))
+        .singleElement()
+        .satisfies(c -> assertThat(c.description()).contains("split_parent").contains("logical view"));
+    assertThat(cols)
+        .filteredOn(c -> c.table().equals("transactions") && c.column().equals("split_parent_occurrence_index"))
+        .singleElement()
+        .satisfies(c -> assertThat(c.description()).contains("split_parent").contains("logical view"));
     // primary key flagged
     assertThat(cols)
         .filteredOn(c -> c.table().equals("counterparties") && c.column().equals("id"))

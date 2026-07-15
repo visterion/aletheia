@@ -221,4 +221,68 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     BigDecimal expectedTotal = new BigDecimal("1200.00").add(new BigDecimal("60.00"));
     assertThat(register.totalAnnualCost()).isEqualByComparingTo(expectedTotal);
   }
+
+  @Test
+  void obligationsRegisterUsesLogicalViewHidesSplitParentsChildrenProvideCorrectDebit() {
+    // Covers obligations_register + openContractEntries path (via v_contract_evidence +
+    // v_counterparty fallback) and that list in ReadToolsIT covers get_review_queue helpers.
+    long imp = importId();
+    String parentHash = "parent-for-obl-001";
+    LocalDate d = LocalDate.now().minusDays(10);
+    // Parent with mandate (to exercise v_contract_evidence path)
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, imp)
+        .set(TRANSACTIONS.BOOKING_DATE, d)
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("100.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.CREDITOR_ID, "CDTR-OBL-SPLIT")
+        .set(TRANSACTIONS.MANDATE_ID, "MND-SPLIT")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Obl Split Merchant")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .execute();
+    // Logical child (purchase part keeps mandate attribution, reduced amount)
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-obl-purch")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, d)
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("65.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.CREDITOR_ID, "CDTR-OBL-SPLIT")
+        .set(TRANSACTIONS.MANDATE_ID, "MND-SPLIT")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Obl Split Merchant")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    resolver.run(null);
+
+    long cpId = counterpartyIdFor("CDTR-OBL-SPLIT");
+    long contractId = db.insertInto(CONTRACTS)
+        .set(CONTRACTS.COUNTERPARTY_ID, cpId)
+        .set(CONTRACTS.MANDATE_ID, "MND-SPLIT")
+        .set(CONTRACTS.STATUS, "confirmed")
+        .set(CONTRACTS.HIVEMEM_CELL_ID, "cell-obl-split")
+        .returning(CONTRACTS.ID)
+        .fetchOne(CONTRACTS.ID);
+
+    // No recurring -> falls back to debit from (now filtered) v_contract_evidence
+    // which must see only the 65 child, not 100 parent + 65.
+    ObligationsRegister register = readTools.obligationsRegister();
+
+    assertThat(register.rows()).hasSize(1);
+    ObligationRow row = register.rows().get(0);
+    assertThat(row.contractId()).isEqualTo(contractId);
+    assertThat(row.displayName()).isEqualTo("Obl Split Merchant");
+    // Correct data from child only:
+    assertThat(row.annualCost()).isEqualByComparingTo("65.00");
+    assertThat(register.totalAnnualCost()).isEqualByComparingTo("65.00");
+  }
 }
