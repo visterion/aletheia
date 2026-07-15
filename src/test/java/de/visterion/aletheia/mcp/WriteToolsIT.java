@@ -443,4 +443,42 @@ class WriteToolsIT extends AbstractPostgresIT {
         db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash));
     assertThat(count2).isEqualTo(1); // still 1, replaced not duplicated
   }
+
+  @Test
+  void splitTransactionRejectsWhenTargetIsAlreadyAChild() {
+    String rootHash = "parent-root-nested-001";
+    seedParentTx(rootHash, "CRED-N", "NestShop", "30.00", null);
+
+    writeTools.splitTransaction(
+        new TxReference(rootHash, 0),
+        List.of(
+            new Allocation(null, "NestShop", null, new BigDecimal("20.00"), "purchase"),
+            new Allocation(null, "Bargeld", null, new BigDecimal("10.00"), "cash")),
+        null);
+
+    String childHash =
+        db.select(TRANSACTIONS.CONTENT_HASH)
+            .from(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(rootHash))
+            .and(TRANSACTIONS.COUNTERPARTY_NAME.eq("NestShop"))
+            .fetchOne(TRANSACTIONS.CONTENT_HASH);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(childHash, 0),
+                    List.of(
+                        new Allocation(null, "NestShop", null, new BigDecimal("12.00"), "a"),
+                        new Allocation(null, "Bargeld", null, new BigDecimal("8.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("child");
+
+    // No grandchildren
+    assertThat(
+            db.fetchCount(
+                TRANSACTIONS,
+                TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(childHash)))
+        .isZero();
+  }
 }
