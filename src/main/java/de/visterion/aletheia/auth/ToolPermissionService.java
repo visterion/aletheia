@@ -45,7 +45,8 @@ public class ToolPermissionService {
           "mark_recurring",
           "confirm_counterparty",
           "link_contract",
-          "dismiss_counterparty");
+          "dismiss_counterparty",
+          "split_transaction");
 
   private static final Set<String> WRITER_TOOLS = union(READ_TOOLS, WRITE_TOOLS);
 

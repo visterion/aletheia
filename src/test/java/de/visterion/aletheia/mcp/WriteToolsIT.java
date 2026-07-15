@@ -10,11 +10,12 @@ import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
+
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.JSONB;
@@ -275,5 +276,344 @@ class WriteToolsIT extends AbstractPostgresIT {
   void writeToolsRejectAnUnknownCounterpartyId() {
     assertThatThrownBy(() -> writeTools.dismissCounterparty(999_999L, "no such counterparty", null))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  // --- split_transaction tests (TDD for Phase 2) ---
+
+  private long seedParentTx(String hash, String creditor, String name, String amount, String mndt) {
+    long imp =
+        db.insertInto(IMPORTS)
+            .set(IMPORTS.FILE_NAME, "split-test.json")
+            .set(IMPORTS.FILE_SHA256, "sha-split-" + UUID.randomUUID())
+            .returning(IMPORTS.ID)
+            .fetchOne(IMPORTS.ID);
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, hash)
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, imp)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.now().minusDays(1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal(amount))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.CREDITOR_ID, creditor)
+        .set(TRANSACTIONS.MANDATE_ID, mndt)
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, name)
+        .set(TRANSACTIONS.RAW, JSONB.valueOf("{}"))
+        .execute();
+    return imp;
+  }
+
+  @Test
+  void splitTransactionHappyPathCreatesChildrenWithCorrectRefsAndAttribution() {
+    String pHash = "parent-hash-001";
+    seedParentTx(pHash, "CRED-001", "REWE Markt", "79.14", "MAND-XYZ");
+    resolver.run(null);
+    long merchantId =
+        db.select(COUNTERPARTIES.ID)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CRED-001"))
+            .fetchOne(COUNTERPARTIES.ID);
+
+    // split 50 purchase + 29.14 bargeld
+    var ack =
+        writeTools.splitTransaction(
+            new TxReference(pHash, 0),
+            List.of(
+                new Allocation(merchantId, null, null, new BigDecimal("50.00"), "REWE Einkauf reduziert"),
+                new Allocation(null, "Bargeld", null, new BigDecimal("29.14"), "Bargeld abgehoben")),
+            null);
+
+    assertThat(ack.unsplitPerformed()).isFalse();
+    assertThat(ack.allocationsCreated()).isEqualTo(2);
+    // one new CP (Bargeld)
+    assertThat(ack.createdCounterpartyIds()).hasSize(1);
+
+    // verify children in DB
+    var children =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .orderBy(TRANSACTIONS.AMOUNT.desc())
+            .fetch();
+    assertThat(children).hasSize(2);
+    assertThat(children.get(0).get(TRANSACTIONS.AMOUNT)).isEqualByComparingTo("50.00");
+    assertThat(children.get(0).get(TRANSACTIONS.REMITTANCE_INFO)).isEqualTo("REWE Einkauf reduziert");
+    assertThat(children.get(0).get(TRANSACTIONS.CREDITOR_ID)).isEqualTo("CRED-001");
+    assertThat(children.get(0).get(TRANSACTIONS.MANDATE_ID)).isEqualTo("MAND-XYZ");
+    assertThat(children.get(0).get(TRANSACTIONS.IMPORT_ID)).isNull();
+    assertThat(children.get(0).get(TRANSACTIONS.OCCURRENCE_INDEX)).isEqualTo(0);
+
+    assertThat(children.get(1).get(TRANSACTIONS.AMOUNT)).isEqualByComparingTo("29.14");
+    assertThat(children.get(1).get(TRANSACTIONS.COUNTERPARTY_NAME)).isEqualTo("Bargeld");
+    assertThat(children.get(1).get(TRANSACTIONS.CREDITOR_ID)).isNull();
+    assertThat(children.get(1).get(TRANSACTIONS.MANDATE_ID)).isNull();
+    assertThat(children.get(1).get(TRANSACTIONS.IMPORT_ID)).isNull();
+
+    // Bargeld CP has the nature tag
+    long bargeldId = ack.createdCounterpartyIds().get(0);
+    var nature =
+        db.select(COUNTERPARTY_TAGS.VALUE)
+            .from(COUNTERPARTY_TAGS)
+            .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(bargeldId))
+            .and(COUNTERPARTY_TAGS.DIMENSION.eq("nature"))
+            .fetchOne(COUNTERPARTY_TAGS.VALUE);
+    assertThat(nature).isEqualTo("umbuchung");
+
+    // parent row untouched
+    var parentStill =
+        db.fetchExists(
+            db.selectOne().from(TRANSACTIONS).where(TRANSACTIONS.CONTENT_HASH.eq(pHash)));
+    assertThat(parentStill).isTrue();
+  }
+
+  @Test
+  void splitTransactionUnsplitDeletesChildrenAndIsIdempotent() {
+    String pHash = "parent-hash-002";
+    seedParentTx(pHash, "CRED-002", "TestShop", "10.00", null);
+
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(null, "TestShop", null, new BigDecimal("6.00"), "teil1"),
+            new Allocation(null, "Bargeld", null, new BigDecimal("4.00"), "teil2")),
+        false);
+
+    assertThat(
+            db.fetchCount(
+                TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(2);
+
+    // unsplit
+    var ack = writeTools.splitTransaction(new TxReference(pHash, 0), null, true);
+    assertThat(ack.unsplitPerformed()).isTrue();
+    assertThat(
+            db.fetchCount(
+                TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isZero();
+
+    // second unsplit no-op side-effect free
+    writeTools.splitTransaction(new TxReference(pHash, 0), List.of(), true);
+    assertThat(
+            db.fetchCount(
+                TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isZero();
+  }
+
+  @Test
+  void splitTransactionRejectsOnSumMismatch() {
+    String pHash = "parent-hash-003";
+    seedParentTx(pHash, "CRED-003", "SumTest", "100.00", null);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(pHash, 0),
+                    List.of(
+                        new Allocation(null, "Foo", null, new BigDecimal("40.00"), "a"),
+                        new Allocation(null, "Bar", null, new BigDecimal("50.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("sum of allocations")
+        .hasMessageContaining("100.00");
+  }
+
+  @Test
+  void splitTransactionIsReplaceAndIdempotentOnIdenticalCall() {
+    String pHash = "parent-hash-004";
+    seedParentTx(pHash, null, "IdemShop", "20.00", null);
+
+    var first =
+        writeTools.splitTransaction(
+            new TxReference(pHash, 0),
+            List.of(new Allocation(null, "IdemShop", null, new BigDecimal("20.00"), "full")),
+            null);
+    assertThat(first.allocationsCreated()).isEqualTo(1);
+    long count1 =
+        db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash));
+    assertThat(count1).isEqualTo(1);
+
+    // identical call again
+    var second =
+        writeTools.splitTransaction(
+            new TxReference(pHash, 0),
+            List.of(new Allocation(null, "IdemShop", null, new BigDecimal("20.00"), "full")),
+            null);
+    assertThat(second.allocationsCreated()).isEqualTo(1);
+    long count2 =
+        db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash));
+    assertThat(count2).isEqualTo(1); // still 1, replaced not duplicated
+  }
+
+  @Test
+  void splitTransactionRejectsWhenTargetIsAlreadyAChild() {
+    String rootHash = "parent-root-nested-001";
+    seedParentTx(rootHash, "CRED-N", "NestShop", "30.00", null);
+
+    writeTools.splitTransaction(
+        new TxReference(rootHash, 0),
+        List.of(
+            new Allocation(null, "NestShop", null, new BigDecimal("20.00"), "purchase"),
+            new Allocation(null, "Bargeld", null, new BigDecimal("10.00"), "cash")),
+        null);
+
+    String childHash =
+        db.select(TRANSACTIONS.CONTENT_HASH)
+            .from(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(rootHash))
+            .and(TRANSACTIONS.COUNTERPARTY_NAME.eq("NestShop"))
+            .fetchOne(TRANSACTIONS.CONTENT_HASH);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(childHash, 0),
+                    List.of(
+                        new Allocation(null, "NestShop", null, new BigDecimal("12.00"), "a"),
+                        new Allocation(null, "Bargeld", null, new BigDecimal("8.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("child");
+
+    // No grandchildren
+    assertThat(
+            db.fetchCount(
+                TRANSACTIONS,
+                TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(childHash)))
+        .isZero();
+  }
+
+  @Test
+  void splitTransactionRejectsZeroOrNegativeAmountsWithoutDeletingChildren() {
+    String pHash = "parent-neg-001";
+    seedParentTx(pHash, "CRED-NEG", "NegShop", "10.00", null);
+
+    // Pre-seed one child as if previously split
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(new Allocation(null, "NegShop", null, new BigDecimal("10.00"), "full")),
+        null);
+    assertThat(db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(1);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(pHash, 0),
+                    List.of(
+                        new Allocation(null, "NegShop", null, new BigDecimal("15.00"), "a"),
+                        new Allocation(null, "Bargeld", null, new BigDecimal("-5.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("positive");
+
+    // Previous children must still exist (validate-before-mutate)
+    assertThat(db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void splitTransactionRejectsSumMismatchWithoutDeletingChildren() {
+    String pHash = "parent-sum-order-001";
+    seedParentTx(pHash, "CRED-SUM", "SumShop", "100.00", null);
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(new Allocation(null, "SumShop", null, new BigDecimal("100.00"), "full")),
+        null);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(pHash, 0),
+                    List.of(
+                        new Allocation(null, "Foo", null, new BigDecimal("40.00"), "a"),
+                        new Allocation(null, "Bar", null, new BigDecimal("50.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("sum of allocations");
+
+    assertThat(db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void nameBasedNonBargeldClearsMandateUnlessExplicitlyProvided() {
+    String pHash = "parent-mndt-001";
+    seedParentTx(pHash, "CRED-M", "MandateShop", "20.00", "MND-KEEP");
+
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(null, "Other Name Co", null, new BigDecimal("12.00"), "part"),
+            new Allocation(null, "Bargeld", null, new BigDecimal("8.00"), "cash")),
+        null);
+
+    var other =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .and(TRANSACTIONS.COUNTERPARTY_NAME.eq("Other Name Co"))
+            .fetchOne();
+    assertThat(other.get(TRANSACTIONS.MANDATE_ID)).isNull();
+    assertThat(other.get(TRANSACTIONS.CREDITOR_ID)).isNull();
+
+    // Explicit mandate on name-based allocation is allowed
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(null, "Other Name Co", "MND-EXPLICIT", new BigDecimal("20.00"), "full")),
+        null);
+    var withM =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .fetchOne();
+    assertThat(withM.get(TRANSACTIONS.MANDATE_ID)).isEqualTo("MND-EXPLICIT");
+  }
+
+  @Test
+  void splitTransactionByCounterpartyIdTargetsThatCounterpartyNotParent() {
+    String pHash = "parent-cpid-target-001";
+    seedParentTx(pHash, "CRED-REWE-CPID", "REWE Markt", "79.14", "MAND-REWE");
+    resolver.run(null);
+    long merchantId =
+        db.select(COUNTERPARTIES.ID)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CRED-REWE-CPID"))
+            .fetchOne(COUNTERPARTIES.ID);
+
+    // Create Bargeld CP via name-based split, then unsplit so we can re-split by id
+    var seedAck =
+        writeTools.splitTransaction(
+            new TxReference(pHash, 0),
+            List.of(
+                new Allocation(merchantId, null, null, new BigDecimal("50.00"), "purchase"),
+                new Allocation(null, "Bargeld", null, new BigDecimal("29.14"), "cash")),
+            null);
+    long bargeldId = seedAck.createdCounterpartyIds().get(0);
+    writeTools.splitTransaction(new TxReference(pHash, 0), null, true);
+
+    // Re-split: cash via Bargeld counterpartyId, purchase via merchant id
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(merchantId, null, null, new BigDecimal("50.00"), "purchase"),
+            new Allocation(bargeldId, null, null, new BigDecimal("29.14"), "cash")),
+        null);
+
+    var cash =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .and(TRANSACTIONS.AMOUNT.eq(new BigDecimal("29.14")))
+            .fetchOne();
+    assertThat(cash.get(TRANSACTIONS.COUNTERPARTY_NAME)).isEqualTo("Bargeld");
+    assertThat(cash.get(TRANSACTIONS.CREDITOR_ID)).isNull();
+    assertThat(cash.get(TRANSACTIONS.MANDATE_ID)).isNull();
+    assertThat(cash.get(TRANSACTIONS.COUNTERPARTY_IBAN)).isNull();
+
+    var purchase =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .and(TRANSACTIONS.AMOUNT.eq(new BigDecimal("50.00")))
+            .fetchOne();
+    assertThat(purchase.get(TRANSACTIONS.CREDITOR_ID)).isEqualTo("CRED-REWE-CPID");
+    assertThat(purchase.get(TRANSACTIONS.MANDATE_ID)).isEqualTo("MAND-REWE");
   }
 }

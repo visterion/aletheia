@@ -140,4 +140,46 @@ class CounterpartyResolverIT extends AbstractPostgresIT {
     assertThat(view.get("median_gap_days", Double.class)).isEqualTo(31.0);
     assertThat(view.get("direction", String.class)).isEqualTo("DBIT");
   }
+
+  @Test
+  void ignoresSplitChildrenAndDoesNotCreateCounterpartiesFromThem() {
+    // TP2 requirement: resolvers must not process child rows (split_parent set, import_id null).
+    // "Bargeld" must only be created by split tool (with nature tag), never auto here.
+    long imp = importId();
+
+    // Parent row (raw) -> should create one CP.
+    insertTxn(imp, "parent-hash-cp", LocalDate.of(2026, 1, 1), "10.00", "DBIT", "CDTR-P", null, "Parent Co");
+
+    // Child row simulating split part (Bargeld) -> must be ignored.
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-bargeld-ignored")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.of(2026, 1, 1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("5.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Bargeld")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, "parent-hash-cp")
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    resolver.run(null);
+
+    var cps =
+        db.select(COUNTERPARTIES.IDENTITY_TYPE, COUNTERPARTIES.IDENTITY_VALUE, COUNTERPARTIES.DISPLAY_NAME)
+            .from(COUNTERPARTIES)
+            .fetch();
+    assertThat(cps).hasSize(1);
+    assertThat(cps.get(0).get(COUNTERPARTIES.IDENTITY_VALUE)).isEqualTo("CDTR-P");
+    // No name-based "BARGELD" was created from the child.
+    assertThat(
+            db.fetchExists(
+                db.selectOne()
+                    .from(COUNTERPARTIES)
+                    .where(COUNTERPARTIES.IDENTITY_VALUE.eq("BARGELD"))))
+        .isFalse();
+  }
 }

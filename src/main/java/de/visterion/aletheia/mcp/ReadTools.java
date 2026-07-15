@@ -8,6 +8,7 @@ import static de.visterion.aletheia.jooq.Tables.V_CONTRACT_EVIDENCE;
 import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
+import de.visterion.aletheia.substrate.TransactionLayerSql;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -32,6 +33,13 @@ import org.springframework.stereotype.Component;
 /**
  * MCP read tools (spec §5 "Read", scope {@code read}). Every tool name here matches {@code
  * ToolPermissionService.READ_TOOLS} exactly.
+ *
+ * <p>Business read paths implement the TP2 logical view over transactions: split parents that
+ * have children are excluded via NOT EXISTS on split_parent_content_hash/occurrence_index.
+ * Only current leaf positions (children and unsplit originals) are visible to aggregate,
+ * counterparty_transactions, evidence-backed tools (list_counterparties, obligations_register,
+ * get_review_queue, list_income etc.). {@link #sqlQuery} and raw table access see the full
+ * physical rows.
  *
  * <p>All tools except {@link #sqlQuery} run on the app {@link DSLContext} ({@code db}, the
  * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): a
@@ -62,6 +70,10 @@ public class ReadTools {
           "transactions.direction",
               "DBIT (outgoing) | CRDT (incoming); amount is always positive",
           "transactions.content_hash", "SHA-256 idempotency natural key",
+          "transactions.split_parent_content_hash",
+              "split_parent_* set on children only (backref); logical view (NOT EXISTS) excludes parents that have children",
+          "transactions.split_parent_occurrence_index",
+              "split_parent_* set on children only (backref); logical view (NOT EXISTS) excludes parents that have children",
           "counterparties.identity_type", "creditor_id | iban | name",
           "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)",
           "recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular",
@@ -100,6 +112,11 @@ public class ReadTools {
                       upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
               END AS identity_value
           FROM transactions t
+          """
+          + " WHERE "
+          + TransactionLayerSql.notExistsSupersededParent("t")
+          + "\n"
+          + """
       ) i
       JOIN counterparties c ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value
       WHERE c.id = ?
@@ -135,7 +152,9 @@ public class ReadTools {
                   upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
           END AS identity_value
       FROM transactions t
-      """;
+      """
+          + " WHERE "
+          + TransactionLayerSql.notExistsSupersededParent("t");
 
   private final DSLContext db;
   private final DSLContext roDsl;
@@ -167,7 +186,9 @@ public class ReadTools {
               + " through the identity-CASE resolution (creditor_id > iban > normalized name)"
               + " and therefore excludes unresolved bookings. When byCounterparty=true, buckets"
               + " are keyed on counterparties.id (never displayName -- two distinct identities,"
-              + " e.g. a creditor_id and an iban, can share one display name).")
+              + " e.g. a creditor_id and an iban, can share one display name)."
+              + " Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only"
+              + " current leaf positions (children and unsplit originals) are aggregated.")
   public List<AggregateBucket> aggregate(
       @ToolParam(description = "inclusive range start") LocalDate dateFrom,
       @ToolParam(description = "inclusive range end") LocalDate dateTo,
@@ -194,9 +215,10 @@ public class ReadTools {
       return List.of();
     }
 
-    String dateRef = joinIdentity ? "i.booking_date" : "booking_date";
-    String directionRef = joinIdentity ? "i.direction" : "direction";
-    String amountRef = joinIdentity ? "i.amount" : "amount";
+    String txnAlias = joinIdentity ? "i" : "t";
+    String dateRef = txnAlias + ".booking_date";
+    String directionRef = txnAlias + ".direction";
+    String amountRef = txnAlias + ".amount";
 
     String period = periodExpr(groupBy, dateRef);
     String amountExpr = signedAmountExpr(direction, amountRef, directionRef);
@@ -214,7 +236,7 @@ public class ReadTools {
           .append(") i JOIN counterparties c"
               + " ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value ");
     } else {
-      sql.append("FROM transactions ");
+      sql.append("FROM transactions t ");
     }
 
     List<Object> binds = new ArrayList<>();
@@ -232,6 +254,13 @@ public class ReadTools {
           .append(ids.stream().map(id -> "?").collect(Collectors.joining(",")))
           .append(") ");
       binds.addAll(ids);
+    }
+
+    // When joinIdentity: IDENTITY subselect already applied the filter — do not double-append.
+    if (!joinIdentity) {
+      sql.append("AND ")
+          .append(TransactionLayerSql.notExistsSupersededParent(txnAlias))
+          .append(" ");
     }
 
     // A TOTAL period is the string literal 'total', not a real column expression -- Postgres
@@ -322,7 +351,9 @@ public class ReadTools {
       name = "list_counterparties",
       description =
           "List counterparties with their evidence aggregates, current tags, recurring series"
-              + " and contract-link status.")
+              + " and contract-link status. Evidence is computed over the logical view of"
+              + " transactions (split parents excluded via NOT EXISTS on split_parent_*; only"
+              + " children and unsplit originals contribute to counts/spend).")
   public List<CounterpartySummary> listCounterparties(
       @ToolParam(description = "default all", required = false) CounterpartyFilter filter,
       @ToolParam(description = "default spend_desc", required = false) CounterpartySort sort) {
@@ -453,7 +484,9 @@ public class ReadTools {
               + " list_income); a counterparty with no evidence row yet (unknown direction)"
               + " stays in the queue, since nothing should skip human review. Compact by default"
               + " ({id, contractId, displayName, identityType, cadence, annualCostEstimate,"
-              + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob.")
+              + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob."
+              + " All evidence/spend numbers use the logical transaction view (parents with"
+              + " split children are excluded via NOT EXISTS on split_parent_*).")
   public List<ReviewQueueEntry> getReviewQueue(
       @ToolParam(description = "max rows to return (default 50)", required = false)
           Integer limit,
@@ -793,7 +826,9 @@ public class ReadTools {
           "The underlying bookings for one counterparty (evidence detail), optionally limited to"
               + " the last N days via period, or to an inclusive [dateFrom, dateTo] absolute"
               + " range on booking_date. When dateFrom and dateTo are both given, the absolute"
-              + " range wins over period (period is ignored).")
+              + " range wins over period (period is ignored). Returns only current logical"
+              + " positions: split parents are hidden (NOT EXISTS filter on split_parent_*);"
+              + " children and unsplit originals are shown (javadoc references logical view).")
   public List<TransactionView> counterpartyTransactions(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(
@@ -881,7 +916,8 @@ public class ReadTools {
               + " contracts, e.g. two insurance policies, produces two rows) with annual cost,"
               + " tags and contract-link status, ordered by annual cost, plus the total. Each"
               + " row's annual cost is scoped to its OWN contract -- never the counterparty's"
-              + " combined debit.")
+              + " combined debit. All debit/annual cost figures are derived from the logical"
+              + " transaction view (NOT EXISTS on split_parent_* excludes superseded parents).")
   public ObligationsRegister obligationsRegister() {
     var rows =
         db.select(

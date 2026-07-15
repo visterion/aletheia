@@ -12,6 +12,10 @@ import org.springframework.stereotype.Component;
  * On startup (after ingest, spec §3), upserts {@code counterparties} from the distinct
  * identities present in {@code transactions}.
  *
+ * <p>Only raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}. Split
+ * children are ignored to avoid creating duplicate counterparties (e.g. "Bargeld" must only be
+ * created by the split tool).
+ *
  * <p>Identity priority, never merged across types (1&amp;1/Telekom/Deutsche Glasfaser stay
  * distinct): {@code creditor_id} &gt; {@code counterparty_iban} &gt; normalized {@code
  * counterparty_name} (NFC, trim, collapse whitespace, upper-cased for the identity key only).
@@ -55,6 +59,11 @@ public class CounterpartyResolver implements ApplicationRunner {
               counterparty_name,
               booking_date
           FROM transactions
+          """
+          + " WHERE "
+          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          + "\n"
+          + """
       ) identified
       WHERE identity_type IS NOT NULL
       GROUP BY identity_type, identity_value
