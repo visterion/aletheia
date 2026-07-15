@@ -5,10 +5,16 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
+import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 
 import de.visterion.aletheia.auth.AuthFilter;
 import de.visterion.aletheia.auth.AuthPrincipal;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.Normalizer;
+import java.util.HexFormat;
 import java.util.List;
 import org.jooq.DSLContext;
 import org.springframework.ai.tool.annotation.Tool;
@@ -520,4 +526,224 @@ public class WriteTools {
         attributes.getAttribute(AuthFilter.PRINCIPAL_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
     return principal instanceof AuthPrincipal authPrincipal ? authPrincipal.name() : "unknown";
   }
+
+  // --- split_transaction (Phase 2 core) ---
+
+  @Tool(
+      name = "split_transaction",
+      description =
+          "Split an existing raw transaction into logical child positions (replace semantics)."
+              + " If allocations is null/empty or unsplit=true, deletes all children (unsplit)."
+              + " Otherwise validates that sum(allocations.amount) equals the original transaction"
+              + " amount exactly, deletes any prior children for this parent, creates name-based"
+              + " counterparties on demand (Bargeld auto gets nature=umbuchung), inserts"
+              + " deterministic synthetic child rows with split_parent_* backrefs, import_id=null,"
+              + " occurrence_index=0, and attribution copied/adjusted for correct resolution on"
+              + " purchase vs pseudo parts. Idempotent replace. All inside one transaction.")
+  @Transactional
+  public SplitTransactionAck splitTransaction(
+      @ToolParam(description = "reference to the parent transaction to split (by natural key)")
+          TxReference tx,
+      @ToolParam(
+              description =
+                  "list of target allocations; null/empty triggers unsplit. Each allocation targets"
+                      + " either an existing counterpartyId or a displayName (to create name-based"
+                      + " CP).",
+              required = false)
+          List<Allocation> allocations,
+      @ToolParam(
+              description = "if true force unsplit (delete children) even if allocations provided",
+              required = false)
+          Boolean unsplit) {
+    if (tx == null || tx.contentHash() == null) {
+      throw new IllegalArgumentException("tx reference with contentHash is required");
+    }
+    int occ = tx.occurrenceIndex(); // default 0 if record allows
+
+    var parent =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.CONTENT_HASH.eq(tx.contentHash()))
+            .and(TRANSACTIONS.OCCURRENCE_INDEX.eq(occ))
+            .fetchOne();
+    if (parent == null) {
+      throw new IllegalArgumentException(
+          "no such transaction: content_hash=" + tx.contentHash() + ", occurrence_index=" + occ);
+    }
+
+    boolean doUnsplit = Boolean.TRUE.equals(unsplit) || (allocations == null || allocations.isEmpty());
+
+    // Always delete existing children first (for both unsplit and replace)
+    int deleted =
+        db.deleteFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(tx.contentHash()))
+            .and(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX.eq(occ))
+            .execute();
+
+    if (doUnsplit) {
+      return new SplitTransactionAck(true, 0, List.of(), "unsplit: removed " + deleted + " child row(s)");
+    }
+
+    // Split path: validate sum exactly
+    BigDecimal sum = allocations.stream()
+        .map(a -> a.amount() != null ? a.amount() : BigDecimal.ZERO)
+        .reduce(BigDecimal.ZERO, BigDecimal::add);
+    BigDecimal orig = parent.get(TRANSACTIONS.AMOUNT);
+    if (sum.compareTo(orig) != 0) {
+      throw new IllegalArgumentException(
+          "sum of allocations (" + sum + ") does not equal original transaction amount (" + orig + ")");
+    }
+
+    List<Long> createdCpIds = new java.util.ArrayList<>();
+    int created = 0;
+    for (int i = 0; i < allocations.size(); i++) {
+      Allocation a = allocations.get(i);
+      if (a.amount() == null) {
+        throw new IllegalArgumentException("allocation amount is required");
+      }
+      String childHash = syntheticSplitHash(tx.contentHash(), i);
+
+      Long cpId = a.counterpartyId();
+      if (cpId != null) {
+        requireExistingCounterparty(cpId);
+      } else if (a.displayName() != null && !a.displayName().isBlank()) {
+        // check pre-existence BEFORE ensure (for createdCpIds ack)
+        String normForCheck = upperNormalize(a.displayName());
+        Long existedBefore = db.select(COUNTERPARTIES.ID)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_TYPE.eq("name"))
+            .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normForCheck))
+            .fetchOne(COUNTERPARTIES.ID);
+        long ensured = ensureCounterpartyByDisplayName(a.displayName());
+        if (existedBefore == null) {
+          createdCpIds.add(ensured);
+        }
+        cpId = ensured;
+      } else {
+        throw new IllegalArgumentException("allocation requires either counterpartyId or displayName");
+      }
+
+      // Attribution logic per spec: copy for id-provided (purchase parts keep mandate/creditor),
+      // name-based (esp. Bargeld) use name + cleared fields.
+      String cpName;
+      String credId;
+      String iban;
+      String mndt = (a.mandateId() != null ? a.mandateId() : parent.get(TRANSACTIONS.MANDATE_ID));
+      if (a.counterpartyId() == null && a.displayName() != null) {
+        // name-based
+        String dn = a.displayName();
+        cpName = dn.equalsIgnoreCase("Bargeld") ? "Bargeld" : trimNormalize(dn);
+        credId = null;
+        iban = null;
+        if (dn.equalsIgnoreCase("Bargeld")) {
+          mndt = null;
+        }
+      } else {
+        // id-provided: copy parent's attribution fields so resolution + contracts/mandates work for purchase part
+        cpName = parent.get(TRANSACTIONS.COUNTERPARTY_NAME);
+        credId = parent.get(TRANSACTIONS.CREDITOR_ID);
+        iban = parent.get(TRANSACTIONS.COUNTERPARTY_IBAN);
+      }
+
+      db.insertInto(TRANSACTIONS)
+          .set(TRANSACTIONS.CONTENT_HASH, childHash)
+          .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+          .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+          .set(TRANSACTIONS.ACCOUNT_ID, parent.get(TRANSACTIONS.ACCOUNT_ID))
+          .set(TRANSACTIONS.BOOKING_DATE, parent.get(TRANSACTIONS.BOOKING_DATE))
+          .set(TRANSACTIONS.VALUE_DATE, parent.get(TRANSACTIONS.VALUE_DATE))
+          .set(TRANSACTIONS.AMOUNT, a.amount())
+          .set(TRANSACTIONS.CURRENCY, parent.get(TRANSACTIONS.CURRENCY))
+          .set(TRANSACTIONS.DIRECTION, parent.get(TRANSACTIONS.DIRECTION))
+          .set(TRANSACTIONS.BOOKING_STATUS, parent.get(TRANSACTIONS.BOOKING_STATUS))
+          .set(TRANSACTIONS.BOOKING_TEXT, parent.get(TRANSACTIONS.BOOKING_TEXT))
+          .set(TRANSACTIONS.REMITTANCE_INFO, a.remittanceInfo())
+          .set(TRANSACTIONS.GVC, parent.get(TRANSACTIONS.GVC))
+          .set(TRANSACTIONS.GVC_EXTENSION, parent.get(TRANSACTIONS.GVC_EXTENSION))
+          .set(TRANSACTIONS.PURPOSE_CODE, parent.get(TRANSACTIONS.PURPOSE_CODE))
+          .set(TRANSACTIONS.COUNTERPARTY_NAME, cpName)
+          .set(TRANSACTIONS.COUNTERPARTY_ULTIMATE_NAME, parent.get(TRANSACTIONS.COUNTERPARTY_ULTIMATE_NAME))
+          .set(TRANSACTIONS.COUNTERPARTY_IBAN, iban)
+          .set(TRANSACTIONS.COUNTERPARTY_BIC, parent.get(TRANSACTIONS.COUNTERPARTY_BIC))
+          .set(TRANSACTIONS.CREDITOR_ID, credId)
+          .set(TRANSACTIONS.MANDATE_ID, mndt)
+          .set(TRANSACTIONS.END_TO_END_ID, parent.get(TRANSACTIONS.END_TO_END_ID))
+          .set(TRANSACTIONS.SUBSEMBLY_ID, parent.get(TRANSACTIONS.SUBSEMBLY_ID))
+          .set(TRANSACTIONS.RAW, parent.get(TRANSACTIONS.RAW))
+          .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parent.get(TRANSACTIONS.CONTENT_HASH))
+          .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, parent.get(TRANSACTIONS.OCCURRENCE_INDEX))
+          .onConflict(TRANSACTIONS.CONTENT_HASH, TRANSACTIONS.OCCURRENCE_INDEX)
+          .doNothing()
+          .execute();
+      created++;
+    }
+
+    return new SplitTransactionAck(
+        false, created, createdCpIds, "created " + created + " child allocation(s)");
+  }
+
+  private String syntheticSplitHash(String parentHash, int partIndex) {
+    String input = parentHash + "|" + partIndex + "|split-part";
+    try {
+      byte[] digest =
+          MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(digest);
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
+    }
+  }
+
+  private long ensureCounterpartyByDisplayName(String displayName) {
+    String normValue = upperNormalize(displayName);
+    String dispName = trimNormalize(displayName);
+
+    Long existing =
+        db.select(COUNTERPARTIES.ID)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_TYPE.eq("name"))
+            .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normValue))
+            .fetchOne(COUNTERPARTIES.ID);
+    if (existing != null) {
+      return existing;
+    }
+
+    long id =
+        db.insertInto(COUNTERPARTIES)
+            .set(COUNTERPARTIES.IDENTITY_TYPE, "name")
+            .set(COUNTERPARTIES.IDENTITY_VALUE, normValue)
+            .set(COUNTERPARTIES.DISPLAY_NAME, dispName)
+            .set(COUNTERPARTIES.STATUS, "open")
+            .returning(COUNTERPARTIES.ID)
+            .fetchOne()
+            .get(COUNTERPARTIES.ID);
+
+    if (displayName.equalsIgnoreCase("Bargeld")) {
+      // auto nature as per spec; use "auto" source consistent with classify
+      db.insertInto(COUNTERPARTY_TAGS)
+          .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, id)
+          .set(COUNTERPARTY_TAGS.DIMENSION, "nature")
+          .set(COUNTERPARTY_TAGS.VALUE, "umbuchung")
+          .set(COUNTERPARTY_TAGS.SOURCE, "auto")
+          .execute();
+    }
+    return id;
+  }
+
+  private String upperNormalize(String s) {
+    if (s == null) return "";
+    String n = Normalizer.normalize(s, Normalizer.Form.NFC).trim().replaceAll("\\s+", " ");
+    return n.toUpperCase();
+  }
+
+  private String trimNormalize(String s) {
+    if (s == null) return "";
+    return Normalizer.normalize(s, Normalizer.Form.NFC).trim().replaceAll("\\s+", " ");
+  }
 }
+
+// --- supporting records for split_transaction (package-private, same package as other DTOs) ---
+
+record TxReference(String contentHash, int occurrenceIndex) {}
+
+record Allocation(Long counterpartyId, String displayName, String mandateId, BigDecimal amount, String remittanceInfo) {}
+
+record SplitTransactionAck(boolean unsplitPerformed, int allocationsCreated, List<Long> createdCounterpartyIds, String message) {}

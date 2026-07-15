@@ -1,5 +1,6 @@
 package de.visterion.aletheia.mcp;
 
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
 import static de.visterion.aletheia.jooq.Tables.IMPORTS;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -196,5 +197,88 @@ class AggregateIT extends AbstractPostgresIT {
 
     assertThat(countOut).hasSize(1);
     assertThat(countOut.get(0).value()).isEqualByComparingTo("0");
+  }
+
+  @Test
+  void aggregateAppliesLogicalFilterHidingSplitParentsShowingOnlyChildren() {
+    // TDD driver for core NOT EXISTS filter in aggregate (both unscoped and scoped paths).
+    // Parent row is hidden once children with split_parent_* exist; children are shown.
+    long imp = importId();
+    String parentHash = "parent-for-split-agg-001";
+    insertTxn(
+        imp, parentHash, LocalDate.of(2025, 7, 1), "100.00", "DBIT", "CDTR-SPLIT", null, "Split Merchant");
+
+    // Child 1: purchase part (keeps attribution)
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-purchase-synth")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.of(2025, 7, 1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("60.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Split Merchant")
+        .set(TRANSACTIONS.CREDITOR_ID, "CDTR-SPLIT")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    // Child 2: pseudo part (e.g. Bargeld)
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-bargeld-synth")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.of(2025, 7, 1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("40.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Bargeld")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    // Unscoped path (no joinIdentity): should aggregate only children (100 total), hide parent.
+    var unscoped =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+    assertThat(unscoped).hasSize(1);
+    assertThat(unscoped.get(0).value()).isEqualByComparingTo("100.00");
+
+    // Create CP for the merchant identity (needed for scoped join path).
+    long cpId =
+        db.insertInto(COUNTERPARTIES)
+            .set(COUNTERPARTIES.IDENTITY_TYPE, "creditor_id")
+            .set(COUNTERPARTIES.IDENTITY_VALUE, "CDTR-SPLIT")
+            .set(COUNTERPARTIES.DISPLAY_NAME, "Split Merchant")
+            .set(COUNTERPARTIES.STATUS, "open")
+            .returning(COUNTERPARTIES.ID)
+            .fetchOne()
+            .get(COUNTERPARTIES.ID);
+
+    // Scoped path (via counterpartyIds -> joinIdentity + IDENTITY_RESOLVED path): only the 60 child.
+    var scopedViaId =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.SUM, Direction.DBIT, false, List.of(cpId), null);
+    assertThat(scopedViaId).hasSize(1);
+    assertThat(scopedViaId.get(0).value()).isEqualByComparingTo("60.00");
+
+    // Regression: an unsplit transaction (no children, split_parent_* remain NULL) is still
+    // visible with no behavior change.
+    insertTxn(imp, "unsplit-visible-agg", LocalDate.of(2025, 7, 2), "7.00", "DBIT", "CDTR-UNSP", null, "Unsplit Co");
+    resolver.run(null);
+    long unsplitCp =
+        db.select(COUNTERPARTIES.ID)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CDTR-UNSP"))
+            .fetchOne(COUNTERPARTIES.ID);
+    var unsplitAgg =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.SUM, Direction.DBIT, false, List.of(unsplitCp), null);
+    assertThat(unsplitAgg).hasSize(1);
+    assertThat(unsplitAgg.get(0).value()).isEqualByComparingTo("7.00");
   }
 }

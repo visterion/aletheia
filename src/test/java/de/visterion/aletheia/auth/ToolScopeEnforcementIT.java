@@ -92,6 +92,24 @@ class ToolScopeEnforcementIT {
   }
 
   @Test
+  void readerTokenIsDeniedSplitTransactionWriteTool() {
+    String readerToken = seedToken("reader");
+
+    try (McpSyncClient client = connect(readerToken)) {
+      client.initialize();
+
+      CallToolResult result =
+          client.callTool(
+              new CallToolRequest(
+                  "split_transaction",
+                  Map.of("tx", Map.of("contentHash", "nonexistent-for-permission-check", "occurrenceIndex", 0))));
+
+      assertThat(result.isError()).isTrue();
+      assertThat(textOf(result)).contains("not permitted").contains("split_transaction");
+    }
+  }
+
+  @Test
   void writerTokenIsAllowedTheSameWriteTool() {
     String writerToken = seedToken("writer");
     long counterpartyId = seedCounterparty("CDTR-ALLOW");
