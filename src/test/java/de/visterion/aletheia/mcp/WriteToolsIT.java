@@ -481,4 +481,90 @@ class WriteToolsIT extends AbstractPostgresIT {
                 TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(childHash)))
         .isZero();
   }
+
+  @Test
+  void splitTransactionRejectsZeroOrNegativeAmountsWithoutDeletingChildren() {
+    String pHash = "parent-neg-001";
+    seedParentTx(pHash, "CRED-NEG", "NegShop", "10.00", null);
+
+    // Pre-seed one child as if previously split
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(new Allocation(null, "NegShop", null, new BigDecimal("10.00"), "full")),
+        null);
+    assertThat(db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(1);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(pHash, 0),
+                    List.of(
+                        new Allocation(null, "NegShop", null, new BigDecimal("15.00"), "a"),
+                        new Allocation(null, "Bargeld", null, new BigDecimal("-5.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("positive");
+
+    // Previous children must still exist (validate-before-mutate)
+    assertThat(db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void splitTransactionRejectsSumMismatchWithoutDeletingChildren() {
+    String pHash = "parent-sum-order-001";
+    seedParentTx(pHash, "CRED-SUM", "SumShop", "100.00", null);
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(new Allocation(null, "SumShop", null, new BigDecimal("100.00"), "full")),
+        null);
+
+    assertThatThrownBy(
+            () ->
+                writeTools.splitTransaction(
+                    new TxReference(pHash, 0),
+                    List.of(
+                        new Allocation(null, "Foo", null, new BigDecimal("40.00"), "a"),
+                        new Allocation(null, "Bar", null, new BigDecimal("50.00"), "b")),
+                    null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("sum of allocations");
+
+    assertThat(db.fetchCount(TRANSACTIONS, TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void nameBasedNonBargeldClearsMandateUnlessExplicitlyProvided() {
+    String pHash = "parent-mndt-001";
+    seedParentTx(pHash, "CRED-M", "MandateShop", "20.00", "MND-KEEP");
+
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(null, "Other Name Co", null, new BigDecimal("12.00"), "part"),
+            new Allocation(null, "Bargeld", null, new BigDecimal("8.00"), "cash")),
+        null);
+
+    var other =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .and(TRANSACTIONS.COUNTERPARTY_NAME.eq("Other Name Co"))
+            .fetchOne();
+    assertThat(other.get(TRANSACTIONS.MANDATE_ID)).isNull();
+    assertThat(other.get(TRANSACTIONS.CREDITOR_ID)).isNull();
+
+    // Explicit mandate on name-based allocation is allowed
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(null, "Other Name Co", "MND-EXPLICIT", new BigDecimal("20.00"), "full")),
+        null);
+    var withM =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .fetchOne();
+    assertThat(withM.get(TRANSACTIONS.MANDATE_ID)).isEqualTo("MND-EXPLICIT");
+  }
 }
