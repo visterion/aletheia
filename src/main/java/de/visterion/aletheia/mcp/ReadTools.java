@@ -917,7 +917,9 @@ public class ReadTools {
               + " tags and contract-link status, ordered by annual cost, plus the total. Each"
               + " row's annual cost is scoped to its OWN contract -- never the counterparty's"
               + " combined debit. All debit/annual cost figures are derived from the logical"
-              + " transaction view (NOT EXISTS on split_parent_* excludes superseded parents).")
+              + " transaction view (NOT EXISTS on split_parent_* excludes superseded parents)."
+              + " Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags"
+              + " do not exclude.")
   public ObligationsRegister obligationsRegister() {
     var rows =
         db.select(
@@ -957,6 +959,15 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.STATUS.eq("confirmed"))
+            .and(
+                DSL.notExists(
+                    DSL.selectOne()
+                        .from(COUNTERPARTY_TAGS)
+                        .where(
+                            COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
+                        .and(COUNTERPARTY_TAGS.DIMENSION.eq("nature"))
+                        .and(COUNTERPARTY_TAGS.VALUE.eq("zahlungsdienst"))
+                        .and(COUNTERPARTY_TAGS.SOURCE.eq("confirmed"))))
             .fetch();
 
     Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();

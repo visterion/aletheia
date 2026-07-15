@@ -18,6 +18,8 @@ import org.jooq.DSLContext;
 import org.jooq.JSONB;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 
 class ObligationsRegisterIT extends AbstractPostgresIT {
@@ -76,17 +78,40 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
         .fetchOne(COUNTERPARTIES.ID);
   }
 
-  /**
-   * Directly seeds a CONFIRMED, mandate-less contract row (no WriteTools/ContractResolver call)
-   * since these tests only need the resulting contract-grain state, not the resolvers'/write
-   * tool's side effects.
-   */
-  private long confirmedContract(long counterpartyId) {
+  private long counterparty(String identityValue, String displayName) {
+    return db.insertInto(COUNTERPARTIES)
+        .set(COUNTERPARTIES.IDENTITY_TYPE, "creditor_id")
+        .set(COUNTERPARTIES.IDENTITY_VALUE, identityValue)
+        .set(COUNTERPARTIES.DISPLAY_NAME, displayName)
+        .set(COUNTERPARTIES.STATUS, "open")
+        .returning(COUNTERPARTIES.ID)
+        .fetchOne(COUNTERPARTIES.ID);
+  }
+
+  private long contract(long counterpartyId, String mandateId, String status) {
     return db.insertInto(CONTRACTS)
         .set(CONTRACTS.COUNTERPARTY_ID, counterpartyId)
-        .set(CONTRACTS.STATUS, "confirmed")
+        .set(CONTRACTS.MANDATE_ID, mandateId)
+        .set(CONTRACTS.STATUS, status)
         .returning(CONTRACTS.ID)
         .fetchOne(CONTRACTS.ID);
+  }
+
+  private long confirmedContract(long counterpartyId) {
+    return confirmedContract(counterpartyId, null);
+  }
+
+  private long confirmedContract(long counterpartyId, String mandateId) {
+    return contract(counterpartyId, mandateId, "confirmed");
+  }
+
+  private void insertTag(long counterpartyId, String dimension, String value, String source) {
+    db.insertInto(COUNTERPARTY_TAGS)
+        .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, counterpartyId)
+        .set(COUNTERPARTY_TAGS.DIMENSION, dimension)
+        .set(COUNTERPARTY_TAGS.VALUE, value)
+        .set(COUNTERPARTY_TAGS.SOURCE, source)
+        .execute();
   }
 
   private void insertRecurring(
@@ -98,6 +123,106 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
         .set(RECURRING.TYPICAL_AMOUNT, typicalAmount == null ? null : new BigDecimal(typicalAmount))
         .set(RECURRING.SOURCE, "auto")
         .execute();
+  }
+
+  @Test
+  void excludesConfirmedPaymentServiceContractsFromRowsAndTotal() {
+    long normalId = counterparty("NORMAL", "Normal Contract");
+    long normalContract = confirmedContract(normalId);
+    insertRecurring(normalId, normalContract, "monthly", "10.00");
+
+    long paymentId = counterparty("PAYMENT", "Payment Service");
+    long paymentContractA = confirmedContract(paymentId, "MANDATE-PAYMENT-A");
+    long paymentContractB = confirmedContract(paymentId, "MANDATE-PAYMENT-B");
+    insertRecurring(paymentId, paymentContractA, "monthly", "50.00");
+    insertRecurring(paymentId, paymentContractB, "monthly", "75.00");
+    insertTag(paymentId, "nature", "zahlungsdienst", "confirmed");
+
+    ObligationsRegister register = readTools.obligationsRegister();
+
+    assertThat(register.rows())
+        .extracting(ObligationRow::contractId)
+        .containsExactly(normalContract)
+        .doesNotContain(paymentContractA, paymentContractB);
+    assertThat(register.totalAnnualCost()).isEqualByComparingTo("120.00");
+  }
+
+  @Test
+  void onlyConfirmedPaymentServiceContractsProduceEmptyRegisterAndZeroTotal() {
+    long paymentId = counterparty("PAYMENT-ONLY", "Payment Service Only");
+    long paymentContract = confirmedContract(paymentId);
+    insertRecurring(paymentId, paymentContract, "monthly", "50.00");
+    insertTag(paymentId, "nature", "zahlungsdienst", "confirmed");
+
+    ObligationsRegister register = readTools.obligationsRegister();
+
+    assertThat(register.rows()).isEmpty();
+    assertThat(register.totalAnnualCost()).isEqualByComparingTo(BigDecimal.ZERO);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "nature, zahlungsdienst, auto",
+    "domain, zahlungsdienst, confirmed",
+    "nature, versicherung, confirmed",
+    "nature, Zahlungsdienst, confirmed"
+  })
+  void nearMatchPaymentServiceTagsDoNotExcludeConfirmedContract(
+      String dimension, String value, String source) {
+    long counterpartyId =
+        counterparty("NEAR-" + dimension + "-" + value + "-" + source, "Near Match");
+    long contractId = confirmedContract(counterpartyId);
+    insertRecurring(counterpartyId, contractId, "monthly", "10.00");
+    insertTag(counterpartyId, dimension, value, source);
+
+    ObligationsRegister register = readTools.obligationsRegister();
+
+    assertThat(register.rows()).extracting(ObligationRow::contractId).containsExactly(contractId);
+    assertThat(register.totalAnnualCost()).isEqualByComparingTo("120.00");
+  }
+
+  @Test
+  void confirmedPaymentServiceTagsDoNotAffectEitherReviewQueueBranch() {
+    long imp = importId();
+    insertTxn(
+        imp,
+        "hash-queue-contract",
+        LocalDate.now().minusDays(5),
+        "10.00",
+        "DBIT",
+        "QUEUE-CONTRACT",
+        null,
+        "Queued Contract");
+    insertTxn(
+        imp,
+        "hash-queue-counterparty",
+        LocalDate.now().minusDays(5),
+        "10.00",
+        "DBIT",
+        "QUEUE-COUNTERPARTY",
+        null,
+        "Queued Counterparty");
+
+    long contractCounterpartyId = counterparty("QUEUE-CONTRACT", "Queued Contract");
+    long openContractId = contract(contractCounterpartyId, "MANDATE-QUEUE", "open");
+    insertTag(contractCounterpartyId, "nature", "zahlungsdienst", "confirmed");
+
+    long noContractCounterpartyId = counterparty("QUEUE-COUNTERPARTY", "Queued Counterparty");
+    insertTag(noContractCounterpartyId, "nature", "zahlungsdienst", "confirmed");
+
+    List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, false);
+
+    assertThat(queue)
+        .anySatisfy(
+            entry -> {
+              assertThat(entry.id()).isEqualTo(contractCounterpartyId);
+              assertThat(entry.contractId()).isEqualTo(openContractId);
+            })
+        .anySatisfy(
+            entry -> {
+              assertThat(entry.id()).isEqualTo(noContractCounterpartyId);
+              assertThat(entry.contractId()).isNull();
+            });
   }
 
   @Test

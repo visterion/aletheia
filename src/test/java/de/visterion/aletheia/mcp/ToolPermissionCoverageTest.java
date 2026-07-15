@@ -58,4 +58,22 @@ class ToolPermissionCoverageTest {
     Set<String> allowedForReader = new ToolPermissionService().allowedTools(AuthRole.READER);
     assertThat(allowedForReader).doesNotContain("split_transaction");
   }
+
+  @Test
+  void obligationsRegisterDescriptionDocumentsPaymentServiceExclusion() {
+    Tool annotation = null;
+    for (Method method : ReadTools.class.getDeclaredMethods()) {
+      Tool candidate = method.getAnnotation(Tool.class);
+      if (candidate != null && candidate.name().equals("obligations_register")) {
+        annotation = candidate;
+        break;
+      }
+    }
+
+    assertThat(annotation).isNotNull();
+    assertThat(annotation.description())
+        .contains(
+            "Excludes counterparties tagged with confirmed nature:zahlungsdienst; "
+                + "auto tags do not exclude.");
+  }
 }
