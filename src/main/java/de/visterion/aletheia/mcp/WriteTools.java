@@ -14,8 +14,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import org.jooq.DSLContext;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -40,6 +42,7 @@ public class WriteTools {
 
   private static final int MAX_BATCH_SIZE = 1000;
   private static final int CONFIRM_REQUIRED_THRESHOLD = 200;
+  private static final String BARGELD_DISPLAY_NAME = "Bargeld";
 
   private final DSLContext db;
   private final CounterpartySelectorResolver selectorResolver;
@@ -577,36 +580,48 @@ public class WriteTools {
               + occ);
     }
 
-    boolean doUnsplit = Boolean.TRUE.equals(unsplit) || (allocations == null || allocations.isEmpty());
-
-    // Always delete existing children first (for both unsplit and replace)
-    int deleted =
-        db.deleteFrom(TRANSACTIONS)
-            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(tx.contentHash()))
-            .and(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX.eq(occ))
-            .execute();
+    boolean doUnsplit =
+        Boolean.TRUE.equals(unsplit) || allocations == null || allocations.isEmpty();
 
     if (doUnsplit) {
-      return new SplitTransactionAck(true, 0, List.of(), "unsplit: removed " + deleted + " child row(s)");
+      int deleted =
+          db.deleteFrom(TRANSACTIONS)
+              .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(tx.contentHash()))
+              .and(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX.eq(occ))
+              .execute();
+      return new SplitTransactionAck(
+          true, 0, List.of(), "unsplit: removed " + deleted + " child row(s)");
     }
 
-    // Split path: validate sum exactly
-    BigDecimal sum = allocations.stream()
-        .map(a -> a.amount() != null ? a.amount() : BigDecimal.ZERO)
-        .reduce(BigDecimal.ZERO, BigDecimal::add);
+    // --- validate BEFORE any mutation ---
     BigDecimal orig = parent.get(TRANSACTIONS.AMOUNT);
+    BigDecimal sum = BigDecimal.ZERO;
+    for (Allocation a : allocations) {
+      if (a.amount() == null || a.amount().signum() <= 0) {
+        throw new IllegalArgumentException(
+            "allocation amount must be positive, got: " + a.amount());
+      }
+      sum = sum.add(a.amount());
+    }
     if (sum.compareTo(orig) != 0) {
       throw new IllegalArgumentException(
-          "sum of allocations (" + sum + ") does not equal original transaction amount (" + orig + ")");
+          "sum of allocations ("
+              + sum
+              + ") does not equal original transaction amount ("
+              + orig
+              + ")");
     }
 
-    List<Long> createdCpIds = new java.util.ArrayList<>();
+    // --- mutate ---
+    db.deleteFrom(TRANSACTIONS)
+        .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(tx.contentHash()))
+        .and(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX.eq(occ))
+        .execute();
+
+    List<Long> createdCpIds = new ArrayList<>();
     int created = 0;
     for (int i = 0; i < allocations.size(); i++) {
       Allocation a = allocations.get(i);
-      if (a.amount() == null) {
-        throw new IllegalArgumentException("allocation amount is required");
-      }
       String childHash = syntheticSplitHash(tx.contentHash(), i);
 
       Long cpId = a.counterpartyId();
@@ -615,73 +630,75 @@ public class WriteTools {
       } else if (a.displayName() != null && !a.displayName().isBlank()) {
         // check pre-existence BEFORE ensure (for createdCpIds ack)
         String normForCheck = upperNormalize(a.displayName());
-        Long existedBefore = db.select(COUNTERPARTIES.ID)
-            .from(COUNTERPARTIES)
-            .where(COUNTERPARTIES.IDENTITY_TYPE.eq("name"))
-            .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normForCheck))
-            .fetchOne(COUNTERPARTIES.ID);
+        Long existedBefore =
+            db.select(COUNTERPARTIES.ID)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.IDENTITY_TYPE.eq("name"))
+                .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normForCheck))
+                .fetchOne(COUNTERPARTIES.ID);
         long ensured = ensureCounterpartyByDisplayName(a.displayName());
         if (existedBefore == null) {
           createdCpIds.add(ensured);
         }
         cpId = ensured;
       } else {
-        throw new IllegalArgumentException("allocation requires either counterpartyId or displayName");
+        throw new IllegalArgumentException(
+            "allocation requires either counterpartyId or displayName");
       }
 
-      // Attribution logic per spec: copy for id-provided (purchase parts keep mandate/creditor),
-      // name-based (esp. Bargeld) use name + cleared fields.
       String cpName;
       String credId;
       String iban;
-      String mndt = (a.mandateId() != null ? a.mandateId() : parent.get(TRANSACTIONS.MANDATE_ID));
+      String mndt;
       if (a.counterpartyId() == null && a.displayName() != null) {
-        // name-based
         String dn = a.displayName();
-        cpName = dn.equalsIgnoreCase("Bargeld") ? "Bargeld" : trimNormalize(dn);
+        boolean bargeld = dn.equalsIgnoreCase(BARGELD_DISPLAY_NAME);
+        cpName = bargeld ? BARGELD_DISPLAY_NAME : trimNormalize(dn);
         credId = null;
         iban = null;
-        if (dn.equalsIgnoreCase("Bargeld")) {
-          mndt = null;
-        }
+        // name-based: only explicit allocation mandate; never inherit parent mandate
+        mndt = a.mandateId();
       } else {
-        // id-provided: copy parent's attribution fields so resolution + contracts/mandates work for purchase part
         cpName = parent.get(TRANSACTIONS.COUNTERPARTY_NAME);
         credId = parent.get(TRANSACTIONS.CREDITOR_ID);
         iban = parent.get(TRANSACTIONS.COUNTERPARTY_IBAN);
+        mndt = a.mandateId() != null ? a.mandateId() : parent.get(TRANSACTIONS.MANDATE_ID);
       }
 
-      db.insertInto(TRANSACTIONS)
-          .set(TRANSACTIONS.CONTENT_HASH, childHash)
-          .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
-          .set(TRANSACTIONS.IMPORT_ID, (Long) null)
-          .set(TRANSACTIONS.ACCOUNT_ID, parent.get(TRANSACTIONS.ACCOUNT_ID))
-          .set(TRANSACTIONS.BOOKING_DATE, parent.get(TRANSACTIONS.BOOKING_DATE))
-          .set(TRANSACTIONS.VALUE_DATE, parent.get(TRANSACTIONS.VALUE_DATE))
-          .set(TRANSACTIONS.AMOUNT, a.amount())
-          .set(TRANSACTIONS.CURRENCY, parent.get(TRANSACTIONS.CURRENCY))
-          .set(TRANSACTIONS.DIRECTION, parent.get(TRANSACTIONS.DIRECTION))
-          .set(TRANSACTIONS.BOOKING_STATUS, parent.get(TRANSACTIONS.BOOKING_STATUS))
-          .set(TRANSACTIONS.BOOKING_TEXT, parent.get(TRANSACTIONS.BOOKING_TEXT))
-          .set(TRANSACTIONS.REMITTANCE_INFO, a.remittanceInfo())
-          .set(TRANSACTIONS.GVC, parent.get(TRANSACTIONS.GVC))
-          .set(TRANSACTIONS.GVC_EXTENSION, parent.get(TRANSACTIONS.GVC_EXTENSION))
-          .set(TRANSACTIONS.PURPOSE_CODE, parent.get(TRANSACTIONS.PURPOSE_CODE))
-          .set(TRANSACTIONS.COUNTERPARTY_NAME, cpName)
-          .set(TRANSACTIONS.COUNTERPARTY_ULTIMATE_NAME, parent.get(TRANSACTIONS.COUNTERPARTY_ULTIMATE_NAME))
-          .set(TRANSACTIONS.COUNTERPARTY_IBAN, iban)
-          .set(TRANSACTIONS.COUNTERPARTY_BIC, parent.get(TRANSACTIONS.COUNTERPARTY_BIC))
-          .set(TRANSACTIONS.CREDITOR_ID, credId)
-          .set(TRANSACTIONS.MANDATE_ID, mndt)
-          .set(TRANSACTIONS.END_TO_END_ID, parent.get(TRANSACTIONS.END_TO_END_ID))
-          .set(TRANSACTIONS.SUBSEMBLY_ID, parent.get(TRANSACTIONS.SUBSEMBLY_ID))
-          .set(TRANSACTIONS.RAW, parent.get(TRANSACTIONS.RAW))
-          .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parent.get(TRANSACTIONS.CONTENT_HASH))
-          .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, parent.get(TRANSACTIONS.OCCURRENCE_INDEX))
-          .onConflict(TRANSACTIONS.CONTENT_HASH, TRANSACTIONS.OCCURRENCE_INDEX)
-          .doNothing()
-          .execute();
-      created++;
+      int inserted =
+          db.insertInto(TRANSACTIONS)
+              .set(TRANSACTIONS.CONTENT_HASH, childHash)
+              .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+              .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+              .set(TRANSACTIONS.ACCOUNT_ID, parent.get(TRANSACTIONS.ACCOUNT_ID))
+              .set(TRANSACTIONS.BOOKING_DATE, parent.get(TRANSACTIONS.BOOKING_DATE))
+              .set(TRANSACTIONS.VALUE_DATE, parent.get(TRANSACTIONS.VALUE_DATE))
+              .set(TRANSACTIONS.AMOUNT, a.amount())
+              .set(TRANSACTIONS.CURRENCY, parent.get(TRANSACTIONS.CURRENCY))
+              .set(TRANSACTIONS.DIRECTION, parent.get(TRANSACTIONS.DIRECTION))
+              .set(TRANSACTIONS.BOOKING_STATUS, parent.get(TRANSACTIONS.BOOKING_STATUS))
+              .set(TRANSACTIONS.BOOKING_TEXT, parent.get(TRANSACTIONS.BOOKING_TEXT))
+              .set(TRANSACTIONS.REMITTANCE_INFO, a.remittanceInfo())
+              .set(TRANSACTIONS.GVC, parent.get(TRANSACTIONS.GVC))
+              .set(TRANSACTIONS.GVC_EXTENSION, parent.get(TRANSACTIONS.GVC_EXTENSION))
+              .set(TRANSACTIONS.PURPOSE_CODE, parent.get(TRANSACTIONS.PURPOSE_CODE))
+              .set(TRANSACTIONS.COUNTERPARTY_NAME, cpName)
+              .set(
+                  TRANSACTIONS.COUNTERPARTY_ULTIMATE_NAME,
+                  parent.get(TRANSACTIONS.COUNTERPARTY_ULTIMATE_NAME))
+              .set(TRANSACTIONS.COUNTERPARTY_IBAN, iban)
+              .set(TRANSACTIONS.COUNTERPARTY_BIC, parent.get(TRANSACTIONS.COUNTERPARTY_BIC))
+              .set(TRANSACTIONS.CREDITOR_ID, credId)
+              .set(TRANSACTIONS.MANDATE_ID, mndt)
+              .set(TRANSACTIONS.END_TO_END_ID, parent.get(TRANSACTIONS.END_TO_END_ID))
+              .set(TRANSACTIONS.SUBSEMBLY_ID, parent.get(TRANSACTIONS.SUBSEMBLY_ID))
+              .set(TRANSACTIONS.RAW, parent.get(TRANSACTIONS.RAW))
+              .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parent.get(TRANSACTIONS.CONTENT_HASH))
+              .set(
+                  TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX,
+                  parent.get(TRANSACTIONS.OCCURRENCE_INDEX))
+              .execute();
+      created += inserted;
     }
 
     return new SplitTransactionAck(
@@ -723,7 +740,7 @@ public class WriteTools {
             .fetchOne()
             .get(COUNTERPARTIES.ID);
 
-    if (displayName.equalsIgnoreCase("Bargeld")) {
+    if (displayName.equalsIgnoreCase(BARGELD_DISPLAY_NAME)) {
       // auto nature as per spec; use "auto" source consistent with classify
       db.insertInto(COUNTERPARTY_TAGS)
           .set(COUNTERPARTY_TAGS.COUNTERPARTY_ID, id)
@@ -738,7 +755,7 @@ public class WriteTools {
   private String upperNormalize(String s) {
     if (s == null) return "";
     String n = Normalizer.normalize(s, Normalizer.Form.NFC).trim().replaceAll("\\s+", " ");
-    return n.toUpperCase();
+    return n.toUpperCase(Locale.ROOT);
   }
 
   private String trimNormalize(String s) {
