@@ -569,6 +569,13 @@ public class WriteTools {
       throw new IllegalArgumentException(
           "no such transaction: content_hash=" + tx.contentHash() + ", occurrence_index=" + occ);
     }
+    if (parent.get(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH) != null) {
+      throw new IllegalArgumentException(
+          "cannot split a child transaction; only raw (root) rows may be split: content_hash="
+              + tx.contentHash()
+              + ", occurrence_index="
+              + occ);
+    }
 
     boolean doUnsplit = Boolean.TRUE.equals(unsplit) || (allocations == null || allocations.isEmpty());
 
