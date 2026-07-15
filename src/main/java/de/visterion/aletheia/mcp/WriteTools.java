@@ -534,11 +534,13 @@ public class WriteTools {
           "Split an existing raw transaction into logical child positions (replace semantics)."
               + " If allocations is null/empty or unsplit=true, deletes all children (unsplit)."
               + " Otherwise validates that sum(allocations.amount) equals the original transaction"
-              + " amount exactly, deletes any prior children for this parent, creates name-based"
-              + " counterparties on demand (Bargeld auto gets nature=umbuchung), inserts"
-              + " deterministic synthetic child rows with split_parent_* backrefs, import_id=null,"
-              + " occurrence_index=0, and attribution copied/adjusted for correct resolution on"
-              + " purchase vs pseudo parts. Idempotent replace. All inside one transaction.")
+              + " amount exactly and that each allocation.amount is strictly positive, deletes any"
+              + " prior children for this parent, creates name-based counterparties on demand"
+              + " (Bargeld auto gets nature=umbuchung), inserts deterministic synthetic child rows"
+              + " with split_parent_* backrefs, import_id=null, occurrence_index=0, and attribution"
+              + " driven from counterpartyId identity (creditor_id/iban/name) or displayName for"
+              + " correct resolution on purchase vs pseudo parts. Idempotent replace. All inside"
+              + " one transaction.")
   public SplitTransactionAck splitTransaction(
       @ToolParam(description = "reference to the parent transaction to split (by natural key)")
           TxReference tx,
@@ -546,7 +548,7 @@ public class WriteTools {
               description =
                   "list of target allocations; null/empty triggers unsplit. Each allocation targets"
                       + " either an existing counterpartyId or a displayName (to create name-based"
-                      + " CP).",
+                      + " CP). Each allocation.amount must be strictly positive.",
               required = false)
           List<Allocation> allocations,
       @ToolParam(
