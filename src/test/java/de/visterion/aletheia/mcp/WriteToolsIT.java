@@ -567,4 +567,53 @@ class WriteToolsIT extends AbstractPostgresIT {
             .fetchOne();
     assertThat(withM.get(TRANSACTIONS.MANDATE_ID)).isEqualTo("MND-EXPLICIT");
   }
+
+  @Test
+  void splitTransactionByCounterpartyIdTargetsThatCounterpartyNotParent() {
+    String pHash = "parent-cpid-target-001";
+    seedParentTx(pHash, "CRED-REWE-CPID", "REWE Markt", "79.14", "MAND-REWE");
+    resolver.run(null);
+    long merchantId =
+        db.select(COUNTERPARTIES.ID)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.IDENTITY_VALUE.eq("CRED-REWE-CPID"))
+            .fetchOne(COUNTERPARTIES.ID);
+
+    // Create Bargeld CP via name-based split, then unsplit so we can re-split by id
+    var seedAck =
+        writeTools.splitTransaction(
+            new TxReference(pHash, 0),
+            List.of(
+                new Allocation(merchantId, null, null, new BigDecimal("50.00"), "purchase"),
+                new Allocation(null, "Bargeld", null, new BigDecimal("29.14"), "cash")),
+            null);
+    long bargeldId = seedAck.createdCounterpartyIds().get(0);
+    writeTools.splitTransaction(new TxReference(pHash, 0), null, true);
+
+    // Re-split: cash via Bargeld counterpartyId, purchase via merchant id
+    writeTools.splitTransaction(
+        new TxReference(pHash, 0),
+        List.of(
+            new Allocation(merchantId, null, null, new BigDecimal("50.00"), "purchase"),
+            new Allocation(bargeldId, null, null, new BigDecimal("29.14"), "cash")),
+        null);
+
+    var cash =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .and(TRANSACTIONS.AMOUNT.eq(new BigDecimal("29.14")))
+            .fetchOne();
+    assertThat(cash.get(TRANSACTIONS.COUNTERPARTY_NAME)).isEqualTo("Bargeld");
+    assertThat(cash.get(TRANSACTIONS.CREDITOR_ID)).isNull();
+    assertThat(cash.get(TRANSACTIONS.MANDATE_ID)).isNull();
+    assertThat(cash.get(TRANSACTIONS.COUNTERPARTY_IBAN)).isNull();
+
+    var purchase =
+        db.selectFrom(TRANSACTIONS)
+            .where(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH.eq(pHash))
+            .and(TRANSACTIONS.AMOUNT.eq(new BigDecimal("50.00")))
+            .fetchOne();
+    assertThat(purchase.get(TRANSACTIONS.CREDITOR_ID)).isEqualTo("CRED-REWE-CPID");
+    assertThat(purchase.get(TRANSACTIONS.MANDATE_ID)).isEqualTo("MAND-REWE");
+  }
 }

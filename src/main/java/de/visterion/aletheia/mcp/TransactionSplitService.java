@@ -104,8 +104,58 @@ public class TransactionSplitService {
       String childHash = syntheticSplitHash(tx.contentHash(), i);
 
       Long cpId = a.counterpartyId();
+      String cpName;
+      String credId;
+      String iban;
+      String mndt;
+
       if (cpId != null) {
-        requireExistingCounterparty(cpId);
+        var cp =
+            db.select(
+                    COUNTERPARTIES.IDENTITY_TYPE,
+                    COUNTERPARTIES.IDENTITY_VALUE,
+                    COUNTERPARTIES.DISPLAY_NAME)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.ID.eq(cpId))
+                .fetchOne();
+        if (cp == null) {
+          throw new IllegalArgumentException("no such counterparty: " + cpId);
+        }
+        String idType = cp.get(COUNTERPARTIES.IDENTITY_TYPE);
+        String idValue = cp.get(COUNTERPARTIES.IDENTITY_VALUE);
+        String displayName = cp.get(COUNTERPARTIES.DISPLAY_NAME);
+        String parentCreditor = parent.get(TRANSACTIONS.CREDITOR_ID);
+
+        if ("creditor_id".equals(idType)) {
+          credId = idValue;
+          boolean sameAsParent =
+              parentCreditor != null && parentCreditor.equals(idValue);
+          cpName =
+              sameAsParent
+                  ? parent.get(TRANSACTIONS.COUNTERPARTY_NAME)
+                  : (displayName != null ? displayName : idValue);
+          iban = null;
+          mndt =
+              sameAsParent
+                  ? (a.mandateId() != null ? a.mandateId() : parent.get(TRANSACTIONS.MANDATE_ID))
+                  : a.mandateId();
+        } else if ("iban".equals(idType)) {
+          iban = idValue;
+          credId = null;
+          cpName = displayName != null ? displayName : idValue;
+          mndt = a.mandateId();
+        } else {
+          // name (pseudo) or other identity: name-based attribution
+          boolean bargeld =
+              displayName != null && displayName.equalsIgnoreCase(BARGELD_DISPLAY_NAME);
+          cpName =
+              bargeld
+                  ? BARGELD_DISPLAY_NAME
+                  : (displayName != null ? trimNormalize(displayName) : idValue);
+          credId = null;
+          iban = null;
+          mndt = a.mandateId();
+        }
       } else if (a.displayName() != null && !a.displayName().isBlank()) {
         // check pre-existence BEFORE ensure (for createdCpIds ack)
         String normForCheck = upperNormalize(a.displayName());
@@ -120,17 +170,7 @@ public class TransactionSplitService {
           createdCpIds.add(ensured);
         }
         cpId = ensured;
-      } else {
-        throw new IllegalArgumentException(
-            "allocation requires either counterpartyId or displayName");
-      }
-      // cpId validates existence / tracks created CPs; row identity is via attribution fields
 
-      String cpName;
-      String credId;
-      String iban;
-      String mndt;
-      if (a.counterpartyId() == null && a.displayName() != null) {
         String dn = a.displayName();
         boolean bargeld = dn.equalsIgnoreCase(BARGELD_DISPLAY_NAME);
         cpName = bargeld ? BARGELD_DISPLAY_NAME : trimNormalize(dn);
@@ -139,10 +179,8 @@ public class TransactionSplitService {
         // name-based: only explicit allocation mandate; never inherit parent mandate
         mndt = a.mandateId();
       } else {
-        cpName = parent.get(TRANSACTIONS.COUNTERPARTY_NAME);
-        credId = parent.get(TRANSACTIONS.CREDITOR_ID);
-        iban = parent.get(TRANSACTIONS.COUNTERPARTY_IBAN);
-        mndt = a.mandateId() != null ? a.mandateId() : parent.get(TRANSACTIONS.MANDATE_ID);
+        throw new IllegalArgumentException(
+            "allocation requires either counterpartyId or displayName");
       }
 
       int inserted =
@@ -254,17 +292,6 @@ public class TransactionSplitService {
         .set(COUNTERPARTY_TAGS.SOURCE, "auto")
         .onConflictDoNothing()
         .execute();
-  }
-
-  private void requireExistingCounterparty(long counterpartyId) {
-    String status =
-        db.select(COUNTERPARTIES.STATUS)
-            .from(COUNTERPARTIES)
-            .where(COUNTERPARTIES.ID.eq(counterpartyId))
-            .fetchOne(COUNTERPARTIES.STATUS);
-    if (status == null) {
-      throw new IllegalArgumentException("no such counterparty: " + counterpartyId);
-    }
   }
 
   private static String upperNormalize(String s) {
