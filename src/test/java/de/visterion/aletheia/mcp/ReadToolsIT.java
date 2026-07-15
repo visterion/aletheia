@@ -403,4 +403,138 @@ class ReadToolsIT extends AbstractPostgresIT {
     assertThat(result.columns()).containsExactly("note");
     assertThat(result.rows().get(0).get("note")).isEqualTo("paid into account");
   }
+
+  @Test
+  void counterpartyTransactionsAppliesLogicalFilterHidesParentsShowsChildren() {
+    // Verify the filter in COUNTERPARTY_TRANSACTIONS_SQL (and IDENTITY subquery).
+    long imp = importId();
+    String parentHash = "parent-for-txlist-001";
+    LocalDate d = LocalDate.of(2025, 7, 10);
+    insertTxn(imp, parentHash, d, "79.14", "DBIT", "CDTR-TXLIST", null, "Merchant Split");
+    // Simulate split children (as produced by split tool; purchase keeps attribution).
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-purch-txlist")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, d)
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("50.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Merchant Split")
+        .set(TRANSACTIONS.CREDITOR_ID, "CDTR-TXLIST")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-bargeld-txlist")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, d)
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("29.14"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Bargeld")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    // TP2: Bargeld CP is created by split tool (not by resolver from child rows).
+    // Manually seed name-based CP here (test simulates children directly).
+    db.insertInto(COUNTERPARTIES)
+        .set(COUNTERPARTIES.IDENTITY_TYPE, "name")
+        .set(COUNTERPARTIES.IDENTITY_VALUE, "BARGELD")
+        .set(COUNTERPARTIES.DISPLAY_NAME, "Bargeld")
+        .execute();
+
+    resolver.run(null); // ensure CP for merchant attribution from parent row
+
+    long merchantId = counterpartyIdFor("CDTR-TXLIST");
+    List<TransactionView> forMerchant = readTools.counterpartyTransactions(merchantId, null, null, null);
+    // Parent hidden; only the purchase child (same attribution) is shown for merchant.
+    assertThat(forMerchant).hasSize(1);
+    assertThat(forMerchant.get(0).amount()).isEqualByComparingTo("50.00");
+    assertThat(forMerchant.get(0).remittanceInfo()).isNull(); // not set on child in this test setup
+    assertThat(forMerchant.get(0).creditorId()).isEqualTo("CDTR-TXLIST");
+
+    // The bargeld child appears only under its own (name-based) counterparty.
+    long bargeldId = counterpartyIdFor("BARGELD"); // normalized upper name
+    List<TransactionView> forBargeld = readTools.counterpartyTransactions(bargeldId, null, null, null);
+    assertThat(forBargeld).hasSize(1);
+    assertThat(forBargeld.get(0).amount()).isEqualByComparingTo("29.14");
+    assertThat(forBargeld.get(0).counterpartyName()).isEqualTo("Bargeld");
+  }
+
+  @Test
+  void listCounterpartiesAndEvidenceUseLogicalViewParentsHiddenChildrenVisibleWithCorrectData() {
+    // list_counterparties (via evidence joins) and v_*_evidence must reflect logical only.
+    long imp = importId();
+    String parentHash = "parent-for-listcp-001";
+    LocalDate d = LocalDate.now().minusDays(2);
+    insertTxn(imp, parentHash, d, "79.14", "DBIT", "CDTR-LCP", null, "Split Merchant");
+    // Children (logical positions)
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-purch-lcp")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, d)
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("50.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Split Merchant")
+        .set(TRANSACTIONS.CREDITOR_ID, "CDTR-LCP")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-bargeld-lcp")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, d)
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("29.14"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Bargeld")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    // TP2: manually seed Bargeld name-based CP (resolver now ignores children; "Bargeld"
+    // only via split tool in production flows).
+    db.insertInto(COUNTERPARTIES)
+        .set(COUNTERPARTIES.IDENTITY_TYPE, "name")
+        .set(COUNTERPARTIES.IDENTITY_VALUE, "BARGELD")
+        .set(COUNTERPARTIES.DISPLAY_NAME, "Bargeld")
+        .execute();
+
+    resolver.run(null);
+
+    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null);
+    // Both the original merchant (now via child) and Bargeld must appear (CP pre-seeded).
+    assertThat(summaries).extracting(CounterpartySummary::displayName)
+        .contains("Split Merchant", "Bargeld");
+
+    CounterpartySummary merchant = summaries.stream()
+        .filter(s -> "Split Merchant".equals(s.displayName()))
+        .findFirst().orElseThrow();
+    // Evidence must be based on the 50 child only (parent hidden by view filter).
+    assertThat(merchant.evidence()).isNotNull();
+    assertThat(merchant.evidence().txnCount()).isEqualTo(1);
+    assertThat(merchant.evidence().spendLast365d()).isEqualByComparingTo("50.00");
+    assertThat(merchant.evidence().debitLast365d()).isEqualByComparingTo("50.00");
+
+    CounterpartySummary bargeld = summaries.stream()
+        .filter(s -> "Bargeld".equals(s.displayName()))
+        .findFirst().orElseThrow();
+    assertThat(bargeld.evidence()).isNotNull();
+    assertThat(bargeld.evidence().txnCount()).isEqualTo(1);
+    assertThat(bargeld.evidence().spendLast365d()).isEqualByComparingTo("29.14");
+  }
 }

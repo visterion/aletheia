@@ -20,4 +20,11 @@ class ToolPermissionServiceTest {
     assertThat(allowed).contains("confirm_counterparty", "dismiss_counterparty");
     assertThat(allowed).doesNotContain("confirm", "dismiss");
   }
+
+  @Test
+  void writerToolsIncludeSplitTransaction() {
+    var allowed = service.allowedTools(AuthRole.WRITER);
+    assertThat(allowed).contains("split_transaction");
+    assertThat(service.allowedTools(AuthRole.READER)).doesNotContain("split_transaction");
+  }
 }

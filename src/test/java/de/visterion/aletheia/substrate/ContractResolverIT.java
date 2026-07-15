@@ -158,4 +158,56 @@ class ContractResolverIT extends AbstractPostgresIT {
     // median of {811.75, 811.75, 830.00, 830.00} = 820.875 -> stored per NUMERIC(15,2)
     assertThat(typical).isGreaterThan(new BigDecimal("811.75"));
   }
+
+  @Test
+  void ignoresSplitChildrenSoTheyDoNotCreateContracts() {
+    // TP2: ContractResolver must ignore children. Purchase child parts (even with mandate)
+    // must not produce contracts. Only parent raw rows drive auto contracts.
+    long cp = seedCounterparty("CR-CHILDIGNORE");
+
+    // Two months of *child* rows (would qualify if counted, but must be ignored).
+    String parentRef = "p-for-contract-ignore";
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-c1")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.parse("2025-01-01"))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("100.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.CREDITOR_ID, "CR-CHILDIGNORE")
+        .set(TRANSACTIONS.MANDATE_ID, "MND-CHILD")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentRef)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-c2")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.parse("2025-02-01"))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("100.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.CREDITOR_ID, "CR-CHILDIGNORE")
+        .set(TRANSACTIONS.MANDATE_ID, "MND-CHILD")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentRef)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    new ContractResolver(db).run(null);
+
+    assertThat(contractCount("CR-CHILDIGNORE")).isZero();
+
+    // Now add real parent rows (qualifying) -> contract appears.
+    booking("CR-CHILDIGNORE", "MND-CHILD", "2025-03-01", "100.00");
+    booking("CR-CHILDIGNORE", "MND-CHILD", "2025-04-01", "100.00");
+
+    new ContractResolver(db).run(null);
+
+    assertThat(contractCount("CR-CHILDIGNORE")).isEqualTo(1);
+  }
 }
