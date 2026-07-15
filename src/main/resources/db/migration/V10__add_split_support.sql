@@ -1,12 +1,24 @@
 -- Add split support columns for logical child rows (parents keep NULL).
+/* logical filter must match TransactionLayerSql.notExistsSupersededParent */
 
 ALTER TABLE transactions ADD COLUMN split_parent_content_hash TEXT;
 ALTER TABLE transactions ADD COLUMN split_parent_occurrence_index INT;
 
+-- Both-or-neither: no half-set parent refs (no composite FK — soft backref is intentional).
+ALTER TABLE transactions
+  ADD CONSTRAINT chk_transactions_split_parent_pair
+  CHECK (
+    (split_parent_content_hash IS NULL AND split_parent_occurrence_index IS NULL)
+    OR
+    (split_parent_content_hash IS NOT NULL AND split_parent_occurrence_index IS NOT NULL)
+  );
+
 -- Children are synthetic (not bank imports) so allow NULL (spec).
 ALTER TABLE transactions ALTER COLUMN import_id DROP NOT NULL;
 
-CREATE INDEX idx_transactions_split_parent ON transactions (split_parent_content_hash, split_parent_occurrence_index) WHERE split_parent_content_hash IS NOT NULL;
+CREATE INDEX idx_transactions_split_parent
+  ON transactions (split_parent_content_hash, split_parent_occurrence_index)
+  WHERE split_parent_content_hash IS NOT NULL;
 
 -- TP2: recreate evidence views with logical filter (NOT EXISTS on split_parent_*).
 -- This must live in V10 (after columns added) so that V5/V8/V9 (pre-column) apply cleanly.
