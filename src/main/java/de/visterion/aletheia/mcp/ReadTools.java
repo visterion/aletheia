@@ -8,6 +8,7 @@ import static de.visterion.aletheia.jooq.Tables.V_CONTRACT_EVIDENCE;
 import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
+import de.visterion.aletheia.substrate.TransactionLayerSql;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -111,14 +112,11 @@ public class ReadTools {
                       upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
               END AS identity_value
           FROM transactions t
-          -- Core logical filter (TP2 spec §2.3 / §4.1): exclude superseded parents; only current
-          -- leaf positions (children + unsplit) participate in identity resolution and listing.
-          -- Exact NOT EXISTS form matches the one used in aggregate for consistency.
-          WHERE NOT EXISTS (
-              SELECT 1 FROM transactions c
-              WHERE c.split_parent_content_hash = t.content_hash
-                AND c.split_parent_occurrence_index = t.occurrence_index
-          )
+          """
+          + " WHERE "
+          + TransactionLayerSql.notExistsSupersededParent("t")
+          + "\n"
+          + """
       ) i
       JOIN counterparties c ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value
       WHERE c.id = ?
@@ -154,16 +152,9 @@ public class ReadTools {
                   upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
           END AS identity_value
       FROM transactions t
-      -- Core logical filter (TP2 spec §2.3 / §4.1): exclude superseded parents so that
-      -- identity-resolved reads (used by aggregate when scoped) only see current logical
-      -- positions. The aggregate appends an equivalent filter for the direct-t path.
-      -- Exact NOT EXISTS matches aggregate for consistency.
-      WHERE NOT EXISTS (
-          SELECT 1 FROM transactions c
-          WHERE c.split_parent_content_hash = t.content_hash
-            AND c.split_parent_occurrence_index = t.occurrence_index
-      )
-      """;
+      """
+          + " WHERE "
+          + TransactionLayerSql.notExistsSupersededParent("t");
 
   private final DSLContext db;
   private final DSLContext roDsl;
@@ -265,17 +256,12 @@ public class ReadTools {
       binds.addAll(ids);
     }
 
-    // Core logical filter (TP2 spec §2.3 / §4.1): hide parent rows that have split children.
-    // Uses NOT EXISTS on split_parent_* backrefs. Applied to base rows before GROUP BY.
-    // The IDENTITY subselect already embeds the same filter; this append ensures the direct
-    // unscoped path (FROM transactions t) also sees only current logical positions (leaves).
-    // Parents with children excluded; children + unsplit rows remain. sql_query/raw see all.
-    sql.append("AND NOT EXISTS (")
-        .append("SELECT 1 FROM transactions c WHERE c.split_parent_content_hash = ")
-        .append(txnAlias)
-        .append(".content_hash AND c.split_parent_occurrence_index = ")
-        .append(txnAlias)
-        .append(".occurrence_index) ");
+    // When joinIdentity: IDENTITY subselect already applied the filter — do not double-append.
+    if (!joinIdentity) {
+      sql.append("AND ")
+          .append(TransactionLayerSql.notExistsSupersededParent(txnAlias))
+          .append(" ");
+    }
 
     // A TOTAL period is the string literal 'total', not a real column expression -- Postgres
     // rejects a bare string constant in GROUP BY (same rule as ORDER BY above), and it doesn't
