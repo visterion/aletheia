@@ -30,11 +30,20 @@ public final class FileNameSanitizer {
     String stem = base.toLowerCase(java.util.Locale.ROOT).endsWith(".json")
         ? base.substring(0, base.length() - ".json".length())
         : base;
+    // Collapse any run of dots (e.g. "..") to a single dot, then strip leading/trailing dots
+    // so the returned filename can never contain "..", regardless of where it occurred.
+    stem = stem.replaceAll("\\.{2,}", ".");
+    stem = stem.replaceAll("^\\.+|\\.+$", "");
     if (stem.isBlank()) {
       return DEFAULT;
     }
     if (stem.length() > MAX_STEM) {
       stem = stem.substring(0, MAX_STEM);
+    }
+    // Truncation may have exposed a new trailing dot; strip it before appending the extension.
+    stem = stem.replaceAll("\\.+$", "");
+    if (stem.isBlank()) {
+      return DEFAULT;
     }
     return stem + ".json";
   }
