@@ -10,6 +10,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.unit.DataSize;
 
 class IngestRunnerIT extends AbstractPostgresIT {
 
@@ -29,7 +30,8 @@ class IngestRunnerIT extends AbstractPostgresIT {
         "[{\"OwnrAcctIBAN\":\"DE1\",\"Amt\":\"10.00\",\"AmtCcy\":\"EUR\",\"CdtDbtInd\":\"DBIT\","
             + "\"BookgDt\":\"2026-08-01\",\"BookgSts\":\"BOOK\",\"RmtdNm\":\"A\",\"RmtInf\":\"x\"}]");
 
-    var runner = new IngestRunner(new IngestProperties(dir), ingestService);
+    var runner =
+        new IngestRunner(new IngestProperties(dir, DataSize.ofMegabytes(32)), ingestService);
     runner.run(null);
 
     assertThat(db.fetchCount(Tables.TRANSACTIONS)).isEqualTo(1); // good file ingested, bad skipped
@@ -38,7 +40,9 @@ class IngestRunnerIT extends AbstractPostgresIT {
   @Test
   void missingDirIsANoOp() throws Exception {
     var runner =
-        new IngestRunner(new IngestProperties(Path.of("target/definitely-missing")), ingestService);
+        new IngestRunner(
+            new IngestProperties(Path.of("target/definitely-missing"), DataSize.ofMegabytes(32)),
+            ingestService);
     runner.run(null); // must not throw
     assertThat(db.fetchCount(Tables.IMPORTS)).isZero();
   }
