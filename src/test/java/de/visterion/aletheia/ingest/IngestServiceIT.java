@@ -136,7 +136,7 @@ class IngestServiceIT extends AbstractPostgresIT {
             + "\"BookgDt\":\"2026-08-01\",\"BookgSts\":\"BOOK\",\"RmtdNm\":\"A\",\"RmtInf\":\"x\"}]";
     org.assertj.core.api.Assertions.assertThatThrownBy(
             () -> ingestService.ingest(write(dir, "bad.json", json)))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(InvalidExportException.class);
     assertThat(txCount()).isZero(); // rolled back
   }
 
@@ -151,7 +151,7 @@ class IngestServiceIT extends AbstractPostgresIT {
 
     org.assertj.core.api.Assertions.assertThatThrownBy(
             () -> ingestService.ingest(write(dir, "mixed.json", json)))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(InvalidExportException.class);
 
     assertThat(db.fetchCount(Tables.TRANSACTIONS)).isZero();
     assertThat(db.fetchCount(Tables.IMPORTS)).isZero();

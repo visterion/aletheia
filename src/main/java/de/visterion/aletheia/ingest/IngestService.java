@@ -110,7 +110,14 @@ public class IngestService {
 
     Map<String, Integer> occurrence = new HashMap<>();
     for (SubsemblyBooking b : booked) {
-      String hash = b.contentHash(); // throws IllegalArgumentException on bad amount -> rolls back
+      String hash;
+      try {
+        hash = b.contentHash();
+      } catch (IllegalArgumentException ignored) {
+        // Sanitized message only -- the underlying message may echo the raw amount/booking
+        // content, so it is not propagated here (spec §8: invalid export -> 400, not 500).
+        throw new InvalidExportException("invalid booking amount in export");
+      }
       int idx = occurrence.merge(hash, 0, (old, z) -> old + 1);
       insertBooking(b, hash, idx, importId);
     }
