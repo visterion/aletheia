@@ -123,6 +123,11 @@ public class ContractResolver implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments args) {
+    resolve();
+  }
+
+  /** Idempotent contract + recurring upsert. Callable at startup and after each ingest. */
+  public void resolve() {
     int contracts = db.execute(UPSERT_CONTRACTS);
     int recurring = db.execute(UPSERT_RECURRING);
     Integer orphans = db.fetchOne(COUNT_ORPHAN_MANDATES).get(0, Integer.class);
