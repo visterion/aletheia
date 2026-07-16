@@ -97,6 +97,11 @@ public class CounterpartyResolver implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments args) {
+    resolve();
+  }
+
+  /** Idempotent counterparty upsert. Callable at startup and after each ingest. */
+  public void resolve() {
     int affected = db.execute(UPSERT_COUNTERPARTIES);
     log.info("Counterparty resolution inserted or refreshed {} counterparties", affected);
   }
