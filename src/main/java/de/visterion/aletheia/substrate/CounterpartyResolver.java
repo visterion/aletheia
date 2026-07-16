@@ -97,7 +97,13 @@ public class CounterpartyResolver implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments args) {
-    resolve();
+    try {
+      resolve();
+    } catch (RuntimeException e) {
+      log.warn(
+          "Startup counterparty resolution failed; will retry on next ingest/restart: {}",
+          e.toString());
+    }
   }
 
   /** Idempotent counterparty upsert. Callable at startup and after each ingest. */
