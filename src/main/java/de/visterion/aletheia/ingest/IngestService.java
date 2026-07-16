@@ -82,7 +82,7 @@ public class IngestService {
     List<SubsemblyBooking> all;
     try {
       all = parser.parse(new java.io.ByteArrayInputStream(bytes));
-    } catch (IllegalArgumentException e) {
+    } catch (IllegalArgumentException ignored) {
       // Sanitized message only -- the parser's own message may echo JSON content, so it is not
       // propagated here.
       throw new InvalidExportException("malformed or invalid Subsembly export");

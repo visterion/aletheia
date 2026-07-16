@@ -57,6 +57,34 @@ class IngestEndpointServiceIT extends AbstractPostgresIT {
     assertThat(list(properties.dir().resolve("incoming"))).isEmpty();
   }
 
+  /**
+   * Forces the archive {@code Files.move} to fail with a genuine {@link IOException} (not a
+   * {@link RuntimeException}) by making {@code imported/} a symlink into tmpfs ({@code
+   * /dev/shm}), so the {@code ATOMIC_MOVE} crosses a filesystem boundary and the kernel rejects
+   * it with {@code AtomicMoveNotSupportedException} -- a constraint that holds even for root, so
+   * it is deterministic rather than relying on POSIX permissions. Asserts the working file is
+   * still deleted (spec: never leave anything in {@code incoming/}) even though the failure is
+   * an {@code IOException} raised after ingest + resolvers already committed.
+   */
+  @Test
+  void archiveMoveFailureAcrossFilesystemsStillDeletesWorkingFile() throws Exception {
+    Path imported = properties.dir().resolve("imported");
+    Files.deleteIfExists(imported);
+    Path tmpfsTarget = Files.createTempDirectory(Path.of("/dev/shm"), "aletheia-imported-it-");
+    Files.createSymbolicLink(imported, tmpfsTarget);
+
+    try {
+      assertThatThrownBy(
+              () -> service.ingestUpload(SYNTHETIC_ONE_BOOKING_JSON.getBytes(UTF_8), "girokonto.json"))
+          .isInstanceOf(UncheckedIOException.class);
+
+      assertThat(list(properties.dir().resolve("incoming"))).isEmpty();
+    } finally {
+      Files.delete(imported);
+      deleteRecursively(tmpfsTarget);
+    }
+  }
+
   private static java.util.List<Path> list(Path dir) throws IOException {
     if (!Files.exists(dir)) {
       return java.util.List.of();
