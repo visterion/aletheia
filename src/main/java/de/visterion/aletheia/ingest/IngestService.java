@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import org.jooq.DSLContext;
 import org.jooq.JSONB;
+import org.jooq.exception.DataAccessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -40,7 +41,33 @@ public class IngestService {
   }
 
   public ImportSummary ingest(Path file, String originalFileName) {
-    return tx.execute(status -> doIngest(file, originalFileName));
+    try {
+      return tx.execute(status -> doIngest(file, originalFileName));
+    } catch (DataAccessException e) {
+      if (isImportsFileShaDuplicate(e)) {
+        log.info("Concurrent import of already-imported content; treating as skipped");
+        return ImportSummary.skipped();
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * True only for a Postgres SQLState 23505 unique violation on the {@code
+   * imports.file_sha256} key. A unique violation aborts the transaction, so this must be
+   * checked only after {@code tx.execute} has returned (rolled back), never inside the
+   * transactional callback.
+   */
+  private static boolean isImportsFileShaDuplicate(DataAccessException e) {
+    Throwable t = e;
+    while (t != null) {
+      if (t instanceof java.sql.SQLException sql && "23505".equals(sql.getSQLState())) {
+        String msg = String.valueOf(sql.getMessage());
+        return msg.contains("file_sha256");
+      }
+      t = t.getCause();
+    }
+    return false;
   }
 
   private ImportSummary doIngest(Path file, String originalFileName) {
