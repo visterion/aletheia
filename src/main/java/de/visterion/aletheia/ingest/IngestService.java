@@ -36,10 +36,14 @@ public class IngestService {
   }
 
   public ImportSummary ingest(Path file) {
-    return tx.execute(status -> doIngest(file));
+    return ingest(file, file.getFileName().toString());
   }
 
-  private ImportSummary doIngest(Path file) {
+  public ImportSummary ingest(Path file, String originalFileName) {
+    return tx.execute(status -> doIngest(file, originalFileName));
+  }
+
+  private ImportSummary doIngest(Path file, String originalFileName) {
     byte[] bytes = readBytes(file);
     String sha = sha256Hex(bytes);
 
@@ -61,7 +65,7 @@ public class IngestService {
 
     long importId =
         db.insertInto(IMPORTS)
-            .set(IMPORTS.FILE_NAME, file.getFileName().toString())
+            .set(IMPORTS.FILE_NAME, originalFileName)
             .set(IMPORTS.FILE_SHA256, sha)
             .set(IMPORTS.ACCOUNT_ID, accountId)
             .set(IMPORTS.PERIOD_START, periodStart)
