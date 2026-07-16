@@ -25,9 +25,16 @@ spring:
         # Streamable HTTP transport, same shape as HiveMem/Agora
         protocol: STREAMABLE
 
+  servlet:
+    multipart:
+      max-file-size: ${ALETHEIA_INGEST_MULTIPART_MAX:40MB}
+      max-request-size: ${ALETHEIA_INGEST_MULTIPART_MAX:40MB}
+
 aletheia:
   ingest:
     dir: ${ALETHEIA_INGEST_DIR:exports}
+    max-file-size: ${ALETHEIA_INGEST_MAX_FILE_SIZE:32MB}
+    # app:/ro: blocks below are UNCHANGED (do not fix here - separate task)
     # Two datasources (spec §6/§7). Both default to empty so DataSourceConfig's fallback chain
     # (explicit props -> @ServiceConnection JdbcConnectionDetails -> spring.datasource.*) applies:
     # in prod set the env vars below; in single-datasource/test setups the fallback keeps working.
