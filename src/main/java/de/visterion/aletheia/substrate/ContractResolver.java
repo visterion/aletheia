@@ -123,7 +123,13 @@ public class ContractResolver implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments args) {
-    resolve();
+    try {
+      resolve();
+    } catch (RuntimeException e) {
+      log.warn(
+          "Startup contract resolution failed; will retry on next ingest/restart: {}",
+          e.toString());
+    }
   }
 
   /** Idempotent contract + recurring upsert. Callable at startup and after each ingest. */
