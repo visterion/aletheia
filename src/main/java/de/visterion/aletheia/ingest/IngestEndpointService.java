@@ -59,9 +59,12 @@ public class IngestEndpointService {
         Files.move(
             working, imported.resolve(uuid + "-" + safeName), StandardCopyOption.ATOMIC_MOVE);
         return IngestResponse.from(safeName, summary);
-      } catch (RuntimeException e) {
+      } catch (RuntimeException | IOException e) {
         deleteQuietly(working);
-        throw e;
+        if (e instanceof RuntimeException re) {
+          throw re;
+        }
+        throw new UncheckedIOException("archive failed", (IOException) e);
       }
     } catch (IOException e) {
       throw new UncheckedIOException("upload staging failed", e);
