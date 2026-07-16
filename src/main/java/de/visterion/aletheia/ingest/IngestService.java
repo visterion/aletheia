@@ -54,16 +54,16 @@ public class IngestService {
 
   /**
    * True only for a Postgres SQLState 23505 unique violation on the {@code
-   * imports.file_sha256} key. A unique violation aborts the transaction, so this must be
-   * checked only after {@code tx.execute} has returned (rolled back), never inside the
-   * transactional callback.
+   * imports_file_sha256_key} constraint. A unique violation aborts the transaction, so this
+   * must be checked only after {@code tx.execute} has returned (rolled back), never inside
+   * the transactional callback.
    */
   private static boolean isImportsFileShaDuplicate(DataAccessException e) {
     Throwable t = e;
     while (t != null) {
       if (t instanceof java.sql.SQLException sql && "23505".equals(sql.getSQLState())) {
         String msg = String.valueOf(sql.getMessage());
-        return msg.contains("file_sha256");
+        return msg.contains("imports_file_sha256_key");
       }
       t = t.getCause();
     }
