@@ -48,10 +48,26 @@ Banking4 -> Subsembly JSON export -> Ingest -> Postgres -> Aletheia MCP <-> Clau
 
 ## Ingesting a Banking4 export
 
+### File-based import (on startup)
+
 Drop a Subsembly JSON export into the directory named by `aletheia.ingest.dir`
 (default `exports/`, gitignored) and start the app. Ingest is idempotent —
 re-importing overlapping periods inserts no duplicates. Only booked
 transactions are stored; pending bookings are skipped.
+
+### HTTP upload (restartless)
+
+POST a Banking4 Subsembly JSON export to the authenticated `POST /ingest` endpoint
+without restarting the application. The endpoint accepts multipart file uploads and
+requires a WRITER or ADMIN bearer token (same auth as the MCP interface). The
+service is reachable over the existing private transports Aletheia uses: Cloudflare
+Tunnel, LAN, or Tailscale.
+
+Ingest via HTTP is idempotent: re-uploading the same export is safe and results in
+no duplicate transactions (content hash deduplication).
+
+**Clients (follow-on):** An iOS Shortcut (integrate with the Banking4 share sheet)
+and an Android PWA (Web Share Target) provide one-tap uploads from the mobile app.
 
 ## Tagging model
 
