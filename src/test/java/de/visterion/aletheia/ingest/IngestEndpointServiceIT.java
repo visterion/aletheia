@@ -68,6 +68,10 @@ class IngestEndpointServiceIT extends AbstractPostgresIT {
    */
   @Test
   void archiveMoveFailureAcrossFilesystemsStillDeletesWorkingFile() throws Exception {
+    // On a clean build target/test-no-ingest-dir does not exist yet (only the service itself
+    // creates it, on first ingestUpload call), so create it here before linking into it --
+    // otherwise Files.createSymbolicLink below fails with NoSuchFileException.
+    Files.createDirectories(properties.dir());
     Path imported = properties.dir().resolve("imported");
     Files.deleteIfExists(imported);
     Path tmpfsTarget = Files.createTempDirectory(Path.of("/dev/shm"), "aletheia-imported-it-");
