@@ -34,4 +34,19 @@ class FileNameSanitizerTest {
     String longName = "a".repeat(500) + ".json";
     assertThat(FileNameSanitizer.sanitize(longName).length()).isLessThanOrEqualTo(125);
   }
+
+  @Test
+  void embeddedDoubleDotNeverSurvives() {
+    String result = FileNameSanitizer.sanitize("report..json");
+    assertThat(result).doesNotContain("..");
+    assertThat(result).endsWith(".json");
+  }
+
+  @Test
+  void truncationExposingTrailingDotNeverSurvives() {
+    String longName = "a".repeat(119) + "." + "b.json";
+    String result = FileNameSanitizer.sanitize(longName);
+    assertThat(result).doesNotContain("..");
+    assertThat(result).endsWith(".json");
+  }
 }
