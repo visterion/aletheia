@@ -79,7 +79,14 @@ public class IngestService {
       return ImportSummary.skipped();
     }
 
-    List<SubsemblyBooking> all = parser.parse(new java.io.ByteArrayInputStream(bytes));
+    List<SubsemblyBooking> all;
+    try {
+      all = parser.parse(new java.io.ByteArrayInputStream(bytes));
+    } catch (IllegalArgumentException e) {
+      // Sanitized message only -- the parser's own message may echo JSON content, so it is not
+      // propagated here.
+      throw new InvalidExportException("malformed or invalid Subsembly export");
+    }
     List<SubsemblyBooking> booked = all.stream().filter(SubsemblyBooking::isBooked).toList();
     int pendingIgnored = all.size() - booked.size();
 
