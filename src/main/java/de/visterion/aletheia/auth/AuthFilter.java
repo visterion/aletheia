@@ -22,11 +22,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Bearer/OAuth authentication filter guarding {@code /mcp}. Ported from HiveMem's {@code
- * com.hivemem.auth.AuthFilter}; the {@code /admin} session-web-UI delegation to {@code
- * com.hivemem.web.SessionAuthFilter} is dropped (spec §6, adversarial review M3) — Aletheia has
- * no admin GUI, so {@code /mcp} is bearer/OAuth-token-only and an unauthenticated request gets a
- * plain 401, never a 302 redirect.
+ * Bearer/OAuth authentication filter guarding {@code /mcp} and {@code /ingest}. Ported from
+ * HiveMem's {@code com.hivemem.auth.AuthFilter}; the {@code /admin} session-web-UI delegation to
+ * {@code com.hivemem.web.SessionAuthFilter} is dropped (spec §6, adversarial review M3) —
+ * Aletheia has no admin GUI, so these endpoints are bearer/OAuth-token-only and an
+ * unauthenticated request gets a plain 401, never a 302 redirect.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
@@ -104,8 +104,9 @@ public class AuthFilter extends OncePerRequestFilter {
     // The token-paste login page authenticates the *browser* session for the
     // /oauth/authorize + consent flow (no bearer header on a browser redirect).
     if (requestPath.startsWith("/login")) return true;
-    // Aletheia has no admin GUI and no other bearer-guarded surface besides the MCP endpoint.
-    return !requestPath.startsWith("/mcp");
+    // Aletheia has no admin GUI and no other bearer-guarded surface besides the MCP endpoint
+    // and the /ingest upload endpoint.
+    return !(requestPath.startsWith("/mcp") || requestPath.startsWith("/ingest"));
   }
 
   @Override
