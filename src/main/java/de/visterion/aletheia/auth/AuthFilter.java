@@ -35,6 +35,9 @@ public class AuthFilter extends OncePerRequestFilter {
   public static final String PRINCIPAL_ATTRIBUTE = AuthPrincipal.class.getName();
   private static final String BEARER_PREFIX = "Bearer ";
 
+  private static final org.slf4j.Logger AUTH_LOG =
+      org.slf4j.LoggerFactory.getLogger(AuthFilter.class);
+
   /**
    * Header the Cloudflare Tunnel injects/overwrites with the real client IP. Not spoofable by
    * a client going through the tunnel — see {@link SecurityProperties}.
@@ -138,18 +141,18 @@ public class AuthFilter extends OncePerRequestFilter {
     if (authorization == null
         || authorization.length() < BEARER_PREFIX.length()
         || !authorization.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
-      sendUnauthorized(request, response, clientIp);
+      sendUnauthorized(request, response, clientIp, "missing bearer");
       return;
     }
 
     String token = authorization.substring(BEARER_PREFIX.length()).trim();
     if (token.isEmpty()) {
-      sendUnauthorized(request, response, clientIp);
+      sendUnauthorized(request, response, clientIp, "empty bearer");
       return;
     }
 
     if (tokenService.isEmpty()) {
-      sendUnauthorized(request, response, clientIp);
+      sendUnauthorized(request, response, clientIp, "no token service");
       return;
     }
 
@@ -163,7 +166,7 @@ public class AuthFilter extends OncePerRequestFilter {
     }
 
     if (principal.isEmpty()) {
-      sendUnauthorized(request, response, clientIp);
+      sendUnauthorized(request, response, clientIp, "invalid or expired token");
       return;
     }
 
@@ -178,10 +181,19 @@ public class AuthFilter extends OncePerRequestFilter {
    * clients (claude.ai) can auto-discover the authorization server via the protected-resource
    * metadata document. Other guarded paths get a bare 401.
    */
-  private void sendUnauthorized(HttpServletRequest request, HttpServletResponse response, String clientIp)
+  private void sendUnauthorized(
+      HttpServletRequest request, HttpServletResponse response, String clientIp, String reason)
       throws IOException {
     rateLimiter.recordFailure(clientIp);
     String requestPath = request.getRequestURI().substring(request.getContextPath().length());
+    // /ingest failures are the ones we actively diagnose -> WARN. /mcp bootstrap legitimately
+    // begins with a 401 (claude.ai OAuth discovery, see below) and would spam WARN -> INFO.
+    // Never log the token — only method, path, static reason, and rate-limit IP.
+    if (requestPath.startsWith("/ingest")) {
+      AUTH_LOG.warn("auth failed {} {}: {} ip={}", request.getMethod(), requestPath, reason, clientIp);
+    } else {
+      AUTH_LOG.info("auth failed {} {}: {} ip={}", request.getMethod(), requestPath, reason, clientIp);
+    }
     if (requestPath.startsWith("/mcp") && oauthProperties.isPresent()) {
       OAuthProperties props = oauthProperties.get();
       if (props.isEnabled() && props.getIssuer() != null && !props.getIssuer().isBlank()) {
