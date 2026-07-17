@@ -178,6 +178,13 @@ class ToolScopeEnforcementIT {
               new CallToolRequest("update_preferences", Map.of("preferences", "- test")));
       assertThat(allowedResult.isError()).isNotEqualTo(Boolean.TRUE);
     }
+
+    // operating_guide's 'default' row is a process-wide singleton shared across all test
+    // classes on the singleton Postgres container -- restore it so this test leaves no residue
+    // for other classes (e.g. OperatingGuideIT) that depend on a clean preferences_md.
+    db.execute(
+        "UPDATE operating_guide SET preferences_md='', preferences_updated_at=NULL, "
+            + "preferences_updated_by=NULL WHERE scope='default'");
   }
 
   private McpSyncClient connect(String bearerToken) {
