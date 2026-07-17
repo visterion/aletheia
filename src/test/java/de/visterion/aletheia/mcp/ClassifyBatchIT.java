@@ -51,14 +51,14 @@ class ClassifyBatchIT extends AbstractPostgresIT {
     var ack =
         writeTools.classifyCounterparty(
             null,
-            new CounterpartySelector(true, null, null, null),
+            new CounterpartySelector(true, null, null, null, null, null, null, null),
             List.of(new TagInput("domain", "insurance")),
             TagSource.auto,
             null,
             false);
 
     assertThat(ack.affectedCount()).isEqualTo(3);
-    assertThat(ack.dimensions()).containsExactly("domain");
+    assertThat(ack.details()).containsExactly("domain");
     assertThat(db.fetchCount(COUNTERPARTY_TAGS, COUNTERPARTY_TAGS.VALUE.eq("insurance"))).isEqualTo(3);
   }
 
@@ -71,7 +71,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
             () ->
                 writeTools.classifyCounterparty(
                     null,
-                    new CounterpartySelector(true, null, null, null),
+                    new CounterpartySelector(true, null, null, null, null, null, null, null),
                     tags,
                     TagSource.auto,
                     null,
@@ -82,7 +82,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
     var ack =
         writeTools.classifyCounterparty(
             null,
-            new CounterpartySelector(true, null, null, null),
+            new CounterpartySelector(true, null, null, null, null, null, null, null),
             tags,
             TagSource.auto,
             null,
@@ -100,7 +100,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
             () ->
                 writeTools.classifyCounterparty(
                     null,
-                    new CounterpartySelector(true, null, null, null),
+                    new CounterpartySelector(true, null, null, null, null, null, null, null),
                     tags,
                     TagSource.auto,
                     null,
@@ -159,7 +159,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
         writeTools.classifyCounterparty(List.of(id), null, List.of(), TagSource.auto, null, false);
 
     assertThat(ack.affectedCount()).isZero();
-    assertThat(ack.dimensions()).isEmpty();
+    assertThat(ack.details()).isEmpty();
     assertThat(db.fetchCount(COUNTERPARTY_TAGS)).isZero();
     assertThat(db.fetchCount(COUNTERPARTY_HISTORY)).isZero();
   }

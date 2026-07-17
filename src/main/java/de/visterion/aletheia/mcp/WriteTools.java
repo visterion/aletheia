@@ -238,21 +238,53 @@ public class WriteTools {
   @Tool(
       name = "confirm_counterparty",
       description =
-          "The human's 'yes'. If contractId (a contracts.id) is given, confirms just that"
-              + " contract: status='confirmed', source='confirmed', confirmed_at=now(), and its"
-              + " linked recurring row's source='confirmed' -- the counterparty's tags/reviewed"
-              + " flag are untouched. If contractId is omitted and the counterparty has a"
-              + " mandate-less auto recurring row (contract_id IS NULL), that series is"
-              + " materialized into a NULL-mandate contract first and confirmed the same way."
-              + " Otherwise (no contractId, no mandate-less series): legacy behavior -- flip this"
-              + " counterparty's auto tags/recurring to confirmed, set reviewed=true and"
-              + " status='confirmed'. Drains the review queue for this counterparty.")
-  public WriteAck confirmCounterparty(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(
-              description = "contracts.id to confirm, optional -- see tool description",
-              required = false)
-          Long contractId) {
+          "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that"
+              + " contract). BATCH: counterpartyIds OR a where-selector (never both, never with"
+              + " contractId/counterpartyId) -- each id is confirmed at counterparty level"
+              + " (contractId=null): a mandate-less recurring series is materialized+confirmed"
+              + " (appears in the obligations register); otherwise auto tags/status flip to"
+              + " confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single"
+              + " confirm(id, contractId) for those. Batches of 200+ require confirm=true.")
+  @Transactional
+  public BatchWriteAck confirmCounterparty(
+      @ToolParam(description = "counterparties.id (single-item mode)", required = false)
+          Long counterpartyId,
+      @ToolParam(description = "contracts.id to confirm (single-item only)", required = false)
+          Long contractId,
+      @ToolParam(description = "explicit ids (batch mode)", required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(description = "where-selector (batch mode)", required = false)
+          CounterpartySelector where,
+      @ToolParam(description = "must be true for a batch of 200 or more", required = false)
+          Boolean confirm) {
+    List<Long> batchIds =
+        resolveBatchTarget(
+            counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
+    if (batchIds != null) {
+      for (long id : batchIds) {
+        confirmOne(id, null);
+      }
+      return new BatchWriteAck(
+          batchIds.size(), List.of("confirmed " + batchIds.size() + " counterparties"));
+    }
+    if (counterpartyId == null) {
+      throw new IllegalArgumentException(
+          "supply counterpartyId, counterpartyIds, or a non-empty where");
+    }
+    return new BatchWriteAck(1, List.of(confirmOne(counterpartyId, contractId)));
+  }
+
+  /**
+   * The former single-item confirm body, returning its message. If {@code contractId} is given,
+   * confirms just that contract: {@code status='confirmed'}, {@code source='confirmed'}, {@code
+   * confirmed_at=now()}, and its linked recurring row's {@code source='confirmed'} -- the
+   * counterparty's tags/reviewed flag are untouched. If {@code contractId} is omitted and the
+   * counterparty has a mandate-less auto recurring row ({@code contract_id IS NULL}), that series
+   * is materialized into a NULL-mandate contract first and confirmed the same way. Otherwise (no
+   * contractId, no mandate-less series): legacy behavior -- flip this counterparty's auto
+   * tags/recurring to confirmed, set {@code reviewed=true} and {@code status='confirmed'}.
+   */
+  private String confirmOne(long counterpartyId, Long contractId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
     if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
@@ -264,7 +296,7 @@ public class WriteTools {
         targetContract = materializeMandatelessContract(counterpartyId);
       }
       confirmContractRow(counterpartyId, targetContract);
-      return new WriteAck(counterpartyId, "contract " + targetContract + " confirmed");
+      return "contract " + targetContract + " confirmed";
     }
 
     db.update(COUNTERPARTY_TAGS)
@@ -293,7 +325,7 @@ public class WriteTools {
 
     insertHistory(counterpartyId, "status", oldStatus, "confirmed", "confirmed");
 
-    return new WriteAck(counterpartyId, "confirmed");
+    return "confirmed";
   }
 
   private void confirmContractRow(long counterpartyId, long contractId) {
@@ -411,29 +443,57 @@ public class WriteTools {
   @Tool(
       name = "dismiss_counterparty",
       description =
-          "If contractId (a contracts.id) is given, dismisses just that contract:"
-              + " status='dismissed', dismissed_reason=reason -- the counterparty's status is"
-              + " untouched. If contractId is omitted and the counterparty has a mandate-less"
-              + " auto recurring row, that series is materialized into a NULL-mandate contract"
-              + " first and dismissed the same way. Otherwise (legacy): this counterparty is not"
-              + " an obligation / not recurring: status='dismissed', dismissed_reason=reason.")
-  public WriteAck dismissCounterparty(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(description = "why this counterparty was dismissed") String reason,
-      @ToolParam(
-              description = "contracts.id to dismiss, optional -- see tool description",
-              required = false)
-          Long contractId) {
-    String oldStatus = requireExistingCounterparty(counterpartyId);
-
-    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
-      long targetContract;
-      if (contractId != null) {
-        requireContractOwnedBy(counterpartyId, contractId);
-        targetContract = contractId;
-      } else {
-        targetContract = materializeMandatelessContract(counterpartyId);
+          "Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally"
+              + " contractId to dismiss just that contract). BATCH: pass counterpartyIds OR a"
+              + " where-selector (never both, never with contractId/counterpartyId) -- each id is"
+              + " dismissed at counterparty level (its mandate-less recurring series is"
+              + " materialized+dismissed; a non-recurring counterparty gets status='dismissed')."
+              + " A no-contractId dismiss also sets reviewed=true. Batches of 200+ require"
+              + " confirm=true; over 1000 rejected. reason is required.")
+  @Transactional
+  public BatchWriteAck dismissCounterparty(
+      @ToolParam(description = "counterparties.id (single-item mode)", required = false)
+          Long counterpartyId,
+      @ToolParam(description = "contracts.id to dismiss (single-item only)", required = false)
+          Long contractId,
+      @ToolParam(description = "explicit ids (batch mode)", required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(description = "where-selector (batch mode)", required = false)
+          CounterpartySelector where,
+      @ToolParam(description = "why these were dismissed") String reason,
+      @ToolParam(description = "must be true for a batch of 200 or more", required = false)
+          Boolean confirm) {
+    List<Long> batchIds =
+        resolveBatchTarget(
+            counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
+    if (batchIds != null) {
+      for (long id : batchIds) {
+        dismissOne(id, reason, null);
       }
+      return new BatchWriteAck(
+          batchIds.size(),
+          List.of("dismissed " + batchIds.size() + " counterparties: " + reason));
+    }
+    if (counterpartyId == null) {
+      throw new IllegalArgumentException(
+          "supply counterpartyId, counterpartyIds, or a non-empty where");
+    }
+    return new BatchWriteAck(1, List.of(dismissOne(counterpartyId, reason, contractId)));
+  }
+
+  /**
+   * The former single-item dismiss body, returning its message. Sets {@code reviewed=true} when
+   * the caller supplied no {@code contractId} (counterparty-level intent -- both branches).
+   */
+  private String dismissOne(long counterpartyId, String reason, Long callerContractId) {
+    String oldStatus = requireExistingCounterparty(counterpartyId);
+    boolean callerContract = callerContractId != null;
+
+    if (callerContractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
+      long targetContract =
+          callerContractId != null
+              ? requireContractOwnedByReturning(counterpartyId, callerContractId)
+              : materializeMandatelessContract(counterpartyId);
       String oldContractStatus =
           db.select(CONTRACTS.STATUS)
               .from(CONTRACTS)
@@ -450,18 +510,68 @@ public class WriteTools {
           oldContractStatus,
           "dismissed",
           "confirmed");
-      return new WriteAck(counterpartyId, "contract " + targetContract + " dismissed: " + reason);
+      if (!callerContract) {
+        db.update(COUNTERPARTIES)
+            .set(COUNTERPARTIES.REVIEWED, true)
+            .where(COUNTERPARTIES.ID.eq(counterpartyId))
+            .execute();
+      }
+      return "contract " + targetContract + " dismissed: " + reason;
     }
 
     db.update(COUNTERPARTIES)
         .set(COUNTERPARTIES.STATUS, "dismissed")
         .set(COUNTERPARTIES.DISMISSED_REASON, reason)
+        .set(COUNTERPARTIES.REVIEWED, true) // m5: legacy branch is always a no-contractId call
         .where(COUNTERPARTIES.ID.eq(counterpartyId))
         .execute();
-
     insertHistory(counterpartyId, "status", oldStatus, "dismissed", "confirmed");
+    return "dismissed: " + reason;
+  }
 
-    return new WriteAck(counterpartyId, "dismissed: " + reason);
+  /**
+   * Returns the resolved batch target ids, or {@code null} for single-item mode. Enforces the
+   * mode-exclusivity rules, the zero-effective-conditions guard, and the batch caps.
+   */
+  private List<Long> resolveBatchTarget(
+      Long counterpartyId,
+      Long contractId,
+      List<Long> counterpartyIds,
+      CounterpartySelector where,
+      boolean confirm) {
+    boolean hasIds = counterpartyIds != null && !counterpartyIds.isEmpty();
+    boolean hasWhere = where != null;
+    if (!hasIds && !hasWhere) {
+      return null; // single-item mode
+    }
+    if (contractId != null) {
+      throw new IllegalArgumentException("contractId is single-item only, not for a batch");
+    }
+    if (counterpartyId != null) {
+      throw new IllegalArgumentException(
+          "supply either counterpartyId or a batch target, not both");
+    }
+    if (hasIds && hasWhere) {
+      throw new IllegalArgumentException("supply either counterpartyIds or where, not both");
+    }
+    if (hasWhere && !hasEffectiveCondition(where)) {
+      throw new IllegalArgumentException(
+          "where must contribute at least one filter (refusing a whole-table match)");
+    }
+    List<Long> ids = resolveTargetIds(counterpartyIds, where);
+    enforceBatchCaps(ids, confirm);
+    return ids;
+  }
+
+  private static boolean hasEffectiveCondition(CounterpartySelector w) {
+    return Boolean.TRUE.equals(w.untagged())
+        || (w.namePattern() != null && !w.namePattern().isBlank())
+        || w.predominantDirection() != null
+        || (w.minAnnualCost() != null && w.minAnnualCost().signum() > 0)
+        || (w.domainIn() != null && !w.domainIn().isEmpty())
+        || (w.natureIn() != null && !w.natureIn().isEmpty())
+        || w.reviewed() != null
+        || w.hasContract() != null;
   }
 
   /**
@@ -472,6 +582,11 @@ public class WriteTools {
    * {@code contractId} could update 0 rows yet still ack success.
    */
   private void requireContractOwnedBy(long counterpartyId, long contractId) {
+    requireContractOwnedByReturning(counterpartyId, contractId);
+  }
+
+  /** Same validation as {@link #requireContractOwnedBy}, returning {@code contractId}. */
+  private long requireContractOwnedByReturning(long counterpartyId, long contractId) {
     Long ownerId =
         db.select(CONTRACTS.COUNTERPARTY_ID)
             .from(CONTRACTS)
@@ -484,6 +599,7 @@ public class WriteTools {
       throw new IllegalArgumentException(
           "contract " + contractId + " belongs to a different counterparty");
     }
+    return contractId;
   }
 
   private String requireExistingCounterparty(long counterpartyId) {
