@@ -23,13 +23,14 @@ import org.springframework.stereotype.Component;
  * whitespace, upper-cased for the identity key only). Transactions with none of the three are
  * unresolved (cash withdrawals/fees) and skipped.
  *
- * <p>{@code @Order(2)} runs this after {@link de.visterion.aletheia.ingest.IngestRunner}
- * ({@code @Order(1)}) -- Spring does not order {@link ApplicationRunner} beans without explicit
- * {@code @Order}. The upsert is idempotent: conflicts update only {@code display_name}, and only
- * when the latest derived value is distinct from the stored value.
+ * <p>{@code @Order(3)} runs this after {@link de.visterion.aletheia.ingest.IngestRunner}
+ * ({@code @Order(1)}) and {@link PayPalAttributionResolver} ({@code @Order(2)}) -- Spring does
+ * not order {@link ApplicationRunner} beans without explicit {@code @Order}. The upsert is
+ * idempotent: conflicts update only {@code display_name}, and only when the latest derived value
+ * is distinct from the stored value.
  */
 @Component
-@Order(2)
+@Order(3)
 public class CounterpartyResolver implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(CounterpartyResolver.class);

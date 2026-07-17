@@ -33,7 +33,7 @@ import org.springframework.stereotype.Component;
  * by a human confirm/link.
  */
 @Component
-@Order(3)
+@Order(4)
 public class ContractResolver implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(ContractResolver.class);

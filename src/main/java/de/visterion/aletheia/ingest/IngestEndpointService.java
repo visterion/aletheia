@@ -2,6 +2,7 @@ package de.visterion.aletheia.ingest;
 
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
+import de.visterion.aletheia.substrate.PayPalAttributionResolver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -21,6 +22,7 @@ public class IngestEndpointService {
 
   private final IngestProperties properties;
   private final IngestService ingestService;
+  private final PayPalAttributionResolver payPalAttributionResolver;
   private final CounterpartyResolver counterpartyResolver;
   private final ContractResolver contractResolver;
   private final ReentrantLock lock = new ReentrantLock();
@@ -28,10 +30,12 @@ public class IngestEndpointService {
   public IngestEndpointService(
       IngestProperties properties,
       IngestService ingestService,
+      PayPalAttributionResolver payPalAttributionResolver,
       CounterpartyResolver counterpartyResolver,
       ContractResolver contractResolver) {
     this.properties = properties;
     this.ingestService = ingestService;
+    this.payPalAttributionResolver = payPalAttributionResolver;
     this.counterpartyResolver = counterpartyResolver;
     this.contractResolver = contractResolver;
   }
@@ -54,6 +58,7 @@ public class IngestEndpointService {
       Files.write(working, bytes);
       try {
         ImportSummary summary = ingestService.ingest(working, safeName);
+        payPalAttributionResolver.resolve();
         counterpartyResolver.resolve();
         contractResolver.resolve();
         Files.move(
