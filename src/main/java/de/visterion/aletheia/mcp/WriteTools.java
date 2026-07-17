@@ -238,21 +238,53 @@ public class WriteTools {
   @Tool(
       name = "confirm_counterparty",
       description =
-          "The human's 'yes'. If contractId (a contracts.id) is given, confirms just that"
-              + " contract: status='confirmed', source='confirmed', confirmed_at=now(), and its"
-              + " linked recurring row's source='confirmed' -- the counterparty's tags/reviewed"
-              + " flag are untouched. If contractId is omitted and the counterparty has a"
-              + " mandate-less auto recurring row (contract_id IS NULL), that series is"
-              + " materialized into a NULL-mandate contract first and confirmed the same way."
-              + " Otherwise (no contractId, no mandate-less series): legacy behavior -- flip this"
-              + " counterparty's auto tags/recurring to confirmed, set reviewed=true and"
-              + " status='confirmed'. Drains the review queue for this counterparty.")
-  public WriteAck confirmCounterparty(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(
-              description = "contracts.id to confirm, optional -- see tool description",
-              required = false)
-          Long contractId) {
+          "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that"
+              + " contract). BATCH: counterpartyIds OR a where-selector (never both, never with"
+              + " contractId/counterpartyId) -- each id is confirmed at counterparty level"
+              + " (contractId=null): a mandate-less recurring series is materialized+confirmed"
+              + " (appears in the obligations register); otherwise auto tags/status flip to"
+              + " confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single"
+              + " confirm(id, contractId) for those. Batches of 200+ require confirm=true.")
+  @Transactional
+  public BatchWriteAck confirmCounterparty(
+      @ToolParam(description = "counterparties.id (single-item mode)", required = false)
+          Long counterpartyId,
+      @ToolParam(description = "contracts.id to confirm (single-item only)", required = false)
+          Long contractId,
+      @ToolParam(description = "explicit ids (batch mode)", required = false)
+          List<Long> counterpartyIds,
+      @ToolParam(description = "where-selector (batch mode)", required = false)
+          CounterpartySelector where,
+      @ToolParam(description = "must be true for a batch of 200 or more", required = false)
+          Boolean confirm) {
+    List<Long> batchIds =
+        resolveBatchTarget(
+            counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
+    if (batchIds != null) {
+      for (long id : batchIds) {
+        confirmOne(id, null);
+      }
+      return new BatchWriteAck(
+          batchIds.size(), List.of("confirmed " + batchIds.size() + " counterparties"));
+    }
+    if (counterpartyId == null) {
+      throw new IllegalArgumentException(
+          "supply counterpartyId, counterpartyIds, or a non-empty where");
+    }
+    return new BatchWriteAck(1, List.of(confirmOne(counterpartyId, contractId)));
+  }
+
+  /**
+   * The former single-item confirm body, returning its message. If {@code contractId} is given,
+   * confirms just that contract: {@code status='confirmed'}, {@code source='confirmed'}, {@code
+   * confirmed_at=now()}, and its linked recurring row's {@code source='confirmed'} -- the
+   * counterparty's tags/reviewed flag are untouched. If {@code contractId} is omitted and the
+   * counterparty has a mandate-less auto recurring row ({@code contract_id IS NULL}), that series
+   * is materialized into a NULL-mandate contract first and confirmed the same way. Otherwise (no
+   * contractId, no mandate-less series): legacy behavior -- flip this counterparty's auto
+   * tags/recurring to confirmed, set {@code reviewed=true} and {@code status='confirmed'}.
+   */
+  private String confirmOne(long counterpartyId, Long contractId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
     if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
@@ -264,7 +296,7 @@ public class WriteTools {
         targetContract = materializeMandatelessContract(counterpartyId);
       }
       confirmContractRow(counterpartyId, targetContract);
-      return new WriteAck(counterpartyId, "contract " + targetContract + " confirmed");
+      return "contract " + targetContract + " confirmed";
     }
 
     db.update(COUNTERPARTY_TAGS)
@@ -293,7 +325,7 @@ public class WriteTools {
 
     insertHistory(counterpartyId, "status", oldStatus, "confirmed", "confirmed");
 
-    return new WriteAck(counterpartyId, "confirmed");
+    return "confirmed";
   }
 
   private void confirmContractRow(long counterpartyId, long contractId) {
