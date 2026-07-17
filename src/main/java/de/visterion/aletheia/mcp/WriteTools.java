@@ -8,9 +8,15 @@ import static de.visterion.aletheia.jooq.Tables.RECURRING;
 
 import de.visterion.aletheia.auth.AuthFilter;
 import de.visterion.aletheia.auth.AuthPrincipal;
+import de.visterion.aletheia.substrate.ContractResolver;
+import de.visterion.aletheia.substrate.CounterpartyResolver;
+import de.visterion.aletheia.substrate.SubstrateLock;
+import de.visterion.aletheia.substrate.TransactionLayerSql;
 import java.math.BigDecimal;
+import java.util.LinkedHashSet;
 import java.util.List;
 import org.jooq.DSLContext;
+import org.jooq.impl.DSL;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
@@ -39,16 +45,25 @@ public class WriteTools {
   private final CounterpartySelectorResolver selectorResolver;
   private final TransactionSplitService splitService;
   private final OperatingGuideService operatingGuideService;
+  private final CounterpartyResolver counterpartyResolver;
+  private final ContractResolver contractResolver;
+  private final SubstrateLock substrateLock;
 
   public WriteTools(
       DSLContext db,
       CounterpartySelectorResolver selectorResolver,
       TransactionSplitService splitService,
-      OperatingGuideService operatingGuideService) {
+      OperatingGuideService operatingGuideService,
+      CounterpartyResolver counterpartyResolver,
+      ContractResolver contractResolver,
+      SubstrateLock substrateLock) {
     this.db = db;
     this.selectorResolver = selectorResolver;
     this.splitService = splitService;
     this.operatingGuideService = operatingGuideService;
+    this.counterpartyResolver = counterpartyResolver;
+    this.contractResolver = contractResolver;
+    this.substrateLock = substrateLock;
   }
 
   @Tool(
@@ -654,6 +669,151 @@ public class WriteTools {
     Object principal =
         attributes.getAttribute(AuthFilter.PRINCIPAL_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
     return principal instanceof AuthPrincipal authPrincipal ? authPrincipal.name() : "unknown";
+  }
+
+  // --- reattribute_transaction (#43 manual attribution) ---
+
+  private static final int MAX_REFS = 1000;
+
+  // language=SQL — classify each ref: found? split child? superseded parent? (for precise errors)
+  private static final String VALIDATE_REFS_SQL =
+      """
+      SELECT r.content_hash AS ch,
+             r.occurrence_index AS oi,
+             (t.content_hash IS NOT NULL) AS found,
+             (t.split_parent_content_hash IS NOT NULL) AS is_child,
+             """
+          + "(t.content_hash IS NOT NULL AND NOT ("
+          + TransactionLayerSql.notExistsSupersededParent("t")
+          + ")) AS is_parent\n"
+          + """
+      FROM unnest(CAST(? AS text[]), CAST(? AS int[])) AS r(content_hash, occurrence_index)
+      LEFT JOIN transactions t
+             ON t.content_hash = r.content_hash AND t.occurrence_index = r.occurrence_index
+      """;
+
+  // language=SQL — atomic match+update; returns (matched active roots, rows actually changed).
+  private static final String REATTRIBUTE_SQL =
+      """
+      WITH refs AS (
+          SELECT * FROM unnest(CAST(? AS text[]), CAST(? AS int[]))
+                   AS r(content_hash, occurrence_index)
+      ),
+      matched AS (
+          SELECT t.id
+          FROM transactions t
+          JOIN refs r ON r.content_hash = t.content_hash
+                     AND r.occurrence_index = t.occurrence_index
+          WHERE t.split_parent_content_hash IS NULL
+            AND """
+          + " "
+          + TransactionLayerSql.notExistsSupersededParent("t")
+          + """
+
+      ),
+      upd AS (
+          UPDATE transactions t
+          SET attributed_name = CAST(? AS text), attribution_source = CAST(? AS text)
+          FROM matched m
+          WHERE t.id = m.id
+            AND (t.attributed_name, t.attribution_source)
+                IS DISTINCT FROM (CAST(? AS text), CAST(? AS text))
+          RETURNING 1
+      )
+      SELECT (SELECT count(*) FROM matched) AS matched,
+             (SELECT count(*) FROM upd)     AS changed
+      """;
+
+  @Tool(
+      name = "reattribute_transaction",
+      description =
+          "Stamp the real merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the"
+              + " deterministic PayPal resolver cannot parse it). Pass the exact transactions as"
+              + " refs (get contentHash/occurrenceIndex from counterparty_transactions) and the"
+              + " real merchant as attributedName; pass attributedName=null to clear the"
+              + " attribution. Sets attribution_source='manual', which wins permanently over the"
+              + " PayPal resolver. Attribute a whole recurring series consistently (all its refs)."
+              + " Clearing a PayPal-creditor row is transient (the deterministic resolver re-stamps"
+              + " it) -- to correct a wrong PayPal parse, set a manual name instead. Teardown of a"
+              + " no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId).")
+  public BatchWriteAck reattributeTransaction(
+      @ToolParam(description = "the exact transactions to (re)attribute") List<TxReference> refs,
+      @ToolParam(
+              description = "the real merchant name; null clears the attribution",
+              required = false)
+          String attributedName) {
+    if (refs == null || refs.isEmpty()) {
+      throw new IllegalArgumentException("refs must be non-empty");
+    }
+    List<TxReference> distinct = new java.util.ArrayList<>(new LinkedHashSet<>(refs));
+    if (distinct.size() > MAX_REFS) {
+      throw new IllegalArgumentException("too many refs (max " + MAX_REFS + ")");
+    }
+
+    // clear-mode iff attributedName is exactly null; a blank/whitespace name is a 400, not a clear.
+    String setName = null;
+    String setSource = null;
+    if (attributedName != null) {
+      String trimmed = attributedName.strip();
+      if (trimmed.isEmpty()) {
+        throw new IllegalArgumentException(
+            "attributedName must not be blank; pass null to clear");
+      }
+      setName = trimmed;
+      setSource = "manual";
+    }
+
+    String[] hashes = distinct.stream().map(TxReference::contentHash).toArray(String[]::new);
+    Integer[] indices =
+        distinct.stream().map(TxReference::occurrenceIndex).toArray(Integer[]::new);
+
+    validateRefsAreActiveRoots(hashes, indices);
+
+    substrateLock.lock();
+    try {
+      org.jooq.Record counts =
+          db.fetchOne(
+              REATTRIBUTE_SQL,
+              DSL.array(hashes),
+              DSL.array(indices),
+              setName,
+              setSource,
+              setName,
+              setSource);
+      int matched = counts.get("matched", Integer.class);
+      int changed = counts.get("changed", Integer.class);
+      if (matched != distinct.size()) {
+        throw new IllegalArgumentException(
+            "a target changed underneath the call (concurrent split?); retry");
+      }
+      counterpartyResolver.resolve();
+      contractResolver.resolve();
+      String message =
+          setName == null
+              ? "cleared attribution on " + changed + " booking(s)"
+              : "reattributed " + changed + " booking(s) to '" + setName + "'";
+      return new BatchWriteAck(changed, List.of(message));
+    } finally {
+      substrateLock.unlock();
+    }
+  }
+
+  /** Precise per-ref validation (exists / not a split child / not a superseded parent). */
+  private void validateRefsAreActiveRoots(String[] hashes, Integer[] indices) {
+    var rows = db.fetch(VALIDATE_REFS_SQL, DSL.array(hashes), DSL.array(indices));
+    for (var row : rows) {
+      String ref = row.get("ch", String.class) + "#" + row.get("oi", Integer.class);
+      if (!Boolean.TRUE.equals(row.get("found", Boolean.class))) {
+        throw new IllegalArgumentException("no such transaction: " + ref);
+      }
+      if (Boolean.TRUE.equals(row.get("is_child", Boolean.class))) {
+        throw new IllegalArgumentException("cannot reattribute a split child: " + ref);
+      }
+      if (Boolean.TRUE.equals(row.get("is_parent", Boolean.class))) {
+        throw new IllegalArgumentException(
+            "cannot reattribute a split parent (it has been split into children): " + ref);
+      }
+    }
   }
 
   // --- split_transaction (Phase 2 core) ---
