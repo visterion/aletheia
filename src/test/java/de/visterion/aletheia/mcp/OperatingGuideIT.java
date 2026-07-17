@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -13,6 +14,15 @@ class OperatingGuideIT extends AbstractPostgresIT {
 
   @Autowired OperatingGuideService service;
   @Autowired DSLContext db;
+
+  @BeforeEach
+  void resetPreferences() {
+    // The 'default' row is a process-wide singleton (seeded once by Flyway, shared across all
+    // test classes on the singleton Postgres container). A @BeforeEach reset guarantees every
+    // test in this class starts from a known clean state regardless of what other test classes
+    // (e.g. ToolScopeEnforcementIT) did to the row before Surefire picked this class to run.
+    resetPreferencesRow();
+  }
 
   @AfterEach
   void cleanUp() {
@@ -23,6 +33,10 @@ class OperatingGuideIT extends AbstractPostgresIT {
     // operating_guide is NOT truncated: the seeded 'default' row must survive. Reset its
     // mutable preferences columns so a preference-mutating test can't poison another test under
     // any ordering.
+    resetPreferencesRow();
+  }
+
+  private void resetPreferencesRow() {
     db.execute(
         "UPDATE operating_guide SET preferences_md='', preferences_updated_at=NULL, "
             + "preferences_updated_by=NULL WHERE scope='default'");

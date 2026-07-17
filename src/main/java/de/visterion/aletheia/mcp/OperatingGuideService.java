@@ -27,18 +27,17 @@ public class OperatingGuideService {
     String prefs = (prefsRaw == null || prefsRaw.isBlank()) ? "(none recorded yet)" : prefsRaw;
 
     long unreviewed =
-        (Long) db.fetchValue("SELECT count(*) FROM counterparties WHERE reviewed = false", Long.class);
+        (Long) db.fetchValue("SELECT count(*) FROM counterparties WHERE reviewed = false");
     long opaquePassthroughs =
         (Long)
             db.fetchValue(
                 "SELECT count(*) FROM counterparties c WHERE c.reviewed = false AND EXISTS ("
                     + "SELECT 1 FROM counterparty_tags t WHERE t.counterparty_id = c.id "
-                    + "AND t.dimension = 'nature' AND t.value = 'zahlungsdienst')",
-                Long.class);
+                    + "AND t.dimension = 'nature' AND t.value = 'zahlungsdienst')");
     long openContracts =
-        (Long) db.fetchValue("SELECT count(*) FROM contracts WHERE status = 'open'", Long.class);
+        (Long) db.fetchValue("SELECT count(*) FROM contracts WHERE status = 'open'");
     long confirmedContracts =
-        (Long) db.fetchValue("SELECT count(*) FROM contracts WHERE status = 'confirmed'", Long.class);
+        (Long) db.fetchValue("SELECT count(*) FROM contracts WHERE status = 'confirmed'");
 
     return workflow
         + "\n\n# Customer preferences\n"
