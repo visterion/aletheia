@@ -159,14 +159,28 @@ public class ReadTools {
   private final DSLContext db;
   private final DSLContext roDsl;
   private final CounterpartySelectorResolver selectorResolver;
+  private final OperatingGuideService operatingGuideService;
 
   public ReadTools(
       DSLContext db,
       @Qualifier("roDsl") DSLContext roDsl,
-      CounterpartySelectorResolver selectorResolver) {
+      CounterpartySelectorResolver selectorResolver,
+      OperatingGuideService operatingGuideService) {
     this.db = db;
     this.roDsl = roDsl;
     this.selectorResolver = selectorResolver;
+    this.operatingGuideService = operatingGuideService;
+  }
+
+  @Tool(
+      name = "wake_up",
+      description =
+          "Call this FIRST, before any other action. Returns this customer's Aletheia operating"
+              + " guide, their recorded preferences, and a live snapshot of the current state"
+              + " (open reviews, opaque payment passthroughs, obligations). Follow the guide."
+              + " Record durable preferences with update_preferences.")
+  public String wakeUp() {
+    return operatingGuideService.wakeUp();
   }
 
   @Tool(

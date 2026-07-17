@@ -152,6 +152,34 @@ class ToolScopeEnforcementIT {
     }
   }
 
+  @Test
+  void readerCanWakeUpButNotUpdatePreferencesWhileWriterCanDoBoth() {
+    String readerToken = seedToken("reader");
+    String writerToken = seedToken("writer");
+
+    try (McpSyncClient client = connect(readerToken)) {
+      client.initialize();
+
+      CallToolResult wakeUpResult = client.callTool(new CallToolRequest("wake_up", Map.of()));
+      assertThat(wakeUpResult.isError()).isNotEqualTo(Boolean.TRUE);
+
+      CallToolResult deniedResult =
+          client.callTool(
+              new CallToolRequest("update_preferences", Map.of("preferences", "- test")));
+      assertThat(deniedResult.isError()).isTrue();
+      assertThat(textOf(deniedResult)).contains("not permitted").contains("update_preferences");
+    }
+
+    try (McpSyncClient client = connect(writerToken)) {
+      client.initialize();
+
+      CallToolResult allowedResult =
+          client.callTool(
+              new CallToolRequest("update_preferences", Map.of("preferences", "- test")));
+      assertThat(allowedResult.isError()).isNotEqualTo(Boolean.TRUE);
+    }
+  }
+
   private McpSyncClient connect(String bearerToken) {
     HttpClientStreamableHttpTransport transport =
         HttpClientStreamableHttpTransport.builder("http://localhost:" + port)

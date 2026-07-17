@@ -20,7 +20,12 @@ class OperatingGuideIT extends AbstractPostgresIT {
         "TRUNCATE TABLE counterparty_history, contracts, recurring, counterparty_tags, "
             + "counterparties RESTART IDENTITY CASCADE");
     db.execute("TRUNCATE TABLE transactions, imports RESTART IDENTITY CASCADE");
-    // operating_guide is NOT truncated: the seeded 'default' row must survive.
+    // operating_guide is NOT truncated: the seeded 'default' row must survive. Reset its
+    // mutable preferences columns so a preference-mutating test can't poison another test under
+    // any ordering.
+    db.execute(
+        "UPDATE operating_guide SET preferences_md='', preferences_updated_at=NULL, "
+            + "preferences_updated_by=NULL WHERE scope='default'");
   }
 
   @Test
