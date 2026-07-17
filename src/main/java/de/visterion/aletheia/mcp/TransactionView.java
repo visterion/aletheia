@@ -19,4 +19,6 @@ public record TransactionView(
     String remittanceInfo,
     String counterpartyName,
     String counterpartyIban,
-    String creditorId) {}
+    String creditorId,
+    String contentHash,
+    int occurrenceIndex) {}

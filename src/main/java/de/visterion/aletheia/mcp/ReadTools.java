@@ -97,15 +97,18 @@ public class ReadTools {
       """
       SELECT i.id, i.booking_date, i.value_date, i.amount, i.currency, i.direction,
              i.booking_text, i.remittance_info, i.counterparty_name, i.counterparty_iban,
-             i.creditor_id
+             i.creditor_id, i.content_hash, i.occurrence_index
       FROM (
           SELECT t.*,
               CASE
+                  WHEN t.attributed_name IS NOT NULL THEN 'name'
                   WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
                   WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
                   WHEN t.counterparty_name IS NOT NULL THEN 'name'
               END AS identity_type,
               CASE
+                  WHEN t.attributed_name IS NOT NULL THEN
+                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
                   WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                   WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
                   WHEN t.counterparty_name IS NOT NULL THEN
@@ -141,11 +144,14 @@ public class ReadTools {
       """
       SELECT t.*,
           CASE
+              WHEN t.attributed_name IS NOT NULL THEN 'name'
               WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
               WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
               WHEN t.counterparty_name IS NOT NULL THEN 'name'
           END AS identity_type,
           CASE
+              WHEN t.attributed_name IS NOT NULL THEN
+                  upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
               WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
               WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
               WHEN t.counterparty_name IS NOT NULL THEN
@@ -197,7 +203,8 @@ public class ReadTools {
               + " transactions with no counterparty-identity join, so unresolved bookings (cash"
               + " withdrawals/fees with no creditor_id, iban, or name) are still counted."
               + " Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins"
-              + " through the identity-CASE resolution (creditor_id > iban > normalized name)"
+              + " through the identity-CASE resolution (attributed_name > creditor_id > iban >"
+              + " normalized name)"
               + " and therefore excludes unresolved bookings. When byCounterparty=true, buckets"
               + " are keyed on counterparties.id (never displayName -- two distinct identities,"
               + " e.g. a creditor_id and an iban, can share one display name)."
@@ -846,7 +853,8 @@ public class ReadTools {
               + " range on booking_date. When dateFrom and dateTo are both given, the absolute"
               + " range wins over period (period is ignored). Returns only current logical"
               + " positions: split parents are hidden (NOT EXISTS filter on split_parent_*);"
-              + " children and unsplit originals are shown (javadoc references logical view).")
+              + " children and unsplit originals are shown (javadoc references logical view)."
+              + " Identity priority: attributed_name > creditor_id > iban > normalized name.")
   public List<TransactionView> counterpartyTransactions(
       @ToolParam(description = "counterparties.id") long counterpartyId,
       @ToolParam(
@@ -889,7 +897,9 @@ public class ReadTools {
               row.get("remittance_info", String.class),
               row.get("counterparty_name", String.class),
               row.get("counterparty_iban", String.class),
-              row.get("creditor_id", String.class)));
+              row.get("creditor_id", String.class),
+              row.get("content_hash", String.class),
+              row.get("occurrence_index", Integer.class)));
     }
     return transactions;
   }
