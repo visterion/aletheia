@@ -765,6 +765,10 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.HIVEMEM_CELL_ID.isNull())
+            // A dismissed contract has been explicitly rejected and needs no HiveMem link, so it
+            // must not surface as "unmatched recurring" (#29 retroactivity; prevents the stale
+            // lumped PayPal series double-count).
+            .and(CONTRACTS.STATUS.ne("dismissed"))
             .fetch();
 
     List<UnmatchedRecurringEntry> entries = new ArrayList<>();
