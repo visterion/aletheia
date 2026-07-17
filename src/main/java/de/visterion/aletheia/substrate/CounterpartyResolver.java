@@ -18,9 +18,10 @@ import org.springframework.stereotype.Component;
  * created by the split tool).
  *
  * <p>Identity priority, never merged across types (1&amp;1/Telekom/Deutsche Glasfaser stay
- * distinct): {@code creditor_id} &gt; {@code counterparty_iban} &gt; normalized usable {@code
- * counterparty_name} (NFC, trim, collapse whitespace, upper-cased for the identity key only).
- * Transactions with none of the three are unresolved (cash withdrawals/fees) and skipped.
+ * distinct): attributed merchant name (PayPal transparency, #29) &gt; {@code creditor_id} &gt;
+ * {@code counterparty_iban} &gt; normalized usable {@code counterparty_name} (NFC, trim, collapse
+ * whitespace, upper-cased for the identity key only). Transactions with none of the three are
+ * unresolved (cash withdrawals/fees) and skipped.
  *
  * <p>{@code @Order(2)} runs this after {@link de.visterion.aletheia.ingest.IngestRunner}
  * ({@code @Order(1)}) -- Spring does not order {@link ApplicationRunner} beans without explicit
@@ -41,24 +42,26 @@ public class CounterpartyResolver implements ApplicationRunner {
           identity_type,
           identity_value,
           (array_agg(
-              normalized_name
+              normalized_display
               ORDER BY booking_date DESC, counterparty_name ASC,
                        content_hash ASC, occurrence_index ASC
-          ) FILTER (WHERE normalized_name <> ''))[1] AS display_name
+          ) FILTER (WHERE normalized_display <> ''))[1] AS display_name
       FROM (
           SELECT
               CASE
+                  WHEN attributed_name IS NOT NULL THEN 'name'
                   WHEN creditor_id IS NOT NULL THEN 'creditor_id'
                   WHEN counterparty_iban IS NOT NULL THEN 'iban'
                   WHEN normalized_name <> '' THEN 'name'
               END AS identity_type,
               CASE
+                  WHEN attributed_name IS NOT NULL THEN upper(normalized_attributed)
                   WHEN creditor_id IS NOT NULL THEN creditor_id
                   WHEN counterparty_iban IS NOT NULL THEN counterparty_iban
                   WHEN normalized_name <> '' THEN upper(normalized_name)
               END AS identity_value,
               counterparty_name,
-              normalized_name,
+              normalized_display,
               booking_date,
               content_hash,
               occurrence_index
@@ -67,9 +70,17 @@ public class CounterpartyResolver implements ApplicationRunner {
                   creditor_id,
                   counterparty_iban,
                   counterparty_name,
+                  attributed_name,
                   trim(regexp_replace(
                       normalize(counterparty_name, NFC), '\\s+', ' ', 'g'
                   )) AS normalized_name,
+                  trim(regexp_replace(
+                      normalize(attributed_name, NFC), '\\s+', ' ', 'g'
+                  )) AS normalized_attributed,
+                  trim(regexp_replace(
+                      normalize(COALESCE(attributed_name, counterparty_name), NFC),
+                      '\\s+', ' ', 'g'
+                  )) AS normalized_display,
                   booking_date,
                   content_hash,
                   occurrence_index
