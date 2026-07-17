@@ -782,6 +782,9 @@ public class WriteTools {
               setSource);
       int matched = counts.get("matched", Integer.class);
       int changed = counts.get("changed", Integer.class);
+      // Not @Transactional (shared-lock design): a ref superseded by a concurrent split between
+      // pre-lock validation and this UPDATE is excluded from `matched`, so `changed` rows are
+      // already committed here; we then reject with a retry hint. Benign, self-heals next resolve.
       if (matched != distinct.size()) {
         throw new IllegalArgumentException(
             "a target changed underneath the call (concurrent split?); retry");

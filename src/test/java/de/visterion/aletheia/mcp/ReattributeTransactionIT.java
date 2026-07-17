@@ -167,4 +167,46 @@ class ReattributeTransactionIT extends AbstractPostgresIT {
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("refs must be non-empty");
   }
+
+  private void insertSplitChild(long imp, String hash, String parentHash) {
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, hash)
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.of(2026, 1, 1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("4.99"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.RAW, JSONB.valueOf("{}"))
+        .execute();
+  }
+
+  @Test
+  void rejectsSplitChild() {
+    long imp = importId();
+    insertAdyen(imp, "parent", "Fizz Media");
+    insertSplitChild(imp, "child", "parent");
+    assertThatThrownBy(
+            () ->
+                writeTools.reattributeTransaction(
+                    List.of(new TxReference("child", 0)), "Fizz Media"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot reattribute a split child: child#0");
+    assertThat(attribution("parent")).isNull();
+  }
+
+  @Test
+  void rejectsSupersededSplitParent() {
+    long imp = importId();
+    insertAdyen(imp, "parent", "Fizz Media");
+    insertSplitChild(imp, "child", "parent");
+    assertThatThrownBy(
+            () ->
+                writeTools.reattributeTransaction(
+                    List.of(new TxReference("parent", 0)), "Fizz Media"))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("cannot reattribute a split parent");
+  }
 }
