@@ -36,6 +36,10 @@ spring:
       max-request-size: ${ALETHEIA_INGEST_MULTIPART_MAX:40MB}
 
 aletheia:
+  paypal:
+    # PayPal SEPA creditor-id allowlist for #29 transparency. Empty by default (no literal ID
+    # committed); prod sets the real IDs, region-extensible (PayPal Europe/US/...).
+    creditor-ids: ${ALETHEIA_PAYPAL_CREDITOR_IDS:}
   ingest:
     dir: ${ALETHEIA_INGEST_DIR:exports}
     max-file-size: ${ALETHEIA_INGEST_MAX_FILE_SIZE:32MB}
