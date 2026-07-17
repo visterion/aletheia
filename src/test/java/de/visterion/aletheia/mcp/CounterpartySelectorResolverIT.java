@@ -101,7 +101,7 @@ class CounterpartySelectorResolverIT extends AbstractPostgresIT {
 
     List<Long> ids =
         selectorResolver.resolve(
-            new CounterpartySelector(true, null, new BigDecimal("100"), Direction.DBIT));
+            new CounterpartySelector(true, null, new BigDecimal("100"), Direction.DBIT, null, null, null, null));
 
     assertThat(ids).containsExactly(counterpartyIdFor("CDTR-ALPHA"));
   }
@@ -110,7 +110,7 @@ class CounterpartySelectorResolverIT extends AbstractPostgresIT {
   void namePatternIsCaseInsensitive() {
     seedFixtures();
 
-    List<Long> ids = selectorResolver.resolve(new CounterpartySelector(null, "alph", null, null));
+    List<Long> ids = selectorResolver.resolve(new CounterpartySelector(null, "alph", null, null, null, null, null, null));
 
     assertThat(ids).contains(counterpartyIdFor("CDTR-ALPHA"));
   }
@@ -122,7 +122,7 @@ class CounterpartySelectorResolverIT extends AbstractPostgresIT {
     assertThatThrownBy(
             () ->
                 selectorResolver.resolve(
-                    new CounterpartySelector(null, null, null, Direction.BOTH)))
+                    new CounterpartySelector(null, null, null, Direction.BOTH, null, null, null, null)))
         .isInstanceOf(IllegalArgumentException.class);
   }
 }
