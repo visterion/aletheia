@@ -1,5 +1,6 @@
 package de.visterion.aletheia.mcp;
 
+import static de.visterion.aletheia.jooq.Tables.CONTRACTS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
@@ -40,6 +41,16 @@ public class CounterpartySelectorResolver {
     if (where != null && where.predominantDirection() == Direction.BOTH) {
       throw new IllegalArgumentException("predominantDirection must be DBIT or CRDT, not BOTH");
     }
+    if (where != null) {
+      if (where.domainIn() != null && where.domainIn().isEmpty()) {
+        throw new IllegalArgumentException(
+            "empty domainIn is ambiguous; omit the field for no filter");
+      }
+      if (where.natureIn() != null && where.natureIn().isEmpty()) {
+        throw new IllegalArgumentException(
+            "empty natureIn is ambiguous; omit the field for no filter");
+      }
+    }
 
     List<Condition> conditions = new ArrayList<>();
     if (where != null) {
@@ -55,6 +66,25 @@ public class CounterpartySelectorResolver {
       }
       if (where.predominantDirection() != null) {
         conditions.add(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq(where.predominantDirection().name()));
+      }
+      if (where.domainIn() != null) {
+        conditions.add(tagExists("domain", where.domainIn()));
+      }
+      if (where.natureIn() != null) {
+        conditions.add(tagExists("nature", where.natureIn()));
+      }
+      if (where.reviewed() != null) {
+        conditions.add(COUNTERPARTIES.REVIEWED.eq(where.reviewed()));
+      }
+      if (where.hasContract() != null) {
+        Condition exists =
+            DSL.exists(
+                DSL.selectOne()
+                    .from(CONTRACTS)
+                    .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID)));
+        conditions.add(where.hasContract() ? exists : DSL.notExists(
+            DSL.selectOne().from(CONTRACTS)
+                .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
       }
     }
 
@@ -115,5 +145,14 @@ public class CounterpartySelectorResolver {
       }
     }
     return new ArrayList<>(seen);
+  }
+
+  private static Condition tagExists(String dimension, List<String> values) {
+    return DSL.exists(
+        DSL.selectOne()
+            .from(COUNTERPARTY_TAGS)
+            .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .and(COUNTERPARTY_TAGS.DIMENSION.eq(dimension))
+            .and(COUNTERPARTY_TAGS.VALUE.in(values)));
   }
 }
