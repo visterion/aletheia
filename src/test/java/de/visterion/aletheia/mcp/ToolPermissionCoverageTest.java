@@ -31,7 +31,7 @@ class ToolPermissionCoverageTest {
   }
 
   @Test
-  void everyDeclaredToolIsCoveredByThePermissionServiceAndThereAreExactlyEighteen() {
+  void everyDeclaredToolIsCoveredByThePermissionServiceAndThereAreExactlyNineteen() {
     Set<String> readToolNames = toolNamesOf(ReadTools.class);
     Set<String> writeToolNames = toolNamesOf(WriteTools.class);
 
