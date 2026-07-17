@@ -48,6 +48,7 @@ public class ToolPermissionService {
           "link_contract",
           "dismiss_counterparty",
           "split_transaction",
+          "reattribute_transaction",
           "update_preferences");
 
   private static final Set<String> WRITER_TOOLS = union(READ_TOOLS, WRITE_TOOLS);
