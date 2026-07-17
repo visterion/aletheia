@@ -13,6 +13,14 @@ import org.springframework.stereotype.Component;
  * layer from {@code transactions}: a {@code mandate_id} booked in >= 2 distinct calendar
  * months under a {@code creditor_id}-identity counterparty is a contract.
  *
+ * <p>Attributed rows (PayPal transparency, feature #29) take a separate path: a transaction
+ * with {@code attributed_name} set materializes a per-merchant contract on the name-identity
+ * counterparty with the synthetic mandate {@code 'attributed'}, once the merchant has >= 2
+ * distinct calendar months of activity. This deliberately splits a shared PayPal mandate into
+ * one contract per underlying merchant instead of a single lumped contract on the PayPal
+ * creditor identity, so the creditor path below excludes any row with {@code attributed_name
+ * IS NOT NULL}.
+ *
  * <p>Only raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}. This
  * prevents creating contracts from logical split children (purchase parts must not trigger new
  * contracts via resolver).
@@ -34,18 +42,35 @@ public class ContractResolver implements ApplicationRunner {
   private static final String UPSERT_CONTRACTS =
       """
       INSERT INTO contracts (counterparty_id, mandate_id, source, status)
-      SELECT c.id, t.mandate_id, 'auto', 'open'
-      FROM transactions t
-      JOIN counterparties c
-          ON c.identity_type = 'creditor_id' AND c.identity_value = t.creditor_id
-      WHERE t.creditor_id IS NOT NULL
-        AND t.mandate_id IS NOT NULL
-        AND t."""
+      SELECT c.id, r.mandate_id, 'auto', 'open'
+      FROM (
+          SELECT
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN 'name'
+                  WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+              END AS identity_type,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN
+                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                  WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+              END AS identity_value,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN 'attributed'
+                  ELSE t.mandate_id
+              END AS mandate_id,
+              date_trunc('month', t.booking_date) AS month
+          FROM transactions t
+          WHERE t."""
           + TransactionLayerSql.RAW_ROOT_PREDICATE
-          + "\n"
           + """
-      GROUP BY c.id, t.mandate_id
-      HAVING count(DISTINCT date_trunc('month', t.booking_date)) >= 2
+
+            AND (t.attributed_name IS NOT NULL
+                 OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
+      ) r
+      JOIN counterparties c
+          ON c.identity_type = r.identity_type AND c.identity_value = r.identity_value
+      GROUP BY c.id, r.mandate_id
+      HAVING count(DISTINCT r.month) >= 2
       ON CONFLICT (counterparty_id, mandate_id) DO NOTHING
       """;
 
@@ -70,8 +95,19 @@ public class ContractResolver implements ApplicationRunner {
       JOIN counterparties c ON c.id = ct.counterparty_id
       JOIN (
           SELECT
-              t.creditor_id,
-              t.mandate_id,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN 'name'
+                  WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+              END AS identity_type,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN
+                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                  WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+              END AS identity_value,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN 'attributed'
+                  ELSE t.mandate_id
+              END AS mandate_id,
               percentile_cont(0.5) WITHIN GROUP (ORDER BY t.amount) AS typical_amount,
               min(t.amount) AS amount_min,
               max(t.amount) AS amount_max,
@@ -79,14 +115,16 @@ public class ContractResolver implements ApplicationRunner {
               max(t.booking_date) AS last_seen,
               count(*) AS occurrence_count
           FROM transactions t
-          WHERE t.creditor_id IS NOT NULL
-            AND t.mandate_id IS NOT NULL
-            AND t."""
+          WHERE t."""
           + TransactionLayerSql.RAW_ROOT_PREDICATE
-          + "\n"
           + """
-          GROUP BY t.creditor_id, t.mandate_id
-      ) m ON m.creditor_id = c.identity_value AND m.mandate_id = ct.mandate_id
+
+            AND (t.attributed_name IS NOT NULL
+                 OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
+          GROUP BY 1, 2, 3
+      ) m ON m.identity_type = c.identity_type
+         AND m.identity_value = c.identity_value
+         AND m.mandate_id = ct.mandate_id
       WHERE ct.mandate_id IS NOT NULL
       ON CONFLICT (counterparty_id, contract_id) DO UPDATE SET
           typical_amount   = EXCLUDED.typical_amount,
@@ -106,6 +144,7 @@ public class ContractResolver implements ApplicationRunner {
           FROM transactions t
           WHERE t.mandate_id IS NOT NULL
             AND (t.creditor_id IS NULL OR t.creditor_id = '')
+            AND t.attributed_name IS NULL
             AND t."""
           + TransactionLayerSql.RAW_ROOT_PREDICATE
           + "\n"
