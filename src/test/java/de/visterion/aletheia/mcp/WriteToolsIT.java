@@ -174,7 +174,7 @@ class WriteToolsIT extends AbstractPostgresIT {
     writeTools.classifyCounterparty(
         List.of(id), null, List.of(new TagInput("domain", "telecom")), TagSource.auto, null, false);
 
-    writeTools.confirmCounterparty(id, null);
+    writeTools.confirmCounterparty(id, null, null, null, null);
 
     Record counterparty =
         db.select(COUNTERPARTIES.REVIEWED, COUNTERPARTIES.STATUS)
@@ -198,7 +198,7 @@ class WriteToolsIT extends AbstractPostgresIT {
                 .fetchOne(COUNTERPARTIES.STATUS))
         .isEqualTo("open");
 
-    writeTools.confirmCounterparty(id, null);
+    writeTools.confirmCounterparty(id, null, null, null, null);
 
     assertThat(
             db.fetchCount(

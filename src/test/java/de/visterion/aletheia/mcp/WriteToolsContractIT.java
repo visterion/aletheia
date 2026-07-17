@@ -100,7 +100,7 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     seedRecurring(id, contractA, "auto", "9.99");
     seedRecurring(id, contractB, "auto", "19.99");
 
-    writeTools.confirmCounterparty(id, contractA);
+    writeTools.confirmCounterparty(id, contractA, null, null, null);
 
     Record a = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractA)).fetchOne();
     assertThat(a.get(CONTRACTS.STATUS)).isEqualTo("confirmed");
@@ -124,7 +124,7 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     long id = counterpartyWithOneTransaction("CDTR-MANDATELESS", "Mandateless Co");
     seedRecurring(id, null, "auto", "5.00");
 
-    writeTools.confirmCounterparty(id, null);
+    writeTools.confirmCounterparty(id, null, null, null, null);
 
     var contracts =
         db.selectFrom(CONTRACTS)
@@ -235,7 +235,7 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     seedRecurring(id, contractA, "auto", "9.99");
     seedRecurring(id, contractB, "auto", "19.99");
 
-    writeTools.confirmCounterparty(id, null);
+    writeTools.confirmCounterparty(id, null, null, null, null);
 
     Record recurringA =
         db.selectFrom(RECURRING).where(RECURRING.CONTRACT_ID.eq(contractA)).fetchOne();
@@ -256,7 +256,7 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     long cpB = counterpartyWithOneTransaction("CDTR-OWNER-B", "Owner B Co");
     long contractOfB = seedContract(cpB, "MANDATE-B");
 
-    assertThatThrownBy(() -> writeTools.confirmCounterparty(cpA, contractOfB))
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(cpA, contractOfB, null, null, null))
         .isInstanceOf(IllegalArgumentException.class);
 
     Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractOfB)).fetchOne();
@@ -272,7 +272,7 @@ class WriteToolsContractIT extends AbstractPostgresIT {
   void confirmCounterpartyRejectsANonexistentContractId() {
     long id = counterpartyWithOneTransaction("CDTR-NOCONTRACT", "No Contract Co");
 
-    assertThatThrownBy(() -> writeTools.confirmCounterparty(id, 999_999L))
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(id, 999_999L, null, null, null))
         .isInstanceOf(IllegalArgumentException.class);
 
     assertThat(
@@ -343,7 +343,7 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     long contractA = seedContract(id, "MANDATE-A");
     seedRecurring(id, contractA, "auto", "9.99");
 
-    writeTools.confirmCounterparty(id, contractA);
+    writeTools.confirmCounterparty(id, contractA, null, null, null);
 
     Record history =
         db.selectFrom(COUNTERPARTY_HISTORY)

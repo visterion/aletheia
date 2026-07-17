@@ -20,6 +20,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
 
   @Autowired DSLContext db;
   @Autowired WriteTools writeTools;
+  @Autowired ReadTools readTools;
 
   @AfterEach
   void cleanUp() {
@@ -148,6 +149,82 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
         .isEqualTo(2);
     assertThat(writeTools.dismissCounterparty(null, null, null, where, "s", null).affectedCount())
         .isEqualTo(0);
+  }
+
+  @Test
+  void batchConfirmMandatelessAppearsInRegister() { // C1 regression
+    long cp = seedCp("rec");
+    seedMandatelessRecurring(cp);
+    var ack = writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
+    assertThat(ack.affectedCount()).isEqualTo(1);
+    // a NULL-mandate contract was materialized + confirmed -> visible in the register
+    assertThat(
+            db.fetchCount(
+                CONTRACTS,
+                CONTRACTS.COUNTERPARTY_ID.eq(cp).and(CONTRACTS.STATUS.eq("confirmed"))))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void batchConfirmByIdsLegacyFlip() {
+    long cp = seedCp("plain");
+    tag(cp, "domain", "handel");
+    writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
+    assertThat(
+            db.select(COUNTERPARTIES.STATUS)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.ID.eq(cp))
+                .fetchOne(COUNTERPARTIES.STATUS))
+        .isEqualTo("confirmed");
+    assertThat(
+            db.fetchCount(
+                COUNTERPARTIES,
+                COUNTERPARTIES.ID.eq(cp).and(COUNTERPARTIES.REVIEWED.eq(true))))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void batchConfirmRejectsContractId() {
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(null, 7L, List.of(1L), null, null))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void openMandateContractNotConfirmedByBatch() { // §3 limitation
+    long cp = seedCp("mandate");
+    addContract(cp); // open mandate contract, no mandate-less recurring
+    writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
+    assertThat(
+            db.fetchCount(
+                CONTRACTS, CONTRACTS.COUNTERPARTY_ID.eq(cp).and(CONTRACTS.STATUS.eq("open"))))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void batchDismissMandatelessRecurringMaterializesAndDismisses() { // review coverage
+    long cp = seedCp("rec-dismiss");
+    seedMandatelessRecurring(cp);
+    var ack = writeTools.dismissCounterparty(null, null, List.of(cp), null, "noise", null);
+    assertThat(ack.affectedCount()).isEqualTo(1);
+    assertThat(
+            db.fetchCount(
+                COUNTERPARTIES,
+                COUNTERPARTIES.ID.eq(cp).and(COUNTERPARTIES.REVIEWED.eq(true))))
+        .isEqualTo(1);
+    assertThat(
+            db.fetchCount(
+                CONTRACTS,
+                CONTRACTS.COUNTERPARTY_ID.eq(cp).and(CONTRACTS.STATUS.eq("dismissed"))))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void dismissRejectsCounterpartyIdWithBatchIds() { // review coverage
+    assertThatThrownBy(
+            () ->
+                writeTools.dismissCounterparty(
+                    5L, null, List.of(1L), null, "reason", null))
+        .isInstanceOf(IllegalArgumentException.class);
   }
 
   private String status(long id) {
