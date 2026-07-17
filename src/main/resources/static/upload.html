@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Aletheia Upload</title>
+  <style>
+    :root {
+      --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ef; --muted: #9aa4b2;
+      --accent: #4f8cff; --ok: #35c46a; --warn: #e0a52b; --err: #e5533d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px);
+      max-width: 640px; margin-inline: auto;
+    }
+    h1 { font-size: 22px; margin: 24px 0 4px; }
+    .sub { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input[type=password], input[type=text] {
+      width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+      background: #0f131a; color: var(--fg); font-size: 16px;
+    }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .row > * { flex: 1; }
+    button {
+      appearance: none; border: 0; border-radius: 10px; padding: 14px 16px;
+      font-size: 16px; font-weight: 600; color: #fff; background: var(--accent);
+      cursor: pointer; width: 100%; margin-top: 12px;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    button.secondary { background: #2a313c; }
+    .filepick {
+      display: block; text-align: center; padding: 22px; border: 1.5px dashed var(--line);
+      border-radius: 12px; color: var(--muted); cursor: pointer; background: #0f131a;
+    }
+    .filepick strong { color: var(--fg); }
+    input[type=file] { display: none; }
+    .picked { font-size: 14px; color: var(--muted); margin-top: 10px; }
+    #results { margin-top: 8px; }
+    .res { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+    .res:first-child { border-top: 0; }
+    .res .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .res .status { flex: 0 0 auto; font-weight: 600; }
+    .status.ok { color: var(--ok); } .status.warn { color: var(--warn); }
+    .status.err { color: var(--err); } .status.pending { color: var(--muted); }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 14px; }
+    .savenote { font-size: 12px; color: var(--ok); margin-top: 6px; min-height: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Aletheia — Upload</h1>
+  <p class="sub">Banking4/Subsembly-Export(e) hochladen. Läuft direkt in die laufende Instanz (idempotent, restartlos).</p>
+
+  <div class="card">
+    <label for="token">WRITER-Token (einmal eingeben, wird nur in diesem Browser gespeichert)</label>
+    <div class="row">
+      <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bearer-Token">
+      <button type="button" class="secondary" style="flex:0 0 auto;width:auto;margin-top:0;padding:12px 14px" id="toggle">👁</button>
+    </div>
+    <div class="savenote" id="savenote"></div>
+  </div>
+
+  <div class="card">
+    <label class="filepick" for="files">
+      <strong>Dateien wählen</strong><br>eine oder mehrere Export-Dateien (Mehrfachauswahl)
+    </label>
+    <input id="files" type="file" multiple>
+    <div class="picked" id="picked">Keine Datei gewählt.</div>
+    <button id="upload" disabled>Hochladen</button>
+    <div id="results"></div>
+  </div>
+
+  <p class="hint">Tipp: Auf dem iPhone auf „Dateien wählen" tippen → unten „Dateien durchsuchen" → Export(e) markieren. iCloud-Dateien vorher herunterladen (Wolkensymbol antippen).</p>
+
+  <script>
+    (function () {
+      var TOKEN_KEY = "aletheia_writer_token";
+      var tokenEl = document.getElementById("token");
+      var saveNote = document.getElementById("savenote");
+      var filesEl = document.getElementById("files");
+      var pickedEl = document.getElementById("picked");
+      var uploadBtn = document.getElementById("upload");
+      var resultsEl = document.getElementById("results");
+      var toggleBtn = document.getElementById("toggle");
+
+      tokenEl.value = localStorage.getItem(TOKEN_KEY) || "";
+      tokenEl.addEventListener("input", function () {
+        localStorage.setItem(TOKEN_KEY, tokenEl.value.trim());
+        saveNote.textContent = tokenEl.value ? "gespeichert ✓" : "";
+        refresh();
+      });
+      toggleBtn.addEventListener("click", function () {
+        tokenEl.type = tokenEl.type === "password" ? "text" : "password";
+      });
+
+      filesEl.addEventListener("change", function () {
+        var n = filesEl.files.length;
+        pickedEl.textContent = n === 0 ? "Keine Datei gewählt."
+          : n === 1 ? filesEl.files[0].name
+          : n + " Dateien gewählt";
+        refresh();
+      });
+
+      function refresh() {
+        uploadBtn.disabled = !(tokenEl.value.trim() && filesEl.files.length);
+      }
+
+      function addResult(name) {
+        var row = document.createElement("div");
+        row.className = "res";
+        var n = document.createElement("span"); n.className = "name"; n.textContent = name;
+        var s = document.createElement("span"); s.className = "status pending"; s.textContent = "…";
+        row.appendChild(n); row.appendChild(s);
+        resultsEl.appendChild(row);
+        return s;
+      }
+
+      function setStatus(el, cls, text) { el.className = "status " + cls; el.textContent = text; }
+
+      uploadBtn.addEventListener("click", async function () {
+        var token = tokenEl.value.trim();
+        var files = Array.prototype.slice.call(filesEl.files);
+        if (!token || !files.length) return;
+        uploadBtn.disabled = true;
+        resultsEl.innerHTML = "";
+
+        for (var i = 0; i < files.length; i++) {
+          var file = files[i];
+          var statusEl = addResult(file.name);
+          try {
+            var fd = new FormData();
+            fd.append("file", file, file.name);
+            var res = await fetch("/ingest", {
+              method: "POST",
+              headers: { "Authorization": "Bearer " + token },
+              body: fd
+            });
+            if (res.ok) {
+              var j = await res.json();
+              if (j.fileAlreadyImported) {
+                setStatus(statusEl, "warn", "schon importiert");
+              } else {
+                setStatus(statusEl, "ok", "neu " + j.rowsNew + " · übersprungen " + j.rowsSkipped);
+              }
+            } else if (res.status === 401) {
+              setStatus(statusEl, "err", "401 – Token falsch/fehlt");
+            } else if (res.status === 403) {
+              setStatus(statusEl, "err", "403 – kein Schreibrecht");
+            } else if (res.status === 400) {
+              setStatus(statusEl, "err", "400 – keine gültige Export-Datei");
+            } else if (res.status === 413) {
+              setStatus(statusEl, "err", "413 – Datei zu groß");
+            } else {
+              setStatus(statusEl, "err", "Fehler " + res.status);
+            }
+          } catch (e) {
+            setStatus(statusEl, "err", "Netzwerkfehler (Tailscale verbunden?)");
+          }
+        }
+        uploadBtn.disabled = false;
+      });
+
+      refresh();
+    })();
+  </script>
+</body>
+</html>
