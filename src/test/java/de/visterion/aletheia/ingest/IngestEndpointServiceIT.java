@@ -73,7 +73,16 @@ class IngestEndpointServiceIT extends AbstractPostgresIT {
     // otherwise Files.createSymbolicLink below fails with NoSuchFileException.
     Files.createDirectories(properties.dir());
     Path imported = properties.dir().resolve("imported");
-    Files.deleteIfExists(imported);
+    // A sibling test's happy-path ingest can leave `imported/` a non-empty directory; a plain
+    // deleteIfExists would then throw DirectoryNotEmptyException (seen only under CI test
+    // ordering, since local runs clear the dir first). Clear it robustly -- a leftover symlink
+    // from a crashed prior run of this test, or a populated real directory -- before linking a
+    // fresh cross-filesystem target into it.
+    if (Files.isSymbolicLink(imported)) {
+      Files.delete(imported);
+    } else {
+      deleteRecursively(imported);
+    }
     Path tmpfsTarget = Files.createTempDirectory(Path.of("/dev/shm"), "aletheia-imported-it-");
     Files.createSymbolicLink(imported, tmpfsTarget);
 
