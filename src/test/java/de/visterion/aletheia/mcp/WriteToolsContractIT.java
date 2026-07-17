@@ -294,7 +294,8 @@ class WriteToolsContractIT extends AbstractPostgresIT {
     long cpB = counterpartyWithOneTransaction("CDTR-DISM-OWNER-B", "Dismiss Owner B Co");
     long contractOfB = seedContract(cpB, "MANDATE-B");
 
-    assertThatThrownBy(() -> writeTools.dismissCounterparty(cpA, "wrong owner", contractOfB))
+    assertThatThrownBy(
+            () -> writeTools.dismissCounterparty(cpA, contractOfB, null, null, "wrong owner", null))
         .isInstanceOf(IllegalArgumentException.class);
 
     Record contract = db.selectFrom(CONTRACTS).where(CONTRACTS.ID.eq(contractOfB)).fetchOne();
@@ -305,7 +306,8 @@ class WriteToolsContractIT extends AbstractPostgresIT {
   void dismissCounterpartyRejectsANonexistentContractId() {
     long id = counterpartyWithOneTransaction("CDTR-DISM-NOCONTRACT", "Dismiss No Contract Co");
 
-    assertThatThrownBy(() -> writeTools.dismissCounterparty(id, "reason", 999_999L))
+    assertThatThrownBy(
+            () -> writeTools.dismissCounterparty(id, 999_999L, null, null, "reason", null))
         .isInstanceOf(IllegalArgumentException.class);
 
     assertThat(
