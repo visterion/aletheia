@@ -16,9 +16,11 @@ import org.springframework.stereotype.Component;
  * On startup, ingests every *.json in the configured directory. Never throws.
  *
  * <p>{@code @Order(1)} guarantees this runs before {@link
- * de.visterion.aletheia.substrate.CounterpartyResolver} ({@code @Order(2)}) — Spring does not
- * order {@link ApplicationRunner} beans without explicit {@code @Order} (spec §3, adversarial
- * review M5).
+ * de.visterion.aletheia.substrate.PayPalAttributionResolver} ({@code @Order(2)}), {@link
+ * de.visterion.aletheia.substrate.CounterpartyResolver} ({@code @Order(3)}), and {@link
+ * de.visterion.aletheia.substrate.ContractResolver} ({@code @Order(4)}) — Spring does not order
+ * {@link ApplicationRunner} beans without explicit {@code @Order} (spec §3, adversarial review
+ * M5).
  */
 @Component
 @Order(1)
