@@ -27,4 +27,13 @@ class ToolPermissionServiceTest {
     assertThat(allowed).contains("split_transaction");
     assertThat(service.allowedTools(AuthRole.READER)).doesNotContain("split_transaction");
   }
+
+  @Test
+  void wakeUpIsReaderCallableAndUpdatePreferencesIsWriterOnly() {
+    var svc = new ToolPermissionService();
+    assertThat(svc.isAllowed(AuthRole.READER, "wake_up")).isTrue();
+    assertThat(svc.isAllowed(AuthRole.READER, "update_preferences")).isFalse();
+    assertThat(svc.isAllowed(AuthRole.WRITER, "wake_up")).isTrue();
+    assertThat(svc.isAllowed(AuthRole.WRITER, "update_preferences")).isTrue();
+  }
 }
