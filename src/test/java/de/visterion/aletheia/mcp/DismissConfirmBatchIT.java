@@ -157,7 +157,13 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
     seedMandatelessRecurring(cp);
     var ack = writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
     assertThat(ack.affectedCount()).isEqualTo(1);
-    // a NULL-mandate contract was materialized + confirmed -> visible in the register
+
+    // a NULL-mandate contract was materialized + confirmed -> visible in the register, the
+    // actual surface a human/Claude reads (not just the raw contracts row).
+    var register = readTools.obligationsRegister();
+    assertThat(register.rows())
+        .anyMatch(row -> row.counterpartyId() == cp);
+
     assertThat(
             db.fetchCount(
                 CONTRACTS,
@@ -225,6 +231,51 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
                 writeTools.dismissCounterparty(
                     5L, null, List.of(1L), null, "reason", null))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void batchDismissRejectsZeroPositiveMinAnnualCost() { // final review fix 1
+    // minAnnualCost=0 is not an effective filter (AnnualCost.estimate is >= 0 for essentially
+    // every counterparty) -- must not be treated as narrowing the where, else it sweeps the
+    // whole table.
+    var zeroMinAnnualCost =
+        new CounterpartySelector(
+            null, null, java.math.BigDecimal.ZERO, null, null, null, null, null);
+    assertThatThrownBy(
+            () ->
+                writeTools.dismissCounterparty(
+                    null, null, null, zeroMinAnnualCost, "x", true))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void batchDismissAcceptsGenuinelyNarrowingMinAnnualCost() { // final review fix 1
+    var narrowingMinAnnualCost =
+        new CounterpartySelector(
+            null, null, new java.math.BigDecimal("100"), null, null, null, null, null);
+    // Must not throw for the zero-effective-conditions reason; the resolved (possibly empty)
+    // batch is dismissed normally.
+    var ack = writeTools.dismissCounterparty(null, null, null, narrowingMinAnnualCost, "x", true);
+    assertThat(ack.affectedCount()).isEqualTo(0);
+  }
+
+  @Test
+  void batchConfirmByWhereSelector() { // final review fix 4
+    long cp = seedCp("handel-cp");
+    tag(cp, "domain", "handel");
+    var where = new CounterpartySelector(null, null, null, null, List.of("handel"), null, false, null);
+    var ack = writeTools.confirmCounterparty(null, null, null, where, null);
+    assertThat(ack.affectedCount()).isEqualTo(1);
+    assertThat(
+            db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.REVIEWED)
+                .from(COUNTERPARTIES)
+                .where(COUNTERPARTIES.ID.eq(cp))
+                .fetchOne())
+        .satisfies(
+            row -> {
+              assertThat(row.get(COUNTERPARTIES.STATUS)).isEqualTo("confirmed");
+              assertThat(row.get(COUNTERPARTIES.REVIEWED)).isTrue();
+            });
   }
 
   private String status(long id) {
