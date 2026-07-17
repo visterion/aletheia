@@ -1,5 +1,6 @@
 package de.visterion.aletheia.mcp;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -7,6 +8,11 @@ import java.util.List;
  * A declarative {@code where}-selector for counterparties, shared by the {@code aggregate} and
  * batch {@code classify_counterparty} tools. Every field is nullable and means "no filter on this
  * dimension" when {@code null}.
+ *
+ * <p>Each component is annotated {@code @JsonProperty(required = false)} so the generated MCP tool
+ * schema does not mark it as required; Spring AI's {@code JsonSchemaGenerator} otherwise defaults
+ * every record component to required, which rejects a caller that omits fields it doesn't want to
+ * filter on (the common case for a partial {@code where} selector).
  *
  * @param untagged {@code true} to require no rows in {@code counterparty_tags}
  * @param namePattern case-insensitive substring match against {@code counterparties.display_name}
@@ -21,11 +27,11 @@ import java.util.List;
  *     the counterparty
  */
 public record CounterpartySelector(
-    Boolean untagged,
-    String namePattern,
-    BigDecimal minAnnualCost,
-    Direction predominantDirection,
-    List<String> domainIn,
-    List<String> natureIn,
-    Boolean reviewed,
-    Boolean hasContract) {}
+    @JsonProperty(required = false) Boolean untagged,
+    @JsonProperty(required = false) String namePattern,
+    @JsonProperty(required = false) BigDecimal minAnnualCost,
+    @JsonProperty(required = false) Direction predominantDirection,
+    @JsonProperty(required = false) List<String> domainIn,
+    @JsonProperty(required = false) List<String> natureIn,
+    @JsonProperty(required = false) Boolean reviewed,
+    @JsonProperty(required = false) Boolean hasContract) {}
