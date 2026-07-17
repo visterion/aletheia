@@ -567,7 +567,7 @@ public class WriteTools {
     return Boolean.TRUE.equals(w.untagged())
         || (w.namePattern() != null && !w.namePattern().isBlank())
         || w.predominantDirection() != null
-        || w.minAnnualCost() != null
+        || (w.minAnnualCost() != null && w.minAnnualCost().signum() > 0)
         || (w.domainIn() != null && !w.domainIn().isEmpty())
         || (w.natureIn() != null && !w.natureIn().isEmpty())
         || w.reviewed() != null

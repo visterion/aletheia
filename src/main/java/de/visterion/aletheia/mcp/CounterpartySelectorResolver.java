@@ -77,14 +77,8 @@ public class CounterpartySelectorResolver {
         conditions.add(COUNTERPARTIES.REVIEWED.eq(where.reviewed()));
       }
       if (where.hasContract() != null) {
-        Condition exists =
-            DSL.exists(
-                DSL.selectOne()
-                    .from(CONTRACTS)
-                    .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID)));
-        conditions.add(where.hasContract() ? exists : DSL.notExists(
-            DSL.selectOne().from(CONTRACTS)
-                .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
+        Condition exists = contractExists();
+        conditions.add(where.hasContract() ? exists : DSL.not(exists));
       }
     }
 
@@ -145,6 +139,13 @@ public class CounterpartySelectorResolver {
       }
     }
     return new ArrayList<>(seen);
+  }
+
+  private static Condition contractExists() {
+    return DSL.exists(
+        DSL.selectOne()
+            .from(CONTRACTS)
+            .where(CONTRACTS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID)));
   }
 
   private static Condition tagExists(String dimension, List<String> values) {
