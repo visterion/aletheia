@@ -258,7 +258,7 @@ class WriteToolsIT extends AbstractPostgresIT {
   void dismissWithoutContractIdOrRecurringSetsStatusAndReason() {
     long id = counterpartyWithOneTransaction("CDTR-DISMISS", "Dismiss Co");
 
-    writeTools.dismissCounterparty(id, "one-off refund, not recurring", null);
+    writeTools.dismissCounterparty(id, null, null, null, "one-off refund, not recurring", null);
 
     Record row =
         db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.DISMISSED_REASON)
@@ -274,7 +274,8 @@ class WriteToolsIT extends AbstractPostgresIT {
 
   @Test
   void writeToolsRejectAnUnknownCounterpartyId() {
-    assertThatThrownBy(() -> writeTools.dismissCounterparty(999_999L, "no such counterparty", null))
+    assertThatThrownBy(
+            () -> writeTools.dismissCounterparty(999_999L, null, null, null, "no such counterparty", null))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
