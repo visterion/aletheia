@@ -38,14 +38,28 @@ public class WriteTools {
   private final DSLContext db;
   private final CounterpartySelectorResolver selectorResolver;
   private final TransactionSplitService splitService;
+  private final OperatingGuideService operatingGuideService;
 
   public WriteTools(
       DSLContext db,
       CounterpartySelectorResolver selectorResolver,
-      TransactionSplitService splitService) {
+      TransactionSplitService splitService,
+      OperatingGuideService operatingGuideService) {
     this.db = db;
     this.selectorResolver = selectorResolver;
     this.splitService = splitService;
+    this.operatingGuideService = operatingGuideService;
+  }
+
+  @Tool(
+      name = "update_preferences",
+      description =
+          "Record durable customer preferences (markdown). Replaces the preferences section only"
+              + " -- the operating guide is protected. wake_up first, edit, write back the full"
+              + " preferences markdown.")
+  public String updatePreferences(
+      @ToolParam(description = "the full new preferences markdown") String preferences) {
+    return operatingGuideService.updatePreferences(preferences, currentActor());
   }
 
   @Tool(
