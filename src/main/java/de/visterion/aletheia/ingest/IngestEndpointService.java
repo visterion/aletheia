@@ -3,13 +3,13 @@ package de.visterion.aletheia.ingest;
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.PayPalAttributionResolver;
+import de.visterion.aletheia.substrate.SubstrateLock;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -25,19 +25,21 @@ public class IngestEndpointService {
   private final PayPalAttributionResolver payPalAttributionResolver;
   private final CounterpartyResolver counterpartyResolver;
   private final ContractResolver contractResolver;
-  private final ReentrantLock lock = new ReentrantLock();
+  private final SubstrateLock lock;
 
   public IngestEndpointService(
       IngestProperties properties,
       IngestService ingestService,
       PayPalAttributionResolver payPalAttributionResolver,
       CounterpartyResolver counterpartyResolver,
-      ContractResolver contractResolver) {
+      ContractResolver contractResolver,
+      SubstrateLock lock) {
     this.properties = properties;
     this.ingestService = ingestService;
     this.payPalAttributionResolver = payPalAttributionResolver;
     this.counterpartyResolver = counterpartyResolver;
     this.contractResolver = contractResolver;
+    this.lock = lock;
   }
 
   /**
