@@ -67,4 +67,54 @@ class ArgumentParserTest {
         .isInstanceOf(McpArgumentException.class)
         .hasMessage("Invalid e");
   }
+
+  @Test
+  void counterpartySelectorReturnsNullWhenFieldAbsent() {
+    CounterpartySelector where = ArgumentParser.counterpartySelector(arguments(), "where");
+
+    assertThat(where).isNull();
+  }
+
+  @Test
+  void counterpartySelectorParsesAllEightFields() {
+    JsonNode arguments =
+        mapper.readTree(
+            "{\"where\":{\"untagged\":true,\"namePattern\":\"tel\",\"minAnnualCost\":12.5,"
+                + "\"predominantDirection\":\"DBIT\",\"domainIn\":[\"insurance\"],"
+                + "\"natureIn\":[\"fixed\"],\"reviewed\":false,\"hasContract\":true}}");
+
+    CounterpartySelector where = ArgumentParser.counterpartySelector(arguments, "where");
+
+    assertThat(where.untagged()).isTrue();
+    assertThat(where.namePattern()).isEqualTo("tel");
+    assertThat(where.minAnnualCost().compareTo(new BigDecimal("12.5"))).isZero();
+    assertThat(where.predominantDirection()).isEqualTo(Direction.DBIT);
+    assertThat(where.domainIn()).containsExactly("insurance");
+    assertThat(where.natureIn()).containsExactly("fixed");
+    assertThat(where.reviewed()).isFalse();
+    assertThat(where.hasContract()).isTrue();
+  }
+
+  @Test
+  void counterpartySelectorThrowsMcpArgumentExceptionForInvalidPredominantDirection() {
+    JsonNode arguments = mapper.readTree("{\"where\":{\"predominantDirection\":\"NOPE\"}}");
+
+    assertThatThrownBy(() -> ArgumentParser.counterpartySelector(arguments, "where"))
+        .isInstanceOf(McpArgumentException.class)
+        .hasMessage("Invalid predominantDirection");
+  }
+
+  @Test
+  void requiredEnumParsesValidValue() {
+    Direction direction = ArgumentParser.requiredEnum(arguments(), "e", Direction.class);
+
+    assertThat(direction).isEqualTo(Direction.DBIT);
+  }
+
+  @Test
+  void optionalEnumReturnsNullWhenFieldAbsent() {
+    Direction direction = ArgumentParser.optionalEnum(arguments(), "missing", Direction.class);
+
+    assertThat(direction).isNull();
+  }
 }
