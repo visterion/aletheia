@@ -53,8 +53,11 @@ public class GetReviewQueueToolHandler implements ToolHandler {
   @Override
   public Map<String, Object> inputSchema() {
     return ToolInputSchema.object()
-        .optionalInteger("limit", "max rows (default 50)")
-        .optionalBoolean("verbose", "false default; true full evidence")
+        .optionalInteger("limit", "max rows to return (default 50)")
+        .optionalBoolean(
+            "verbose",
+            "false (default): compact rows without the evidence/recurring blob; true:"
+                + " full evidence/recurring detail")
         .build();
   }
 

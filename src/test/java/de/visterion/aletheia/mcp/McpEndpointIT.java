@@ -141,7 +141,6 @@ class McpEndpointIT {
     // Collect every mismatch across all 23 tools (rather than failing on the first) so a single
     // run reports the complete picture of any real parity gap.
     List<String> mismatches = new java.util.ArrayList<>();
-    List<String> descriptionDrift = new java.util.ArrayList<>();
     for (String name : v2Tools.keySet()) {
       Tool v2Tool = v2Tools.get(name);
       Tool legacyTool = legacyTools.get(name);
@@ -155,74 +154,49 @@ class McpEndpointIT {
         mismatches.add(name + ": top-level description differs");
       }
 
+      // Full structural + description parity: every property name/type/required-ness/enum-value
+      // AND every property "description" (at every nesting level, including array-item and
+      // nested-object sub-fields) must match exactly. Only the intended, cosmetic generator
+      // differences are normalized away first: `format` keys (ToolInputSchema never emits them),
+      // an explicit empty `required:[]` vs its absence, and `const` vs a one-element `enum`.
       Object normalizedV2 = normalizeStructural(v2Tool.inputSchema());
       Object normalizedLegacy = normalizeStructural(legacyTool.inputSchema());
       if (!normalizedV2.equals(normalizedLegacy)) {
         mismatches.add(
             name
-                + ": inputSchema STRUCTURE differs after normalization (types/required/enum-values)\n  v2:     "
+                + ": inputSchema differs after normalization (types/required/enum-values/descriptions)"
+                + "\n  v2:     "
                 + normalizedV2
                 + "\n  legacy: "
                 + normalizedLegacy);
-      }
-
-      // Nested per-property "description" text is NOT asserted byte-identical (see javadoc on
-      // normalizeStructural): real, discovered-while-writing-this-test wording drift, tracked
-      // here informationally so the count is visible without failing the build on prose only.
-      if (!stripDescriptions(v2Tool.inputSchema()).equals(stripDescriptions(legacyTool.inputSchema()))
-          && normalizedV2.equals(normalizedLegacy)) {
-        descriptionDrift.add(name);
       }
     }
 
     assertThat(mismatches)
         .as(
-            "real structural parity mismatches (property names/types/required/enum-values,"
-                + " top-level tool name/description); %d of 23 tools have nested-property"
-                + " description wording drift only (informational, not asserted): %s",
-            descriptionDrift.size(),
-            descriptionDrift)
+            "structural + description parity mismatches (property names/types/required/"
+                + "enum-values/descriptions at every level, top-level tool name/description)")
         .isEmpty();
   }
 
   /**
-   * Normalizes a JSON-Schema fragment down to the parts that are load-bearing for an MCP client
-   * building a valid {@code tools/call} argument payload: {@code type}, {@code properties} (by
-   * name, recursively normalized), {@code required} (empty-array-normalized, see {@link
-   * #normalizeEmptyRequired}), {@code additionalProperties}, {@code items}, and enum value sets
-   * (a JSON-Schema {@code const} single-value field is folded into a one-element {@code enum} so
-   * it compares equal to the hand-rolled encoding of the same constraint).
+   * Normalizes a JSON-Schema fragment down to the parts that are load-bearing for parity with the
+   * live Spring AI oracle: {@code type}, {@code properties} (by name, recursively normalized,
+   * including each property's {@code description}), {@code required} (empty-array-normalized, see
+   * {@link #normalizeEmptyRequired}), {@code additionalProperties}, {@code items}, and enum value
+   * sets (a JSON-Schema {@code const} single-value field is folded into a one-element {@code enum}
+   * so it compares equal to the hand-rolled encoding of the same constraint).
    *
-   * <p>Deliberately excludes {@code description}: writing this differential test discovered that
-   * property-level description text was reworded (not copied verbatim) during the {@code
-   * /mcp-v2} hand-roll, while every property NAME/TYPE/REQUIRED-ness/ENUM-value-set matches
-   * exactly. That wording drift is a real, surfaced finding (reported via {@code
-   * descriptionDrift} above and in the task report) -- not silently hidden -- but it does not
-   * affect what a client can validly send, so it does not fail this structural check. The
-   * top-level {@link Tool#description()} (the tool's own docstring, as opposed to a property's) IS
-   * still asserted byte-identical above.
+   * <p>{@code description} is intentionally NOT stripped: a faithful hand-roll of the {@code
+   * @ToolParam}-driven Spring AI contract copies every property description verbatim (task 9
+   * review-fix), so full equality -- including descriptions at every nesting level -- is the
+   * correct parity bar. The only normalized-away differences are genuinely cosmetic
+   * generator-vs-hand-rolled encoding choices (an explicit {@code format} key, {@code
+   * required:[]} vs its absence, {@code const} vs a one-element {@code enum}) that do not change
+   * what a client can validly send or what a human reads.
    */
   private static Object normalizeStructural(Object node) {
-    return normalizeConst(normalizeEmptyRequired(stripFormat(stripDescriptions(node))));
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Object stripDescriptions(Object node) {
-    if (node instanceof Map<?, ?> map) {
-      Map<String, Object> copy = new LinkedHashMap<>();
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        String key = (String) entry.getKey();
-        if ("description".equals(key)) {
-          continue;
-        }
-        copy.put(key, stripDescriptions(entry.getValue()));
-      }
-      return copy;
-    }
-    if (node instanceof List<?> list) {
-      return list.stream().map(McpEndpointIT::stripDescriptions).toList();
-    }
-    return node;
+    return normalizeConst(normalizeEmptyRequired(stripFormat(node)));
   }
 
   /**

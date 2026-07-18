@@ -43,8 +43,8 @@ public class ListUnmatchedRecurringToolHandler implements ToolHandler {
   @Override
   public Map<String, Object> inputSchema() {
     return ToolInputSchema.object()
-        .optionalEnumString("sort", "annual_cost_desc, optional", "annual_cost_desc")
-        .optionalInteger("limit", "max rows, optional")
+        .optionalEnumString("sort", "annual_cost_desc, optional -- default unsorted", "annual_cost_desc")
+        .optionalInteger("limit", "max rows to return, optional -- default all")
         .build();
   }
 

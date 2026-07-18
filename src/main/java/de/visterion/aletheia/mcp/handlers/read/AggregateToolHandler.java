@@ -64,8 +64,8 @@ public class AggregateToolHandler implements ToolHandler {
     return ToolInputSchema.object()
         .requiredDate("dateFrom", "inclusive range start")
         .requiredDate("dateTo", "inclusive range end")
-        .requiredEnumString("groupBy", "aggregation grouping", "TOTAL", "MONTH", "QUARTER", "YEAR")
-        .requiredEnumString("metric", "aggregation metric", "SUM", "AVG", "MEDIAN", "COUNT")
+        .requiredEnumString("groupBy", "TOTAL | MONTH | QUARTER | YEAR", "TOTAL", "MONTH", "QUARTER", "YEAR")
+        .requiredEnumString("metric", "SUM | AVG | MEDIAN | COUNT", "SUM", "AVG", "MEDIAN", "COUNT")
         .requiredEnumString(
             "direction",
             "DBIT | CRDT | BOTH (BOTH nets signed amounts, no direction filter)",
