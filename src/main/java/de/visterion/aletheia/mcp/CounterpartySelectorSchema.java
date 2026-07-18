@@ -11,19 +11,17 @@ public final class CounterpartySelectorSchema {
   private CounterpartySelectorSchema() {}
 
   public static ToolInputSchema where() {
+    // The Spring AI oracle (Task 9 differential parity IT) emits no per-field description for
+    // these nested where-selector properties (no @JsonPropertyDescription on CounterpartySelector's
+    // record components) -- so none are set here either, for verbatim parity.
     return ToolInputSchema.object()
-        .optionalStringList("domainIn", "matches when a counterparty_tags(dimension='domain') value is in this list")
-        .optionalStringList("natureIn", "matches when a counterparty_tags(dimension='nature') value is in this list")
-        .optionalDecimal("minAnnualCost", "minimum estimated annual cost")
-        .optionalString("namePattern", "case-insensitive substring match against display_name")
-        .optionalEnumString(
-            "predominantDirection",
-            "v_counterparty_evidence.direction; BOTH is rejected",
-            "DBIT",
-            "CRDT",
-            "BOTH")
-        .optionalBoolean("reviewed", "matches counterparties.reviewed")
-        .optionalBoolean("hasContract", "whether any contracts row exists for the counterparty")
-        .optionalBoolean("untagged", "true to require no rows in counterparty_tags");
+        .optionalStringList("domainIn", "")
+        .optionalStringList("natureIn", "")
+        .optionalDecimal("minAnnualCost", "")
+        .optionalString("namePattern", "")
+        .optionalEnumString("predominantDirection", "", "DBIT", "CRDT", "BOTH")
+        .optionalBoolean("reviewed", "")
+        .optionalBoolean("hasContract", "")
+        .optionalBoolean("untagged", "");
   }
 }

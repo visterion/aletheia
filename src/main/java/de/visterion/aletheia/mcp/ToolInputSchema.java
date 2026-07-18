@@ -169,23 +169,14 @@ public final class ToolInputSchema {
     Map<String, Object> prop = new LinkedHashMap<>();
     prop.put("type", "string");
     prop.put("enum", List.of(values));
-    String mergedDescription = appendEnumHint(description, values);
-    if (!mergedDescription.isBlank()) {
-      prop.put("description", mergedDescription);
+    if (description != null && !description.isBlank()) {
+      prop.put("description", description);
     }
     properties.put(name, Map.copyOf(prop));
     if (isRequired) {
       required.add(name);
     }
     return this;
-  }
-
-  private static String appendEnumHint(String description, String[] values) {
-    String hint = "One of: " + String.join(", ", values);
-    if (description == null || description.isBlank()) {
-      return hint;
-    }
-    return description + ". " + hint;
   }
 
   private ToolInputSchema addArray(String name, String itemType, String description, boolean isRequired) {
@@ -214,9 +205,8 @@ public final class ToolInputSchema {
     Map<String, Object> prop = new LinkedHashMap<>();
     prop.put("type", "array");
     prop.put("items", Map.copyOf(itemSchema));
-    String mergedDescription = appendEnumHint(description, values);
-    if (!mergedDescription.isBlank()) {
-      prop.put("description", mergedDescription);
+    if (description != null && !description.isBlank()) {
+      prop.put("description", description);
     }
     properties.put(name, Map.copyOf(prop));
     if (isRequired) {

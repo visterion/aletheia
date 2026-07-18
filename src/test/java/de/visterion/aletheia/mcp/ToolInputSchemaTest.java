@@ -28,7 +28,10 @@ class ToolInputSchemaTest {
   }
 
   @Test
-  void optionalEnumStringAppendsEnumHintToDescription() {
+  void optionalEnumStringKeepsDescriptionVerbatimWithoutAppendingEnumHint() {
+    // No "One of: ..." hint is appended (task 9 review-fix, McpEndpointIT parity finding): the
+    // live Spring AI oracle never emits one for a @ToolParam-described enum -- the constraint is
+    // conveyed entirely via the "enum" key, and "description" is copied verbatim.
     Map<String, Object> schema = ToolInputSchema.object().optionalEnumString("s", "d", "X", "Y").build();
 
     @SuppressWarnings("unchecked")
@@ -38,7 +41,7 @@ class ToolInputSchemaTest {
 
     assertThat(prop).containsEntry("type", "string");
     assertThat(prop).containsEntry("enum", List.of("X", "Y"));
-    assertThat(prop).containsEntry("description", "d. One of: X, Y");
+    assertThat(prop).containsEntry("description", "d");
     assertThat(prop).doesNotContainKey("format");
   }
 

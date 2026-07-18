@@ -45,9 +45,16 @@ public class CounterpartyTransactionsToolHandler implements ToolHandler {
   public Map<String, Object> inputSchema() {
     return ToolInputSchema.object()
         .requiredLong("counterpartyId", "counterparties.id")
-        .optionalInteger("period", "last N days; omit for all")
-        .optionalDate("dateFrom", "inclusive range start (YYYY-MM-DD)")
-        .optionalDate("dateTo", "inclusive range end (YYYY-MM-DD)")
+        .optionalInteger(
+            "period",
+            "restrict to the last N days; omit for all history; ignored when dateFrom and"
+                + " dateTo are both given")
+        .optionalDate(
+            "dateFrom",
+            "inclusive range start on booking_date; wins over period when set together with dateTo")
+        .optionalDate(
+            "dateTo",
+            "inclusive range end on booking_date; wins over period when set together with dateFrom")
         .build();
   }
 

@@ -39,7 +39,7 @@ public class UpdatePreferencesToolHandler implements ToolHandler {
   @Override
   public Map<String, Object> inputSchema() {
     return ToolInputSchema.object()
-        .requiredString("preferences", "full new preferences markdown")
+        .requiredString("preferences", "the full new preferences markdown")
         .build();
   }
 
