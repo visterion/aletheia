@@ -244,6 +244,12 @@ public class TagRuleResolver implements ApplicationRunner {
     return db.fetch(LOAD_ENABLED_RULES_SQL).map(this::toStoredRule);
   }
 
+  /** Same as {@link #loadEnabledRules()} but including disabled rules (for {@code list_tag_rules}). */
+  public List<StoredRule> loadEnabledRulesIncludingDisabled() {
+    return db.fetch("SELECT id, name, enabled, conditions, actions FROM tag_rules ORDER BY id")
+        .map(this::toStoredRule);
+  }
+
   public StoredRule loadRule(long id) {
     Record r =
         db.fetchOne("SELECT id, name, enabled, conditions, actions FROM tag_rules WHERE id=?", id);

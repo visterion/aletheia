@@ -15,7 +15,7 @@ import org.springframework.ai.tool.annotation.Tool;
  * WriteTools} and {@link ToolPermissionService}'s role-to-tool-name allow-list. A tool whose
  * {@code @Tool(name=...)} is missing from the WRITER union would be silently denied at runtime
  * (fails closed) -- this test would catch that regression, and an accidentally dropped or
- * duplicated tool registration (guarded by the exact count of 19).
+ * duplicated tool registration (guarded by the exact count of 23).
  */
 class ToolPermissionCoverageTest {
 
@@ -31,7 +31,7 @@ class ToolPermissionCoverageTest {
   }
 
   @Test
-  void everyDeclaredToolIsCoveredByThePermissionServiceAndThereAreExactlyNineteen() {
+  void everyDeclaredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentyThree() {
     Set<String> readToolNames = toolNamesOf(ReadTools.class);
     Set<String> writeToolNames = toolNamesOf(WriteTools.class);
 
@@ -41,7 +41,7 @@ class ToolPermissionCoverageTest {
     assertThat(readToolNames.size() + writeToolNames.size())
         .as("no tool name is duplicated between ReadTools and WriteTools")
         .isEqualTo(allToolNames.size());
-    assertThat(allToolNames).as("exactly 19 MCP tools are registered").hasSize(19);
+    assertThat(allToolNames).as("exactly 23 MCP tools are registered").hasSize(23);
 
     Set<String> allowedForWriter = new ToolPermissionService().allowedTools(AuthRole.WRITER);
 

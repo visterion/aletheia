@@ -9,6 +9,7 @@ import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
+import de.visterion.aletheia.tagrules.TagRuleResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -166,16 +167,19 @@ public class ReadTools {
   private final DSLContext roDsl;
   private final CounterpartySelectorResolver selectorResolver;
   private final OperatingGuideService operatingGuideService;
+  private final TagRuleResolver tagRuleResolver;
 
   public ReadTools(
       DSLContext db,
       @Qualifier("roDsl") DSLContext roDsl,
       CounterpartySelectorResolver selectorResolver,
-      OperatingGuideService operatingGuideService) {
+      OperatingGuideService operatingGuideService,
+      TagRuleResolver tagRuleResolver) {
     this.db = db;
     this.roDsl = roDsl;
     this.selectorResolver = selectorResolver;
     this.operatingGuideService = operatingGuideService;
+    this.tagRuleResolver = tagRuleResolver;
   }
 
   @Tool(
@@ -187,6 +191,18 @@ public class ReadTools {
               + " Record durable preferences with update_preferences.")
   public String wakeUp() {
     return operatingGuideService.wakeUp();
+  }
+
+  @Tool(
+      name = "list_tag_rules",
+      description = "List all auto-tagging rules (enabled and paused), oldest first.")
+  public List<TagRuleView> listTagRules() {
+    return tagRuleResolver.loadEnabledRulesIncludingDisabled().stream()
+        .map(
+            r ->
+                new TagRuleView(
+                    r.id(), r.name(), r.enabled(), r.conditions(), r.actions(), null))
+        .toList();
   }
 
   @Tool(

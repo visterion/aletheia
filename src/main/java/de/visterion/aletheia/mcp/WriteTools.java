@@ -12,6 +12,10 @@ import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
+import de.visterion.aletheia.tagrules.RuleAction;
+import de.visterion.aletheia.tagrules.RuleCondition;
+import de.visterion.aletheia.tagrules.TagRuleResolver;
+import de.visterion.aletheia.tagrules.TagRuleValidator;
 import java.math.BigDecimal;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,6 +27,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * MCP write tools (spec §5 "Write", scope {@code write}). Every tool name here matches {@code
@@ -48,6 +53,8 @@ public class WriteTools {
   private final CounterpartyResolver counterpartyResolver;
   private final ContractResolver contractResolver;
   private final SubstrateLock substrateLock;
+  private final TagRuleResolver tagRuleResolver;
+  private final ObjectMapper objectMapper;
 
   public WriteTools(
       DSLContext db,
@@ -56,7 +63,9 @@ public class WriteTools {
       OperatingGuideService operatingGuideService,
       CounterpartyResolver counterpartyResolver,
       ContractResolver contractResolver,
-      SubstrateLock substrateLock) {
+      SubstrateLock substrateLock,
+      TagRuleResolver tagRuleResolver,
+      ObjectMapper objectMapper) {
     this.db = db;
     this.selectorResolver = selectorResolver;
     this.splitService = splitService;
@@ -64,6 +73,8 @@ public class WriteTools {
     this.counterpartyResolver = counterpartyResolver;
     this.contractResolver = contractResolver;
     this.substrateLock = substrateLock;
+    this.tagRuleResolver = tagRuleResolver;
+    this.objectMapper = objectMapper;
   }
 
   @Tool(
@@ -849,5 +860,105 @@ public class WriteTools {
               required = false)
           Boolean unsplit) {
     return splitService.splitTransaction(tx, allocations, unsplit);
+  }
+
+  // --- tag rules (#37 auto-tagging rules) ---
+
+  @Tool(
+      name = "create_tag_rule",
+      description =
+          "Create a persistent auto-tagging rule (Outlook-style). conditions are AND-ed; actions set"
+              + " tags (source=confirmed) on matching counterparties, overwriting 'auto' tags and"
+              + " skipping dimensions already 'confirmed'. dryRun=true writes nothing and returns the"
+              + " match preview -- always dry-run first. dryRun=false persists (enabled) and, if"
+              + " backfill=true, tags existing counterparties now; the rule also runs on every future"
+              + " ingest. A match set of 200+ needs confirm=true.")
+  public CreateTagRuleAck createTagRule(
+      @ToolParam(description = "human-readable rule name") String name,
+      @ToolParam(description = "AND-ed conditions {field, op, value}; >=1") List<RuleCondition> conditions,
+      @ToolParam(description = "tags to set {dimension, value}; >=1") List<RuleAction> actions,
+      @ToolParam(description = "true = preview only, write nothing") Boolean dryRun,
+      @ToolParam(description = "when persisting, also tag existing counterparties now", required = false)
+          Boolean backfill,
+      @ToolParam(description = "must be true to apply a rule matching 200+ counterparties", required = false)
+          Boolean confirm) {
+    if (name == null || name.isBlank()) {
+      throw new IllegalArgumentException("name must not be blank");
+    }
+    TagRuleValidator.validate(conditions, actions);
+
+    List<Long> matched = tagRuleResolver.matchedCounterpartyIds(conditions);
+    List<String> wouldSetTags = actions.stream().map(a -> a.dimension() + "=" + a.value()).toList();
+
+    if (Boolean.TRUE.equals(dryRun)) {
+      List<CounterpartySample> samples =
+          db
+              .select(COUNTERPARTIES.ID, COUNTERPARTIES.DISPLAY_NAME)
+              .from(COUNTERPARTIES)
+              .where(COUNTERPARTIES.ID.in(matched))
+              .limit(20)
+              .fetch(r -> new CounterpartySample(r.value1(), r.value2()));
+      int wouldChange = tagRuleResolver.countWouldChange(matched, actions);
+      return new CreateTagRuleAck(null, matched.size(), wouldChange, 0, samples, wouldSetTags);
+    }
+
+    if (matched.size() >= CONFIRM_REQUIRED_THRESHOLD && !Boolean.TRUE.equals(confirm)) {
+      throw new IllegalArgumentException(
+          matched.size() + " counterparties match; dry-run then pass confirm=true to apply a rule this broad");
+    }
+
+    long ruleId = persistRule(name, conditions, actions);
+    int applied = 0;
+    if (Boolean.TRUE.equals(backfill)) {
+      applied = tagRuleResolver.applyRule(tagRuleResolver.loadRule(ruleId));
+    }
+    return new CreateTagRuleAck(ruleId, matched.size(), applied, applied, List.of(), wouldSetTags);
+  }
+
+  @Tool(
+      name = "set_tag_rule_enabled",
+      description = "Pause or resume a tag rule without deleting it.")
+  public TagRuleAck setTagRuleEnabled(
+      @ToolParam(description = "tag_rules.id") Long ruleId,
+      @ToolParam(description = "true = enabled, false = paused") Boolean enabled) {
+    int updated =
+        db.update(de.visterion.aletheia.jooq.Tables.TAG_RULES)
+            .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.ENABLED, Boolean.TRUE.equals(enabled))
+            .where(de.visterion.aletheia.jooq.Tables.TAG_RULES.ID.eq(ruleId))
+            .execute();
+    if (updated == 0) {
+      throw new IllegalArgumentException("no such tag rule: " + ruleId);
+    }
+    return new TagRuleAck(ruleId, Boolean.TRUE.equals(enabled) ? "enabled" : "disabled");
+  }
+
+  @Tool(
+      name = "delete_tag_rule",
+      description =
+          "Delete a tag rule. Does NOT roll back tags it already applied (those are confirmed"
+              + " decisions; adjust them with classify_counterparty).")
+  public TagRuleAck deleteTagRule(@ToolParam(description = "tag_rules.id") Long ruleId) {
+    int deleted =
+        db.deleteFrom(de.visterion.aletheia.jooq.Tables.TAG_RULES)
+            .where(de.visterion.aletheia.jooq.Tables.TAG_RULES.ID.eq(ruleId))
+            .execute();
+    if (deleted == 0) {
+      throw new IllegalArgumentException("no such tag rule: " + ruleId);
+    }
+    return new TagRuleAck(ruleId, "deleted");
+  }
+
+  /** Persists a validated rule row and returns its generated id. */
+  private long persistRule(String name, List<RuleCondition> conditions, List<RuleAction> actions) {
+    org.jooq.JSONB conditionsJson =
+        org.jooq.JSONB.valueOf(objectMapper.writeValueAsString(conditions));
+    org.jooq.JSONB actionsJson = org.jooq.JSONB.valueOf(objectMapper.writeValueAsString(actions));
+    return db.insertInto(de.visterion.aletheia.jooq.Tables.TAG_RULES)
+        .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.NAME, name)
+        .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.CONDITIONS, conditionsJson)
+        .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.ACTIONS, actionsJson)
+        .returning(de.visterion.aletheia.jooq.Tables.TAG_RULES.ID)
+        .fetchOne()
+        .getId();
   }
 }
