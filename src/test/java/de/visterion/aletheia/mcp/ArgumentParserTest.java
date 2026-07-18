@@ -3,6 +3,10 @@ package de.visterion.aletheia.mcp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import de.visterion.aletheia.tagrules.RuleAction;
+import de.visterion.aletheia.tagrules.RuleCondition;
+import de.visterion.aletheia.tagrules.RuleField;
+import de.visterion.aletheia.tagrules.RuleOp;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -116,5 +120,111 @@ class ArgumentParserTest {
     Direction direction = ArgumentParser.optionalEnum(arguments(), "missing", Direction.class);
 
     assertThat(direction).isNull();
+  }
+
+  @Test
+  void requiredBooleanParsesValue() {
+    JsonNode arguments = mapper.readTree("{\"dryRun\":true}");
+
+    assertThat(ArgumentParser.requiredBoolean(arguments, "dryRun")).isTrue();
+  }
+
+  @Test
+  void requiredBooleanThrowsMcpArgumentExceptionWhenMissing() {
+    assertThatThrownBy(() -> ArgumentParser.requiredBoolean(arguments(), "missing"))
+        .isInstanceOf(McpArgumentException.class)
+        .hasMessage("Missing missing");
+  }
+
+  @Test
+  void requiredTxReferenceParsesContentHashAndOccurrenceIndex() {
+    JsonNode arguments = mapper.readTree("{\"tx\":{\"contentHash\":\"abc\",\"occurrenceIndex\":2}}");
+
+    TxReference tx = ArgumentParser.requiredTxReference(arguments, "tx");
+
+    assertThat(tx).isEqualTo(new TxReference("abc", 2));
+  }
+
+  @Test
+  void requiredTxReferenceListParsesMultipleRefs() {
+    JsonNode arguments =
+        mapper.readTree(
+            "{\"refs\":[{\"contentHash\":\"a\",\"occurrenceIndex\":0},"
+                + "{\"contentHash\":\"b\",\"occurrenceIndex\":1}]}");
+
+    List<TxReference> refs = ArgumentParser.requiredTxReferenceList(arguments, "refs");
+
+    assertThat(refs).containsExactly(new TxReference("a", 0), new TxReference("b", 1));
+  }
+
+  @Test
+  void requiredTxReferenceListThrowsMcpArgumentExceptionWhenMissing() {
+    assertThatThrownBy(() -> ArgumentParser.requiredTxReferenceList(arguments(), "refs"))
+        .isInstanceOf(McpArgumentException.class)
+        .hasMessage("Missing refs");
+  }
+
+  @Test
+  void optionalAllocationListReturnsNullWhenAbsent() {
+    assertThat(ArgumentParser.optionalAllocationList(arguments(), "allocations")).isNull();
+  }
+
+  @Test
+  void optionalAllocationListParsesNullableFieldsAsNull() {
+    JsonNode arguments =
+        mapper.readTree(
+            "{\"allocations\":[{\"amount\":5.00,\"counterpartyId\":null,\"displayName\":\"Bargeld\","
+                + "\"mandateId\":null,\"remittanceInfo\":null}]}");
+
+    List<Allocation> allocations = ArgumentParser.optionalAllocationList(arguments, "allocations");
+
+    assertThat(allocations).hasSize(1);
+    Allocation a = allocations.get(0);
+    assertThat(a.counterpartyId()).isNull();
+    assertThat(a.displayName()).isEqualTo("Bargeld");
+    assertThat(a.mandateId()).isNull();
+    assertThat(a.remittanceInfo()).isNull();
+    assertThat(a.amount().compareTo(new BigDecimal("5.00"))).isZero();
+  }
+
+  @Test
+  void requiredTagInputListParsesDimensionValuePairs() {
+    JsonNode arguments =
+        mapper.readTree("{\"tags\":[{\"dimension\":\"domain\",\"value\":\"insurance\"}]}");
+
+    List<TagInput> tags = ArgumentParser.requiredTagInputList(arguments, "tags");
+
+    assertThat(tags).containsExactly(new TagInput("domain", "insurance"));
+  }
+
+  @Test
+  void requiredRuleConditionListParsesFieldOpValue() {
+    JsonNode arguments =
+        mapper.readTree(
+            "{\"conditions\":[{\"field\":\"remittance_info\",\"op\":\"contains\",\"value\":\"netflix\"}]}");
+
+    List<RuleCondition> conditions = ArgumentParser.requiredRuleConditionList(arguments, "conditions");
+
+    assertThat(conditions)
+        .containsExactly(new RuleCondition(RuleField.remittance_info, RuleOp.contains, "netflix"));
+  }
+
+  @Test
+  void requiredRuleConditionListThrowsMcpArgumentExceptionForInvalidEnum() {
+    JsonNode arguments =
+        mapper.readTree("{\"conditions\":[{\"field\":\"nope\",\"op\":\"contains\",\"value\":\"x\"}]}");
+
+    assertThatThrownBy(() -> ArgumentParser.requiredRuleConditionList(arguments, "conditions"))
+        .isInstanceOf(McpArgumentException.class)
+        .hasMessage("Invalid field");
+  }
+
+  @Test
+  void requiredRuleActionListParsesDimensionValuePairs() {
+    JsonNode arguments = mapper.readTree("{\"actions\":[{\"dimension\":\"nature\",\"value\":\"fixed\"}]}");
+
+    List<RuleAction> actions = ArgumentParser.requiredRuleActionList(arguments, "actions");
+
+    assertThat(actions).containsExactly(new RuleAction("nature", "fixed"));
   }
 }
