@@ -27,7 +27,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * MCP write tools (spec §5 "Write", scope {@code write}). Every tool name here matches {@code
@@ -54,7 +53,6 @@ public class WriteTools {
   private final ContractResolver contractResolver;
   private final SubstrateLock substrateLock;
   private final TagRuleResolver tagRuleResolver;
-  private final ObjectMapper objectMapper;
 
   public WriteTools(
       DSLContext db,
@@ -64,8 +62,7 @@ public class WriteTools {
       CounterpartyResolver counterpartyResolver,
       ContractResolver contractResolver,
       SubstrateLock substrateLock,
-      TagRuleResolver tagRuleResolver,
-      ObjectMapper objectMapper) {
+      TagRuleResolver tagRuleResolver) {
     this.db = db;
     this.selectorResolver = selectorResolver;
     this.splitService = splitService;
@@ -74,7 +71,6 @@ public class WriteTools {
     this.contractResolver = contractResolver;
     this.substrateLock = substrateLock;
     this.tagRuleResolver = tagRuleResolver;
-    this.objectMapper = objectMapper;
   }
 
   @Tool(
@@ -914,12 +910,15 @@ public class WriteTools {
           matched.size() + " counterparties match; dry-run then pass confirm=true to apply a rule this broad");
     }
 
-    long ruleId = persistRule(name, conditions, actions);
-    int applied = 0;
-    if (Boolean.TRUE.equals(backfill)) {
-      applied = tagRuleResolver.applyRule(tagRuleResolver.loadRule(ruleId));
-    }
-    return new CreateTagRuleAck(ruleId, matched.size(), applied, applied, List.of(), wouldSetTags);
+    TagRuleResolver.RuleCreateResult result =
+        tagRuleResolver.createRule(name, conditions, actions, Boolean.TRUE.equals(backfill));
+    return new CreateTagRuleAck(
+        result.ruleId(),
+        matched.size(),
+        result.appliedCount(),
+        result.appliedCount(),
+        List.of(),
+        wouldSetTags);
   }
 
   @Tool(
@@ -955,17 +954,4 @@ public class WriteTools {
     return new TagRuleAck(ruleId, "deleted");
   }
 
-  /** Persists a validated rule row and returns its generated id. */
-  private long persistRule(String name, List<RuleCondition> conditions, List<RuleAction> actions) {
-    org.jooq.JSONB conditionsJson =
-        org.jooq.JSONB.valueOf(objectMapper.writeValueAsString(conditions));
-    org.jooq.JSONB actionsJson = org.jooq.JSONB.valueOf(objectMapper.writeValueAsString(actions));
-    return db.insertInto(de.visterion.aletheia.jooq.Tables.TAG_RULES)
-        .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.NAME, name)
-        .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.CONDITIONS, conditionsJson)
-        .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.ACTIONS, actionsJson)
-        .returning(de.visterion.aletheia.jooq.Tables.TAG_RULES.ID)
-        .fetchOne()
-        .getId();
-  }
 }
