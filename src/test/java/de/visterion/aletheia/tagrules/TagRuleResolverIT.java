@@ -253,6 +253,40 @@ class TagRuleResolverIT extends AbstractPostgresIT {
   }
 
   @Test
+  void midApplyFailureRollsBackTheWholeRule() {
+    insertBooking("h1", "ACME", "TELEKOM", "DBIT");
+    resolveCounterparties();
+    long cp = counterpartyIdByName("ACME");
+    db.execute(
+        "INSERT INTO counterparty_tags (counterparty_id, dimension, value, source) "
+            + "VALUES (?, 'domain', 'handel', 'auto')",
+        cp);
+    // Bypasses Java validation (which the resolver never re-runs): the actions array is
+    // structurally valid (satisfies V14's non-empty-array CHECK) and parses cleanly into
+    // List<RuleAction> since RuleAction.dimension is a plain String. The first dimension
+    // ("domain") is valid and applies first -- delete+insert -- then the second dimension
+    // ("bogus") fails the counterparty_tags CHECK (dimension IN ('domain','nature','necessity'))
+    // mid-rule, inside the same TransactionTemplate, proving the delete+insert for "domain"
+    // gets rolled back too.
+    db.execute(
+        "INSERT INTO tag_rules (name, conditions, actions) VALUES "
+            + "('mid-apply-bad', "
+            + "'[{\"field\":\"remittance_info\",\"op\":\"contains\",\"value\":\"telekom\"}]'::jsonb, "
+            + "'[{\"dimension\":\"domain\",\"value\":\"telekommunikation\"},"
+            + "{\"dimension\":\"bogus\",\"value\":\"x\"}]'::jsonb)");
+
+    resolver.resolve(); // must not throw -- the bad rule is caught and logged
+
+    assertThat(tagsOf(cp, "domain")).containsExactly("handel");
+    assertThat(sourceOf(cp, "domain")).isEqualTo("auto");
+    int historyCount =
+        (Integer)
+            db.fetchValue(
+                "SELECT count(*)::int FROM counterparty_history WHERE counterparty_id=?", cp);
+    assertThat(historyCount).isZero();
+  }
+
+  @Test
   void creditorIdEqualsMatch() {
     db.execute(
         "INSERT INTO transactions (content_hash, occurrence_index, amount, "
