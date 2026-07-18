@@ -1,5 +1,7 @@
 package de.visterion.aletheia.tagrules;
 
+import static de.visterion.aletheia.jooq.Tables.TAG_RULES;
+
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
 import java.util.ArrayList;
@@ -119,8 +121,8 @@ public class TagRuleResolver implements ApplicationRunner {
   /**
    * Applies every enabled rule; one bad rule (unparseable JSON or a failing apply) is logged and
    * skipped, the rest still apply. Rows are fetched once, but JSON parsing happens per rule inside
-   * the loop -- not via {@link #loadEnabledRules()} -- so one unparseable row cannot abort the
-   * whole batch before any other rule gets a chance to run.
+   * the loop so one unparseable row cannot abort the whole batch before any other rule gets a
+   * chance to run.
    */
   public void resolve() {
     substrateLock.lock();
@@ -148,6 +150,42 @@ public class TagRuleResolver implements ApplicationRunner {
     } finally {
       substrateLock.unlock();
     }
+  }
+
+  /** Result of {@link #createRule}: the new rule's id and how many counterparties it changed. */
+  public record RuleCreateResult(long ruleId, int appliedCount) {}
+
+  /**
+   * Persists a new (validated) rule row and, if {@code backfill}, applies it -- both inside ONE
+   * {@link TransactionTemplate} unit under {@link SubstrateLock} (spec §4.2 atomicity): a backfill
+   * failure rolls back the rule row too, so an enabled rule is never left half-applied.
+   */
+  public RuleCreateResult createRule(
+      String name, List<RuleCondition> conditions, List<RuleAction> actions, boolean backfill) {
+    substrateLock.lock();
+    try {
+      return tx.execute(
+          status -> {
+            long id = insertRuleRow(name, conditions, actions);
+            int applied = backfill ? applyToCounterparties(matchedCounterpartyIds(conditions), actions) : 0;
+            return new RuleCreateResult(id, applied);
+          });
+    } finally {
+      substrateLock.unlock();
+    }
+  }
+
+  /** Persists a validated rule row and returns its generated id. */
+  private long insertRuleRow(String name, List<RuleCondition> conditions, List<RuleAction> actions) {
+    JSONB conditionsJson = JSONB.valueOf(mapper.writeValueAsString(conditions));
+    JSONB actionsJson = JSONB.valueOf(mapper.writeValueAsString(actions));
+    return db.insertInto(TAG_RULES)
+        .set(TAG_RULES.NAME, name)
+        .set(TAG_RULES.CONDITIONS, conditionsJson)
+        .set(TAG_RULES.ACTIONS, actionsJson)
+        .returning(TAG_RULES.ID)
+        .fetchOne()
+        .getId();
   }
 
   private int applyInTx(StoredRule rule) {
@@ -240,11 +278,7 @@ public class TagRuleResolver implements ApplicationRunner {
   private static final String LOAD_ENABLED_RULES_SQL =
       "SELECT id, name, enabled, conditions, actions FROM tag_rules WHERE enabled ORDER BY id";
 
-  public List<StoredRule> loadEnabledRules() {
-    return db.fetch(LOAD_ENABLED_RULES_SQL).map(this::toStoredRule);
-  }
-
-  /** Same as {@link #loadEnabledRules()} but including disabled rules (for {@code list_tag_rules}). */
+  /** Loads every rule (enabled or not) for {@code list_tag_rules}. */
   public List<StoredRule> loadEnabledRulesIncludingDisabled() {
     return db.fetch("SELECT id, name, enabled, conditions, actions FROM tag_rules ORDER BY id")
         .map(this::toStoredRule);

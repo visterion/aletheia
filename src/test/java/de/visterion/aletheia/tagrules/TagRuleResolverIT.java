@@ -1,6 +1,7 @@
 package de.visterion.aletheia.tagrules;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import java.time.LocalDate;
@@ -305,6 +306,26 @@ class TagRuleResolverIT extends AbstractPostgresIT {
     resolver.resolve();
 
     assertThat(tagsOf(cp, "domain")).containsExactly("telekommunikation");
+  }
+
+  @Test
+  void createRulePersistAndBackfillShareOneTransaction() {
+    // Persist + backfill for create_tag_rule must be one physical transaction (spec §4.2): a
+    // backfill failure must roll back the rule row too, so no half-applied enabled rule is left
+    // behind. The tool-layer validator would reject the "bogus" dimension before this ever runs,
+    // so this is tested at the resolver layer, which does not validate.
+    insertBooking("h1", "ACME", "TELEKOM", "DBIT");
+    resolveCounterparties();
+    List<RuleCondition> conditions =
+        List.of(new RuleCondition(RuleField.remittance_info, RuleOp.contains, "telekom"));
+    List<RuleAction> actions =
+        List.of(new RuleAction("domain", "telekommunikation"), new RuleAction("bogus", "x"));
+
+    assertThatThrownBy(() -> resolver.createRule("r", conditions, actions, true))
+        .isInstanceOf(RuntimeException.class);
+
+    int ruleCount = (Integer) db.fetchValue("SELECT count(*)::int FROM tag_rules");
+    assertThat(ruleCount).isZero();
   }
 
   /** Runs the counterparty resolver so identities exist before applying rules. */
