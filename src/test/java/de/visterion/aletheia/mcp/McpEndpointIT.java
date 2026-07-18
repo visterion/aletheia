@@ -12,6 +12,7 @@ import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.net.http.HttpRequest;
 import java.security.MessageDigest;
@@ -32,16 +33,23 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
+import tools.jackson.databind.ObjectMapper;
 
 /**
- * Task 9 parity gate: drives BOTH the hand-rolled {@code /mcp-v2} endpoint ({@link McpController})
- * and the still-live Spring AI {@code /mcp} endpoint over real HTTP with a genuine MCP SDK client
- * (mirrors {@code ToolScopeEnforcementIT}/{@code IngestEndpointIT}), and asserts they are
- * equivalent modulo the one intended difference (tools-only capabilities on {@code /mcp-v2}).
+ * Post-cutover (Task 10) regression suite for the hand-rolled MCP Streamable HTTP transport, now
+ * mounted at {@code /mcp} (Spring AI's MCP server has been removed). Drives it over real HTTP with
+ * a genuine MCP SDK client (mirrors {@code ToolScopeEnforcementIT}/{@code IngestEndpointIT}).
  *
- * <p>Using the live Spring AI output as the parity oracle avoids a circular "handlers produce
- * what handlers produce" golden-file test and covers all 23 tools without hand-authoring a golden
- * schema file that could silently drift from the real Spring AI contract.
+ * <p>Before the cutover, this class differentially compared {@code /mcp-v2} against the still-live
+ * Spring AI {@code /mcp} (see git history). That oracle no longer exists once Spring AI is removed,
+ * so the schema-parity assertion now compares {@code /mcp}'s {@code tools/list} output against a
+ * frozen golden fixture ({@code src/test/resources/mcp/tools-list-golden.json}), captured from the
+ * hand-rolled endpoint while it was still proven byte-faithful to Spring AI (Task 9's differential
+ * IT). The former result byte-equality assertions (wake_up/counterparty_transactions/sql_query/
+ * aggregate) are dropped: those results depend on live DB state (counts, generated ids) in a
+ * Postgres container shared across the whole test suite, so they are not deterministic enough for
+ * a committed golden fixture -- the round-trip tests below instead assert the results are
+ * well-formed, which is sufficient once there is only one implementation to characterize.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class McpEndpointIT {
@@ -69,7 +77,7 @@ class McpEndpointIT {
             + "counterparties, transactions, imports RESTART IDENTITY CASCADE");
     db.execute("TRUNCATE TABLE api_tokens RESTART IDENTITY CASCADE");
     // operating_guide's 'default' row is a process-wide singleton shared across all test classes
-    // on the singleton Postgres container (see ToolScopeEnforcementIT) -- leave no residue.
+    // on the singleton Postgres container -- leave no residue.
     db.execute(
         "UPDATE operating_guide SET preferences_md='', preferences_updated_at=NULL, "
             + "preferences_updated_by=NULL WHERE scope='default'");
@@ -81,7 +89,7 @@ class McpEndpointIT {
   void handshakeNegotiatesLatestVersionAndAdvertisesToolsOnlyCapabilities() {
     String writerToken = seedToken("writer");
 
-    try (McpSyncClient client = connect("/mcp-v2", writerToken)) {
+    try (McpSyncClient client = connect(writerToken)) {
       InitializeResult result = client.initialize();
 
       assertThat(result.protocolVersion()).isEqualTo("2025-06-18");
@@ -97,165 +105,72 @@ class McpEndpointIT {
   // --- (b) role-filtered list ---
 
   @Test
-  void toolsListIsRoleFilteredOnV2ButNotOnLegacyMcp() {
+  void toolsListIsRoleFiltered() {
     String writerToken = seedToken("writer");
     String readerToken = seedToken("reader");
 
-    try (McpSyncClient writer = connect("/mcp-v2", writerToken)) {
+    try (McpSyncClient writer = connect(writerToken)) {
       writer.initialize();
       assertThat(writer.listTools().tools()).hasSize(23);
     }
-    try (McpSyncClient reader = connect("/mcp-v2", readerToken)) {
+    try (McpSyncClient reader = connect(readerToken)) {
       reader.initialize();
       assertThat(reader.listTools().tools()).hasSize(12);
     }
-
-    // Spring AI's /mcp lists all 23 tools to every role -- do NOT assert role-filtering on it,
-    // this is the known, intended difference the parity test exists to characterize.
-    try (McpSyncClient legacyReader = connect("/mcp", readerToken)) {
-      legacyReader.initialize();
-      assertThat(legacyReader.listTools().tools()).hasSize(23);
-    }
   }
 
-  // --- (c) schema parity (differential) ---
+  // --- (c) schema parity against the frozen golden fixture ---
 
   @Test
-  void toolSchemasMatchLegacyEndpointModuloFormatKeys() {
+  void toolSchemasMatchGoldenFixture() throws Exception {
     String writerToken = seedToken("writer");
 
-    Map<String, Tool> v2Tools;
-    Map<String, Tool> legacyTools;
-    try (McpSyncClient v2 = connect("/mcp-v2", writerToken)) {
-      v2.initialize();
-      v2Tools = byName(v2.listTools().tools());
-    }
-    try (McpSyncClient legacy = connect("/mcp", writerToken)) {
-      legacy.initialize();
-      legacyTools = byName(legacy.listTools().tools());
+    Map<String, Tool> liveTools;
+    try (McpSyncClient client = connect(writerToken)) {
+      client.initialize();
+      liveTools = byName(client.listTools().tools());
     }
 
-    assertThat(v2Tools.keySet()).isEqualTo(legacyTools.keySet());
-    assertThat(v2Tools).hasSize(23);
+    ObjectMapper mapper = new ObjectMapper();
+    List<Map<String, Object>> golden;
+    try (InputStream in =
+        getClass().getResourceAsStream("/mcp/tools-list-golden.json")) {
+      assertThat(in).as("golden fixture resource").isNotNull();
+      golden = mapper.readValue(in, List.class);
+    }
 
-    // Collect every mismatch across all 23 tools (rather than failing on the first) so a single
-    // run reports the complete picture of any real parity gap.
+    assertThat(liveTools).hasSize(23);
+    assertThat(golden).hasSize(23);
+
     List<String> mismatches = new java.util.ArrayList<>();
-    for (String name : v2Tools.keySet()) {
-      Tool v2Tool = v2Tools.get(name);
-      Tool legacyTool = legacyTools.get(name);
-
-      if (!v2Tool.name().equals(legacyTool.name())) {
-        mismatches.add(name + ": name differs (" + v2Tool.name() + " vs " + legacyTool.name() + ")");
+    for (Map<String, Object> goldenTool : golden) {
+      String name = (String) goldenTool.get("name");
+      Tool liveTool = liveTools.get(name);
+      if (liveTool == null) {
+        mismatches.add(name + ": missing from live /mcp tools/list");
+        continue;
       }
-      // The top-level tool description (ToolHandler#description / @Tool(description=...)) IS
-      // asserted byte-identical, per the brief's "names + descriptions must be identical".
-      if (!java.util.Objects.equals(v2Tool.description(), legacyTool.description())) {
-        mismatches.add(name + ": top-level description differs");
+      if (!java.util.Objects.equals(liveTool.description(), goldenTool.get("description"))) {
+        mismatches.add(name + ": description differs from golden");
       }
-
-      // Full structural + description parity: every property name/type/required-ness/enum-value
-      // AND every property "description" (at every nesting level, including array-item and
-      // nested-object sub-fields) must match exactly. Only the intended, cosmetic generator
-      // differences are normalized away first: `format` keys (ToolInputSchema never emits them),
-      // an explicit empty `required:[]` vs its absence, and `const` vs a one-element `enum`.
-      Object normalizedV2 = normalizeStructural(v2Tool.inputSchema());
-      Object normalizedLegacy = normalizeStructural(legacyTool.inputSchema());
-      if (!normalizedV2.equals(normalizedLegacy)) {
+      Object liveSchema = mapper.convertValue(liveTool.inputSchema(), Object.class);
+      Object goldenSchema = goldenTool.get("inputSchema");
+      if (!java.util.Objects.equals(liveSchema, goldenSchema)) {
         mismatches.add(
             name
-                + ": inputSchema differs after normalization (types/required/enum-values/descriptions)"
-                + "\n  v2:     "
-                + normalizedV2
-                + "\n  legacy: "
-                + normalizedLegacy);
+                + ": inputSchema differs from golden\n  live:   "
+                + liveSchema
+                + "\n  golden: "
+                + goldenSchema);
       }
     }
+    assertThat(liveTools.keySet())
+        .as("no tool present live but absent from the golden fixture")
+        .isEqualTo(golden.stream().map(t -> (String) t.get("name")).collect(java.util.stream.Collectors.toSet()));
 
     assertThat(mismatches)
-        .as(
-            "structural + description parity mismatches (property names/types/required/"
-                + "enum-values/descriptions at every level, top-level tool name/description)")
+        .as("schema-parity regression against the frozen golden fixture")
         .isEmpty();
-  }
-
-  /**
-   * Normalizes a JSON-Schema fragment down to the parts that are load-bearing for parity with the
-   * live Spring AI oracle: {@code type}, {@code properties} (by name, recursively normalized,
-   * including each property's {@code description}), {@code required} (empty-array-normalized, see
-   * {@link #normalizeEmptyRequired}), {@code additionalProperties}, {@code items}, and enum value
-   * sets (a JSON-Schema {@code const} single-value field is folded into a one-element {@code enum}
-   * so it compares equal to the hand-rolled encoding of the same constraint).
-   *
-   * <p>{@code description} is intentionally NOT stripped: a faithful hand-roll of the {@code
-   * @ToolParam}-driven Spring AI contract copies every property description verbatim (task 9
-   * review-fix), so full equality -- including descriptions at every nesting level -- is the
-   * correct parity bar. The only normalized-away differences are genuinely cosmetic
-   * generator-vs-hand-rolled encoding choices (an explicit {@code format} key, {@code
-   * required:[]} vs its absence, {@code const} vs a one-element {@code enum}) that do not change
-   * what a client can validly send or what a human reads.
-   */
-  private static Object normalizeStructural(Object node) {
-    return normalizeConst(normalizeEmptyRequired(stripFormat(node)));
-  }
-
-  /**
-   * Folds a JSON-Schema {@code const: X} constraint into {@code enum: [X]} (removing {@code
-   * const}), so a single-allowed-value field compares equal regardless of which of the two
-   * equivalent JSON-Schema keywords a generator chose. Discovered on {@code
-   * list_unmatched_recurring}'s {@code sort} field: Spring AI's generator emits {@code const} for
-   * a single-value {@code @ToolParam} enum, the hand-rolled {@link ToolInputSchema} always emits
-   * {@code enum}. Both restrict the field to exactly the one value.
-   */
-  @SuppressWarnings("unchecked")
-  private static Object normalizeConst(Object node) {
-    if (node instanceof Map<?, ?> map) {
-      Map<String, Object> copy = new LinkedHashMap<>();
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        String key = (String) entry.getKey();
-        if ("const".equals(key)) {
-          continue;
-        }
-        copy.put(key, normalizeConst(entry.getValue()));
-      }
-      if (map.containsKey("const") && !copy.containsKey("enum")) {
-        copy.put("enum", List.of(map.get("const")));
-      }
-      return copy;
-    }
-    if (node instanceof List<?> list) {
-      return list.stream().map(McpEndpointIT::normalizeConst).toList();
-    }
-    return node;
-  }
-
-  /**
-   * Normalizes away a real-but-cosmetic parity gap discovered while writing this test (task
-   * 9 finding, surfaced in the report, not silently fixed): Spring AI's {@code
-   * JsonSchemaGenerator} emits an explicit {@code "required":[]} on a schema/nested-object with no
-   * required fields, while the hand-rolled {@link ToolInputSchema} deliberately omits the key
-   * entirely in that case (see its javadoc and {@code ToolInputSchemaTest}). Both mean exactly
-   * "no field is required" -- semantically identical, just a presence-vs-absence difference on an
-   * empty array -- so this normalization adds the empty array back wherever it is missing on an
-   * object-typed schema fragment, before comparing. It does NOT touch a non-empty {@code
-   * required} array on either side, so an actual required-field-list mismatch still fails.
-   */
-  @SuppressWarnings("unchecked")
-  private static Object normalizeEmptyRequired(Object node) {
-    if (node instanceof Map<?, ?> map) {
-      Map<String, Object> copy = new LinkedHashMap<>();
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        copy.put((String) entry.getKey(), normalizeEmptyRequired(entry.getValue()));
-      }
-      if ("object".equals(copy.get("type")) && !copy.containsKey("required")) {
-        copy.put("required", List.of());
-      }
-      return copy;
-    }
-    if (node instanceof List<?> list) {
-      return list.stream().map(McpEndpointIT::normalizeEmptyRequired).toList();
-    }
-    return node;
   }
 
   private static Map<String, Tool> byName(List<Tool> tools) {
@@ -266,33 +181,7 @@ class McpEndpointIT {
     return byName;
   }
 
-  /**
-   * Recursively strips every {@code "format"} key from a JSON-Schema fragment. Spring AI's {@code
-   * JsonSchemaGenerator} emits {@code format: int64}/{@code int32} on integer-typed fields; the
-   * hand-rolled {@link ToolInputSchema} deliberately emits none (javadoc on that class). This is
-   * the one intended difference the differential parity check normalizes away -- anything else
-   * that differs (e.g. a {@code required} array mismatch) must still fail the comparison.
-   */
-  @SuppressWarnings("unchecked")
-  private static Object stripFormat(Object node) {
-    if (node instanceof Map<?, ?> map) {
-      Map<String, Object> copy = new LinkedHashMap<>();
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        String key = (String) entry.getKey();
-        if ("format".equals(key)) {
-          continue;
-        }
-        copy.put(key, stripFormat(entry.getValue()));
-      }
-      return copy;
-    }
-    if (node instanceof List<?> list) {
-      return list.stream().map(McpEndpointIT::stripFormat).toList();
-    }
-    return node;
-  }
-
-  // --- (d)/(e)/(f) write/read tool-call round trips on /mcp-v2 ---
+  // --- (d)/(e)/(f) write/read tool-call round trips ---
 
   @Test
   void aggregateWithWhereSelectorReturnsNonErrorResult() {
@@ -301,7 +190,7 @@ class McpEndpointIT {
     insertTxn(imp, "agg-1", LocalDate.of(2025, 3, 1), "10.00", "DBIT", "CDTR-AGG-IT", null, "Aggregate Where Co");
     resolver.run(null);
 
-    try (McpSyncClient client = connect("/mcp-v2", writerToken)) {
+    try (McpSyncClient client = connect(writerToken)) {
       client.initialize();
 
       CallToolResult result =
@@ -322,12 +211,47 @@ class McpEndpointIT {
   }
 
   @Test
+  void aggregateWithNestedWhereReturnsWellFormedResult() {
+    String writerToken = seedToken("writer");
+    long imp = importId();
+    insertTxn(
+        imp,
+        "byte-eq-agg-1",
+        LocalDate.of(2025, 4, 1),
+        "17.25",
+        "DBIT",
+        "CDTR-BYTEEQ-AGG-IT",
+        null,
+        "Byte Equality Agg Co");
+    resolver.run(null);
+
+    try (McpSyncClient client = connect(writerToken)) {
+      client.initialize();
+
+      CallToolResult result =
+          client.callTool(
+              new CallToolRequest(
+                  "aggregate",
+                  Map.of(
+                      "dateFrom", "2025-01-01",
+                      "dateTo", "2025-12-31",
+                      "groupBy", "TOTAL",
+                      "metric", "SUM",
+                      "direction", "DBIT",
+                      "where", Map.of("namePattern", "Byte Equality Agg Co"))));
+
+      assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
+      assertThat(textOf(result)).contains("17.25");
+    }
+  }
+
+  @Test
   void reattributeTransactionWithArrayOfObjectsRefsRoundTrips() {
     String writerToken = seedToken("writer");
     long imp = importId();
     insertAdyen(imp, "reattr-it-1", "Zahlung Fizz Media IT");
 
-    try (McpSyncClient client = connect("/mcp-v2", writerToken)) {
+    try (McpSyncClient client = connect(writerToken)) {
       client.initialize();
 
       CallToolResult result =
@@ -358,7 +282,7 @@ class McpEndpointIT {
     long imp = importId();
     insertTxn(imp, "split-it-1", LocalDate.of(2026, 1, 5), "4.10", "DBIT", "CDTR-SPLIT-IT", null, "Split Parent Co");
 
-    try (McpSyncClient client = connect("/mcp-v2", writerToken)) {
+    try (McpSyncClient client = connect(writerToken)) {
       client.initialize();
 
       CallToolResult result =
@@ -389,20 +313,19 @@ class McpEndpointIT {
     assertThat(childCount).isEqualTo(1);
   }
 
-  // --- (g) result byte-equality (differential) ---
+  // --- (g) well-formed read results (former differential byte-equality tests) ---
 
   @Test
-  void wakeUpResultIsByteIdenticalAcrossEndpoints() {
+  void wakeUpReturnsNonBlankGuideText() {
     String writerToken = seedToken("writer");
 
-    String v2Text = callAndGetText("/mcp-v2", writerToken, "wake_up", Map.of());
-    String legacyText = callAndGetText("/mcp", writerToken, "wake_up", Map.of());
+    String text = callAndGetText(writerToken, "wake_up", Map.of());
 
-    assertThat(v2Text).isEqualTo(legacyText);
+    assertThat(text).isNotBlank();
   }
 
   @Test
-  void counterpartyTransactionsResultIsByteIdenticalAcrossEndpoints() {
+  void counterpartyTransactionsReturnsExpectedBooking() {
     String writerToken = seedToken("writer");
     long imp = importId();
     insertTxn(
@@ -421,64 +344,34 @@ class McpEndpointIT {
                 "SELECT id FROM counterparties WHERE identity_type = 'creditor_id'"
                     + " AND identity_value = 'CDTR-BYTEEQ-IT'");
 
-    Map<String, Object> args = Map.of("counterpartyId", counterpartyId);
-    String v2Text = callAndGetText("/mcp-v2", writerToken, "counterparty_transactions", args);
-    String legacyText = callAndGetText("/mcp", writerToken, "counterparty_transactions", args);
+    String text =
+        callAndGetText(
+            writerToken, "counterparty_transactions", Map.of("counterpartyId", counterpartyId));
 
-    assertThat(v2Text).isEqualTo(legacyText);
-    assertThat(v2Text).contains("2025-06-15").contains("42.50");
+    assertThat(text).contains("2025-06-15").contains("42.50");
   }
 
   @Test
-  void sqlQueryResultIsByteIdenticalAcrossEndpoints() {
+  void sqlQueryReturnsExpectedColumns() {
     String writerToken = seedToken("writer");
 
-    Map<String, Object> args =
-        Map.of(
-            "sql",
-            "SELECT 1::bigint AS int_col, 'text'::text AS text_col, 1.50::numeric AS num_col,"
-                + " true AS bool_col, NULL::text AS null_col");
-    String v2Text = callAndGetText("/mcp-v2", writerToken, "sql_query", args);
-    String legacyText = callAndGetText("/mcp", writerToken, "sql_query", args);
+    String text =
+        callAndGetText(
+            writerToken,
+            "sql_query",
+            Map.of(
+                "sql",
+                "SELECT 1::bigint AS int_col, 'text'::text AS text_col, 1.50::numeric AS"
+                    + " num_col, true AS bool_col, NULL::text AS null_col"));
 
-    assertThat(v2Text).isEqualTo(legacyText);
+    assertThat(text).contains("int_col").contains("text_col").contains("1.5").contains("true");
   }
 
-  @Test
-  void aggregateWithNestedWhereResultIsByteIdenticalAcrossEndpoints() {
-    String writerToken = seedToken("writer");
-    long imp = importId();
-    insertTxn(
-        imp,
-        "byte-eq-agg-1",
-        LocalDate.of(2025, 4, 1),
-        "17.25",
-        "DBIT",
-        "CDTR-BYTEEQ-AGG-IT",
-        null,
-        "Byte Equality Agg Co");
-    resolver.run(null);
-
-    Map<String, Object> args =
-        Map.of(
-            "dateFrom", "2025-01-01",
-            "dateTo", "2025-12-31",
-            "groupBy", "TOTAL",
-            "metric", "SUM",
-            "direction", "DBIT",
-            "where", Map.of("namePattern", "Byte Equality Agg Co"));
-    String v2Text = callAndGetText("/mcp-v2", writerToken, "aggregate", args);
-    String legacyText = callAndGetText("/mcp", writerToken, "aggregate", args);
-
-    assertThat(v2Text).isEqualTo(legacyText);
-    assertThat(v2Text).contains("17.25");
-  }
-
-  private String callAndGetText(String endpoint, String token, String toolName, Map<String, Object> args) {
-    try (McpSyncClient client = connect(endpoint, token)) {
+  private String callAndGetText(String token, String toolName, Map<String, Object> args) {
+    try (McpSyncClient client = connect(token)) {
       client.initialize();
       CallToolResult result = client.callTool(new CallToolRequest(toolName, args));
-      assertThat(result.isError()).as("%s on %s", toolName, endpoint).isNotEqualTo(Boolean.TRUE);
+      assertThat(result.isError()).as(toolName).isNotEqualTo(Boolean.TRUE);
       return textOf(result);
     }
   }
@@ -486,11 +379,11 @@ class McpEndpointIT {
   // --- (h) reader denial ---
 
   @Test
-  void readerCallingWriteToolOnV2IsDeniedWithoutTouchingTheDb() {
+  void readerCallingWriteToolIsDeniedWithoutTouchingTheDb() {
     String readerToken = seedToken("reader");
     long counterpartyId = seedCounterparty("CDTR-DENY-V2-IT");
 
-    try (McpSyncClient client = connect("/mcp-v2", readerToken)) {
+    try (McpSyncClient client = connect(readerToken)) {
       client.initialize();
 
       CallToolResult result =
@@ -574,10 +467,10 @@ class McpEndpointIT {
         .get("id", Long.class);
   }
 
-  private McpSyncClient connect(String endpoint, String bearerToken) {
+  private McpSyncClient connect(String bearerToken) {
     HttpClientStreamableHttpTransport transport =
         HttpClientStreamableHttpTransport.builder("http://localhost:" + port)
-            .endpoint(endpoint)
+            .endpoint("/mcp")
             .requestBuilder(HttpRequest.newBuilder().header("Authorization", "Bearer " + bearerToken))
             .build();
     return McpClient.sync(transport).build();

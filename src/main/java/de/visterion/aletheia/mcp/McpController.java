@@ -23,10 +23,10 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Hand-rolled MCP Streamable HTTP transport, temporarily mounted on {@code /mcp-v2} while Spring
- * AI's MCP server still owns {@code /mcp} (Task 10 flips this controller onto {@code /mcp} and
- * removes the Spring AI server). Ported from HiveMem's {@code com.hivemem.mcp.McpController};
- * capabilities are tools-only (no resources/prompts/completions/logging).
+ * Hand-rolled MCP Streamable HTTP transport, mounted on {@code /mcp} (Task 10 cutover: Spring AI's
+ * MCP server has been removed; this controller is now the sole implementation). Ported from
+ * HiveMem's {@code com.hivemem.mcp.McpController}; capabilities are tools-only (no
+ * resources/prompts/completions/logging).
  */
 @RestController
 public class McpController {
@@ -73,7 +73,7 @@ public class McpController {
    * 200 with {@code text/event-stream}. The emitter stays open until the client disconnects or
    * the timeout elapses.
    */
-  @GetMapping(value = "/mcp-v2", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+  @GetMapping(value = "/mcp", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter stream() {
     SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
     try {
@@ -86,12 +86,12 @@ public class McpController {
   }
 
   /** Session termination (MCP Streamable HTTP spec). No-op for this stateless server. */
-  @DeleteMapping(value = "/mcp-v2")
+  @DeleteMapping(value = "/mcp")
   public ResponseEntity<Void> deleteSession() {
     return ResponseEntity.ok().build();
   }
 
-  @PostMapping(value = "/mcp-v2")
+  @PostMapping(value = "/mcp")
   public ResponseEntity<?> handle(@RequestBody JsonNode body, HttpServletRequest servletRequest) {
     if (body != null && body.isArray()) {
       // Protocol 2025-03-26 permits a client to send a JSON-RPC batch (a top-level array). This

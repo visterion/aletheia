@@ -63,7 +63,7 @@ class McpControllerTest {
   void initializeReturnsToolsOnlyCapabilitiesAndSessionHeader() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -92,7 +92,7 @@ class McpControllerTest {
   void initializeEchoesSupportedRequestedProtocolVersion() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -107,7 +107,7 @@ class McpControllerTest {
   void initializeWithUnsupportedProtocolVersionFallsBackToLatest() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -122,7 +122,7 @@ class McpControllerTest {
   void initializeWithMissingProtocolVersionFallsBackToLatest() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -137,7 +137,7 @@ class McpControllerTest {
   void notificationsMethodReturns202WithEmptyBody() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -152,7 +152,7 @@ class McpControllerTest {
   void pingReturnsEmptyResult() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -171,7 +171,7 @@ class McpControllerTest {
 
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -191,7 +191,7 @@ class McpControllerTest {
 
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -208,7 +208,7 @@ class McpControllerTest {
   void unknownMethodReturnsMethodNotFound() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -223,7 +223,7 @@ class McpControllerTest {
   void jsonRpcBatchArrayBodyReturnsInvalidRequest() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -239,7 +239,7 @@ class McpControllerTest {
   void malformedBodyReturnsInvalidRequestNotHttp500() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -254,7 +254,7 @@ class McpControllerTest {
   void blankMethodReturnsInvalidRequest() throws Exception {
     mockMvc
         .perform(
-            post("/mcp-v2")
+            post("/mcp")
                 .with(withWriterPrincipal())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
@@ -268,12 +268,12 @@ class McpControllerTest {
   @Test
   void getReturnsSseEventStream() throws Exception {
     mockMvc
-        .perform(get("/mcp-v2").with(withWriterPrincipal()).accept(MediaType.TEXT_EVENT_STREAM))
+        .perform(get("/mcp").with(withWriterPrincipal()).accept(MediaType.TEXT_EVENT_STREAM))
         .andExpect(request().asyncStarted());
   }
 
   @Test
   void deleteIsNoOpReturningOk() throws Exception {
-    mockMvc.perform(delete("/mcp-v2").with(withWriterPrincipal())).andExpect(status().isOk());
+    mockMvc.perform(delete("/mcp").with(withWriterPrincipal())).andExpect(status().isOk());
   }
 }

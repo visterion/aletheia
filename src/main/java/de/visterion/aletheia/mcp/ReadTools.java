@@ -26,8 +26,6 @@ import org.jooq.Field;
 import org.jooq.Record;
 import org.jooq.Result;
 import org.jooq.impl.DSL;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -149,7 +147,7 @@ public class ReadTools {
               WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
               WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
               WHEN t.counterparty_name IS NOT NULL THEN 'name'
-          END AS identity_type,
+      END AS identity_type,
           CASE
               WHEN t.attributed_name IS NOT NULL THEN
                   upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
@@ -182,20 +180,10 @@ public class ReadTools {
     this.tagRuleResolver = tagRuleResolver;
   }
 
-  @Tool(
-      name = "wake_up",
-      description =
-          "Call this FIRST, before any other action. Returns this customer's Aletheia operating"
-              + " guide, their recorded preferences, and a live snapshot of the current state"
-              + " (open reviews, opaque payment passthroughs, obligations). Follow the guide."
-              + " Record durable preferences with update_preferences.")
   public String wakeUp() {
     return operatingGuideService.wakeUp();
   }
 
-  @Tool(
-      name = "list_tag_rules",
-      description = "List all auto-tagging rules (enabled and paused), oldest first.")
   public List<TagRuleView> listTagRules() {
     return tagRuleResolver.loadEnabledRulesIncludingDisabled().stream()
         .map(
@@ -205,46 +193,15 @@ public class ReadTools {
         .toList();
   }
 
-  @Tool(
-      name = "aggregate",
-      description =
-          "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date"
-              + " range -- replaces in-head arithmetic. Value expression: for a single direction"
-              + " (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to"
-              + " that direction; for direction=BOTH there is no direction filter and the amount"
-              + " is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) ="
-              + " credit total minus debit total (can be negative). COUNT is always count(*),"
-              + " unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and"
-              + " where are omitted AND byCounterparty=false, the aggregate runs directly over"
-              + " transactions with no counterparty-identity join, so unresolved bookings (cash"
-              + " withdrawals/fees with no creditor_id, iban, or name) are still counted."
-              + " Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins"
-              + " through the identity-CASE resolution (attributed_name > creditor_id > iban >"
-              + " normalized name)"
-              + " and therefore excludes unresolved bookings. When byCounterparty=true, buckets"
-              + " are keyed on counterparties.id (never displayName -- two distinct identities,"
-              + " e.g. a creditor_id and an iban, can share one display name)."
-              + " Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only"
-              + " current leaf positions (children and unsplit originals) are aggregated.")
   public List<AggregateBucket> aggregate(
-      @ToolParam(description = "inclusive range start") LocalDate dateFrom,
-      @ToolParam(description = "inclusive range end") LocalDate dateTo,
-      @ToolParam(description = "TOTAL | MONTH | QUARTER | YEAR") AggregateGroupBy groupBy,
-      @ToolParam(description = "SUM | AVG | MEDIAN | COUNT") AggregateMetric metric,
-      @ToolParam(description = "DBIT | CRDT | BOTH (BOTH nets signed amounts, no direction filter)")
-          Direction direction,
-      @ToolParam(
-              description = "also split buckets per counterparty, keyed on id",
-              required = false)
-          Boolean byCounterparty,
-      @ToolParam(
-              description = "explicit counterparty id scope; takes precedence over where",
-              required = false)
-          List<Long> counterpartyIds,
-      @ToolParam(
-              description = "declarative counterparty selector, resolved when counterpartyIds is absent",
-              required = false)
-          CounterpartySelector where) {
+      LocalDate dateFrom,
+      LocalDate dateTo,
+      AggregateGroupBy groupBy,
+      AggregateMetric metric,
+      Direction direction,
+      Boolean byCounterparty,
+      List<Long> counterpartyIds,
+      CounterpartySelector where) {
     boolean effectiveByCounterparty = Boolean.TRUE.equals(byCounterparty);
     List<Long> ids = resolveAggregateScope(counterpartyIds, where);
     boolean joinIdentity = ids != null || effectiveByCounterparty;
@@ -384,16 +341,9 @@ public class ReadTools {
     };
   }
 
-  @Tool(
-      name = "list_counterparties",
-      description =
-          "List counterparties with their evidence aggregates, current tags, recurring series"
-              + " and contract-link status. Evidence is computed over the logical view of"
-              + " transactions (split parents excluded via NOT EXISTS on split_parent_*; only"
-              + " children and unsplit originals contribute to counts/spend).")
   public List<CounterpartySummary> listCounterparties(
-      @ToolParam(description = "default all", required = false) CounterpartyFilter filter,
-      @ToolParam(description = "default spend_desc", required = false) CounterpartySort sort) {
+      CounterpartyFilter filter,
+      CounterpartySort sort) {
     CounterpartyFilter effectiveFilter = filter == null ? CounterpartyFilter.all : filter;
     CounterpartySort effectiveSort = sort == null ? CounterpartySort.spend_desc : sort;
 
@@ -504,35 +454,9 @@ public class ReadTools {
     return result;
   }
 
-  @Tool(
-      name = "get_review_queue",
-      description =
-          "The obligations still needing a human decision, ordered descending by estimated"
-              + " annual cost. Two shapes: an OPEN contract (contracts.status='open') -- the"
-              + " primary decision unit for any counterparty that has a contract layer at all,"
-              + " confirm/dismiss it via confirm_counterparty/dismiss_counterparty(contractId);"
-              + " or, for a counterparty with no contract row whatsoever (e.g. an ELV obligation"
-              + " that never carried a mandate_id), the whole open counterparty (contractId"
-              + " null) -- confirm/dismiss it without a contractId. Annual cost is"
-              + " recurring.typical_amount * periods/year, or the DBIT-only spend of the last"
-              + " 365 days if no recurring series is recorded yet, scoped to the contract when"
-              + " one exists (never the counterparty's combined debit). Excludes"
-              + " CRDT-predominant counterparties (salary, incoming transfers -- see"
-              + " list_income); a counterparty with no evidence row yet (unknown direction)"
-              + " stays in the queue, since nothing should skip human review. Compact by default"
-              + " ({id, contractId, displayName, identityType, cadence, annualCostEstimate,"
-              + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob."
-              + " All evidence/spend numbers use the logical transaction view (parents with"
-              + " split children are excluded via NOT EXISTS on split_parent_*).")
   public List<ReviewQueueEntry> getReviewQueue(
-      @ToolParam(description = "max rows to return (default 50)", required = false)
-          Integer limit,
-      @ToolParam(
-              description =
-                  "false (default): compact rows without the evidence/recurring blob; true:"
-                      + " full evidence/recurring detail",
-              required = false)
-          Boolean verbose) {
+      Integer limit,
+      Boolean verbose) {
     int effectiveLimit = limit != null && limit > 0 ? limit : DEFAULT_REVIEW_QUEUE_LIMIT;
     boolean effectiveVerbose = Boolean.TRUE.equals(verbose);
 
@@ -723,20 +647,9 @@ public class ReadTools {
     return entries;
   }
 
-  @Tool(
-      name = "list_unmatched_recurring",
-      description =
-          "Recurring debits without a documented contract (TP1 contract grain, spec §5 M3):"
-              + " UNION of (1) an unlinked mandate contract -- a contracts row whose"
-              + " hivemem_cell_id is not yet set, with its recurring series, and (2) a"
-              + " mandate-less auto series -- a recurring row with no contract_id at all (never"
-              + " carried a mandate_id). contractId distinguishes the two shapes (set for (1),"
-              + " null for (2)).")
   public List<UnmatchedRecurringEntry> listUnmatchedRecurring(
-      @ToolParam(description = "annual_cost_desc, optional -- default unsorted", required = false)
-          UnmatchedRecurringSort sort,
-      @ToolParam(description = "max rows to return, optional -- default all", required = false)
-          Integer limit) {
+      UnmatchedRecurringSort sort,
+      Integer limit) {
     List<UnmatchedRecurringEntry> entries = new ArrayList<>();
     entries.addAll(unlinkedMandateContractEntries());
     entries.addAll(mandatelessRecurringEntries());
@@ -861,32 +774,11 @@ public class ReadTools {
     return entries;
   }
 
-  @Tool(
-      name = "counterparty_transactions",
-      description =
-          "The underlying bookings for one counterparty (evidence detail), optionally limited to"
-              + " the last N days via period, or to an inclusive [dateFrom, dateTo] absolute"
-              + " range on booking_date. When dateFrom and dateTo are both given, the absolute"
-              + " range wins over period (period is ignored). Returns only current logical"
-              + " positions: split parents are hidden (NOT EXISTS filter on split_parent_*);"
-              + " children and unsplit originals are shown (javadoc references logical view)."
-              + " Identity priority: attributed_name > creditor_id > iban > normalized name.")
   public List<TransactionView> counterpartyTransactions(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(
-              description =
-                  "restrict to the last N days; omit for all history; ignored when dateFrom and"
-                      + " dateTo are both given",
-              required = false)
-          Integer period,
-      @ToolParam(
-              description = "inclusive range start on booking_date; wins over period when set together with dateTo",
-              required = false)
-          LocalDate dateFrom,
-      @ToolParam(
-              description = "inclusive range end on booking_date; wins over period when set together with dateFrom",
-              required = false)
-          LocalDate dateTo) {
+      long counterpartyId,
+      Integer period,
+      LocalDate dateFrom,
+      LocalDate dateTo) {
     Result<Record> rows =
         db.fetch(
             COUNTERPARTY_TRANSACTIONS_SQL,
@@ -920,11 +812,6 @@ public class ReadTools {
     return transactions;
   }
 
-  @Tool(
-      name = "taxonomy",
-      description =
-          "The emergent tag vocabulary already in use, per dimension (domain|nature|necessity),"
-              + " with counts -- reuse these values instead of inventing synonyms.")
   public List<TaxonomyDimension> taxonomy() {
     var rows =
         db.select(
@@ -952,18 +839,6 @@ public class ReadTools {
     return dimensions;
   }
 
-  @Tool(
-      name = "obligations_register",
-      description =
-          "The documented obligations register: confirmed contracts (TP1 contract grain -- one"
-              + " row per confirmed contracts row, so a counterparty with two confirmed"
-              + " contracts, e.g. two insurance policies, produces two rows) with annual cost,"
-              + " tags and contract-link status, ordered by annual cost, plus the total. Each"
-              + " row's annual cost is scoped to its OWN contract -- never the counterparty's"
-              + " combined debit. All debit/annual cost figures are derived from the logical"
-              + " transaction view (NOT EXISTS on split_parent_* excludes superseded parents)."
-              + " Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags"
-              + " do not exclude.")
   public ObligationsRegister obligationsRegister() {
     var rows =
         db.select(
@@ -1047,12 +922,6 @@ public class ReadTools {
     return new ObligationsRegister(obligationRows, total);
   }
 
-  @Tool(
-      name = "list_income",
-      description =
-          "Incoming payments (CRDT): counterparties whose predominant direction is credit"
-              + " (salary, transfers received) -- kept out of the obligations queue but available"
-              + " here, ordered by total received.")
   public List<IncomeRow> listIncome() {
     var rows =
         db.select(
@@ -1088,13 +957,7 @@ public class ReadTools {
     return income;
   }
 
-  @Tool(
-      name = "sql_query",
-      description =
-          "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."
-              + " Runs on a SELECT-only DB role; non-SELECT, stacked, and SELECT INTO statements"
-              + " are rejected before execution.")
-  public SqlQueryResult sqlQuery(@ToolParam(description = "a single SELECT statement") String sql) {
+  public SqlQueryResult sqlQuery(String sql) {
     requireSelectOnly(sql);
     Result<Record> result = roDsl.fetch(sql);
     List<String> columns = new ArrayList<>();
@@ -1112,11 +975,6 @@ public class ReadTools {
     return new SqlQueryResult(columns, rowMaps);
   }
 
-  @Tool(
-      name = "describe_schema",
-      description =
-          "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query"
-              + " can be written without guessing. No data rows.")
   public List<SchemaColumn> describeSchema() {
     Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY");
     Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY");

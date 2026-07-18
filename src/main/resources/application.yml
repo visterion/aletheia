@@ -17,19 +17,6 @@ spring:
     user: ${ALETHEIA_DB_USER:aletheia}
     password: ${ALETHEIA_DB_PASSWORD}
 
-  ai:
-    mcp:
-      server:
-        name: aletheia
-        version: 0.1.0
-        # Streamable HTTP transport, same shape as HiveMem/Agora
-        protocol: STREAMABLE
-        instructions: >-
-          Before your first action, call the wake_up tool to load this customer's
-          operating guide, their preferences, and the current state. Follow the operating
-          guide. When you learn a durable customer preference, record it with
-          update_preferences.
-
   servlet:
     multipart:
       max-file-size: ${ALETHEIA_INGEST_MULTIPART_MAX:40MB}
