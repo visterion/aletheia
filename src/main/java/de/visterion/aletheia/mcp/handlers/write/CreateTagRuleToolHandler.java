@@ -18,12 +18,6 @@ import tools.jackson.databind.JsonNode;
 /**
  * Hand-rolled {@code create_tag_rule} write tool handler; delegates to {@link
  * WriteTools#createTagRule(String, List, List, Boolean, Boolean, Boolean)}.
- *
- * <p>{@code dryRun} is required by {@link WriteTools#createTagRule}'s {@code @ToolParam} (no
- * {@code required = false}), but {@link ToolInputSchema} has no {@code requiredBoolean} builder
- * -- like {@code set_tag_rule_enabled}'s {@code enabled}, the schema declares it via {@code
- * optionalBoolean} and {@link #call} enforces presence with {@link
- * ArgumentParser#requiredBoolean}.
  */
 @Component
 @Order(21)
@@ -72,7 +66,7 @@ public class CreateTagRuleToolHandler implements ToolHandler {
             "actions",
             "tags to set {dimension, value}; >=1",
             ToolInputSchema.object().requiredString("dimension", "").requiredString("value", ""))
-        .optionalBoolean("dryRun", "true = preview only, write nothing")
+        .requiredBoolean("dryRun", "true = preview only, write nothing")
         .optionalBoolean("backfill", "when persisting, also tag existing counterparties now")
         .optionalBoolean("confirm", "must be true to apply a rule matching 200+ counterparties")
         .build();

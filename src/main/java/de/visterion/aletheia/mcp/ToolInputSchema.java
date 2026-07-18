@@ -121,6 +121,10 @@ public final class ToolInputSchema {
     return addEnumArray(name, description, values, false);
   }
 
+  public ToolInputSchema requiredBoolean(String name, String description) {
+    return addScalar(name, "boolean", description, true);
+  }
+
   public ToolInputSchema optionalBoolean(String name, String description) {
     return addScalar(name, "boolean", description, false);
   }
