@@ -802,6 +802,13 @@ public class WriteTools {
       }
       counterpartyResolver.resolve();
       contractResolver.resolve();
+      try {
+        tagRuleResolver.resolve();
+      } catch (RuntimeException e) {
+        // attribution already committed; a rule failure must not fail the reattribution
+        org.slf4j.LoggerFactory.getLogger(WriteTools.class)
+            .warn("Auto-tagging rules failed after reattribution; will retry next pass: {}", e.toString());
+      }
       String message =
           setName == null
               ? "cleared attribution on " + changed + " booking(s)"

@@ -4,6 +4,7 @@ import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.PayPalAttributionResolver;
 import de.visterion.aletheia.substrate.SubstrateLock;
+import de.visterion.aletheia.tagrules.TagRuleResolver;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -25,6 +26,7 @@ public class IngestEndpointService {
   private final PayPalAttributionResolver payPalAttributionResolver;
   private final CounterpartyResolver counterpartyResolver;
   private final ContractResolver contractResolver;
+  private final TagRuleResolver tagRuleResolver;
   private final SubstrateLock lock;
 
   public IngestEndpointService(
@@ -33,12 +35,14 @@ public class IngestEndpointService {
       PayPalAttributionResolver payPalAttributionResolver,
       CounterpartyResolver counterpartyResolver,
       ContractResolver contractResolver,
+      TagRuleResolver tagRuleResolver,
       SubstrateLock lock) {
     this.properties = properties;
     this.ingestService = ingestService;
     this.payPalAttributionResolver = payPalAttributionResolver;
     this.counterpartyResolver = counterpartyResolver;
     this.contractResolver = contractResolver;
+    this.tagRuleResolver = tagRuleResolver;
     this.lock = lock;
   }
 
@@ -63,6 +67,13 @@ public class IngestEndpointService {
         payPalAttributionResolver.resolve();
         counterpartyResolver.resolve();
         contractResolver.resolve();
+        try {
+          tagRuleResolver.resolve();
+        } catch (RuntimeException e) {
+          log.warn(
+              "Auto-tagging rules failed after ingest; data committed, will retry next pass: {}",
+              e.toString());
+        }
         Files.move(
             working, imported.resolve(uuid + "-" + safeName), StandardCopyOption.ATOMIC_MOVE);
         return IngestResponse.from(safeName, summary);
