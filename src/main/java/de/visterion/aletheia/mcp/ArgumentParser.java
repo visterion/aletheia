@@ -179,4 +179,51 @@ public final class ArgumentParser {
     }
     return List.copyOf(values);
   }
+
+  /**
+   * Parses a {@code where} argument object into a {@link CounterpartySelector}. Field names match
+   * {@link CounterpartySelector}'s 8 components exactly. Returns {@code null} when {@code where}
+   * is absent or JSON {@code null} (no selector given).
+   */
+  public static CounterpartySelector counterpartySelector(JsonNode arguments, String name) {
+    JsonNode where = optionalNode(arguments, name);
+    if (where == null) {
+      return null;
+    }
+    Boolean untagged = optionalBoolean(where, "untagged");
+    String namePattern = optionalText(where, "namePattern");
+    BigDecimal minAnnualCost = optionalDecimal(where, "minAnnualCost");
+    String predominantDirectionText = optionalText(where, "predominantDirection");
+    Direction predominantDirection =
+        predominantDirectionText == null ? null : parseEnum(Direction.class, predominantDirectionText, "predominantDirection");
+    List<String> domainIn = optionalTextList(where, "domainIn");
+    List<String> natureIn = optionalTextList(where, "natureIn");
+    Boolean reviewed = optionalBoolean(where, "reviewed");
+    Boolean hasContract = optionalBoolean(where, "hasContract");
+    return new CounterpartySelector(
+        untagged, namePattern, minAnnualCost, predominantDirection, domainIn, natureIn, reviewed, hasContract);
+  }
+
+  /** Parses a required enum-string field, throwing {@link McpArgumentException} on a bad value. */
+  public static <E extends Enum<E>> E requiredEnum(JsonNode arguments, String name, Class<E> enumType) {
+    String text = requiredText(arguments, name);
+    return parseEnum(enumType, text, name);
+  }
+
+  /** Parses an optional enum-string field, returning {@code null} when absent. */
+  public static <E extends Enum<E>> E optionalEnum(JsonNode arguments, String name, Class<E> enumType) {
+    String text = optionalText(arguments, name);
+    if (text == null) {
+      return null;
+    }
+    return parseEnum(enumType, text, name);
+  }
+
+  private static <E extends Enum<E>> E parseEnum(Class<E> enumType, String text, String name) {
+    try {
+      return Enum.valueOf(enumType, text);
+    } catch (IllegalArgumentException e) {
+      throw new McpArgumentException("Invalid " + name);
+    }
+  }
 }
