@@ -2,19 +2,21 @@ package de.visterion.aletheia.mcp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.StreamSupport;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.util.json.schema.JsonSchemaGenerator;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 
 /**
- * Verifies that the generated MCP tool-parameter schema for {@link CounterpartySelector} does not
- * mark any of its 8 fields as required. A partial {@code where} filter (only some fields set) must
- * be a valid payload for the {@code aggregate}, {@code classify_counterparty},
- * {@code dismiss_counterparty}, and {@code confirm_counterparty} tools.
+ * Verifies the hand-rolled {@link CounterpartySelectorSchema#where()} JSON-Schema fragment for
+ * {@link CounterpartySelector}: none of its 8 fields are marked required (a partial {@code where}
+ * filter -- only some fields set -- must be a valid payload for the {@code aggregate}, {@code
+ * classify_counterparty}, {@code dismiss_counterparty}, and {@code confirm_counterparty} tools),
+ * and {@code predominantDirection} carries the correct enum values.
+ *
+ * <p>Rewritten for Task 10 (Spring AI removal): the previous version generated the schema via
+ * Spring AI's {@code JsonSchemaGenerator} reflecting over {@link CounterpartySelector}; the schema
+ * is now hand-authored in {@link CounterpartySelectorSchema}, so this test asserts its output
+ * directly instead.
  */
 class SelectorSchemaTest {
 
@@ -30,23 +32,27 @@ class SelectorSchemaTest {
           "hasContract");
 
   @Test
-  void allSelectorFieldsAreOptionalInGeneratedSchema() throws Exception {
-    String schemaJson = JsonSchemaGenerator.generateForType(CounterpartySelector.class);
+  @SuppressWarnings("unchecked")
+  void allSelectorFieldsAreOptionalInGeneratedSchema() {
+    Map<String, Object> schema = CounterpartySelectorSchema.where().build();
 
-    ObjectMapper mapper = new ObjectMapper();
-    JsonNode schema = mapper.readTree(schemaJson);
-
-    JsonNode properties = schema.get("properties");
+    Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
     assertThat(properties).as("schema properties").isNotNull();
-    List<String> propertyNames = new ArrayList<>();
-    properties.propertyNames().forEach(propertyNames::add);
-    assertThat(propertyNames).containsExactlyInAnyOrderElementsOf(EXPECTED_PROPERTIES);
+    assertThat(properties.keySet()).containsExactlyInAnyOrderElementsOf(EXPECTED_PROPERTIES);
 
-    JsonNode required = schema.get("required");
-    List<String> requiredNames =
-        required == null
-            ? List.of()
-            : StreamSupport.stream(required.spliterator(), false).map(JsonNode::asText).toList();
-    assertThat(requiredNames).as("required fields").isEmpty();
+    // ToolInputSchema omits the "required" key entirely when no field is required (its javadoc).
+    assertThat(schema).as("required fields").doesNotContainKey("required");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void predominantDirectionCarriesTheExpectedEnumValues() {
+    Map<String, Object> schema = CounterpartySelectorSchema.where().build();
+    Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
+    Map<String, Object> predominantDirection = (Map<String, Object>) properties.get("predominantDirection");
+
+    assertThat(predominantDirection.get("type")).isEqualTo("string");
+    assertThat((List<String>) predominantDirection.get("enum"))
+        .containsExactly("DBIT", "CRDT", "BOTH");
   }
 }

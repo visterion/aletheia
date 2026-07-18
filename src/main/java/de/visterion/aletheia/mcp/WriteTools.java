@@ -21,8 +21,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.request.RequestAttributes;
@@ -73,37 +71,19 @@ public class WriteTools {
     this.tagRuleResolver = tagRuleResolver;
   }
 
-  @Tool(
-      name = "update_preferences",
-      description =
-          "Record durable customer preferences (markdown). Replaces the preferences section only"
-              + " -- the operating guide is protected. wake_up first, edit, write back the full"
-              + " preferences markdown.")
   public String updatePreferences(
-      @ToolParam(description = "the full new preferences markdown") String preferences) {
+      String preferences) {
     return operatingGuideService.updatePreferences(preferences, currentActor());
   }
 
-  @Tool(
-      name = "classify_counterparty",
-      description =
-          "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit"
-              + " ids or a where-selector). Never sets counterparties.reviewed or status -- only"
-              + " confirm/dismiss do that. Batches of 200+ require confirm=true; batches over"
-              + " 1000 are always rejected.")
   @Transactional
   public BatchWriteAck classifyCounterparty(
-      @ToolParam(description = "explicit counterparties.id list, optional", required = false)
-          List<Long> counterpartyIds,
-      @ToolParam(description = "selector to resolve target ids, optional", required = false)
-          CounterpartySelector where,
-      @ToolParam(description = "the {dimension, value} pairs to set") List<TagInput> tags,
-      @ToolParam(description = "provenance of this classification") TagSource source,
-      @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence,
-      @ToolParam(
-              description = "must be true to run a batch of 200 or more",
-              required = false)
-          Boolean confirm) {
+      List<Long> counterpartyIds,
+      CounterpartySelector where,
+      List<TagInput> tags,
+      TagSource source,
+      BigDecimal confidence,
+      Boolean confirm) {
     boolean effectiveConfirm = Boolean.TRUE.equals(confirm);
     List<Long> ids = resolveTargetIds(counterpartyIds, where);
     enforceBatchCaps(ids, effectiveConfirm);
@@ -190,32 +170,15 @@ public class WriteTools {
     }
   }
 
-  @Tool(
-      name = "mark_recurring",
-      description =
-          "Record/replace the recurring series for a counterparty, keyed by (counterparty_id,"
-              + " contract_id) -- pass contractId (a contracts.id) to target that specific"
-              + " contract's series, or null for the counterparty's mandate-less series. An"
-              + " auto-source call can never overwrite an already-confirmed row. Never sets"
-              + " counterparties.reviewed or status. Note: on a MANDATE contract (a contractId"
-              + " whose contracts row has a mandate_id), measured values such as typical_amount"
-              + " are refreshed from transactions by ContractResolver on every startup, so a"
-              + " manual override here is not durable for mandate contracts -- mandate-less"
-              + " series (contractId=null) are not resolver-owned.")
   public WriteAck markRecurring(
-      @ToolParam(description = "counterparties.id") long counterpartyId,
-      @ToolParam(
-              description = "contracts.id to target, or null for the mandate-less series",
-              required = false)
-          Long contractId,
-      @ToolParam(description = "recurrence interval") Cadence cadence,
-      @ToolParam(description = "the representative amount per occurrence") BigDecimal typicalAmount,
-      @ToolParam(description = "smallest observed amount, optional", required = false)
-          BigDecimal amountMin,
-      @ToolParam(description = "largest observed amount, optional", required = false)
-          BigDecimal amountMax,
-      @ToolParam(description = "provenance of this classification") TagSource source,
-      @ToolParam(description = "0..1, optional", required = false) BigDecimal confidence) {
+      long counterpartyId,
+      Long contractId,
+      Cadence cadence,
+      BigDecimal typicalAmount,
+      BigDecimal amountMin,
+      BigDecimal amountMax,
+      TagSource source,
+      BigDecimal confidence) {
     requireExistingCounterparty(counterpartyId);
 
     org.jooq.Condition key =
@@ -271,28 +234,13 @@ public class WriteTools {
     return new WriteAck(counterpartyId, "recurring series set to " + cadence.name());
   }
 
-  @Tool(
-      name = "confirm_counterparty",
-      description =
-          "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that"
-              + " contract). BATCH: counterpartyIds OR a where-selector (never both, never with"
-              + " contractId/counterpartyId) -- each id is confirmed at counterparty level"
-              + " (contractId=null): a mandate-less recurring series is materialized+confirmed"
-              + " (appears in the obligations register); otherwise auto tags/status flip to"
-              + " confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single"
-              + " confirm(id, contractId) for those. Batches of 200+ require confirm=true.")
   @Transactional
   public BatchWriteAck confirmCounterparty(
-      @ToolParam(description = "counterparties.id (single-item mode)", required = false)
-          Long counterpartyId,
-      @ToolParam(description = "contracts.id to confirm (single-item only)", required = false)
-          Long contractId,
-      @ToolParam(description = "explicit ids (batch mode)", required = false)
-          List<Long> counterpartyIds,
-      @ToolParam(description = "where-selector (batch mode)", required = false)
-          CounterpartySelector where,
-      @ToolParam(description = "must be true for a batch of 200 or more", required = false)
-          Boolean confirm) {
+      Long counterpartyId,
+      Long contractId,
+      List<Long> counterpartyIds,
+      CounterpartySelector where,
+      Boolean confirm) {
     List<Long> batchIds =
         resolveBatchTarget(
             counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
@@ -435,18 +383,10 @@ public class WriteTools {
     return id;
   }
 
-  @Tool(
-      name = "link_contract",
-      description =
-          "Link a contract to a HiveMem contract cell. contractId is a contracts.id -- get it"
-              + " from list_unmatched_recurring/get_review_queue (for a mandate-less obligation,"
-              + " confirm_counterparty/dismiss_counterparty without a contractId first to"
-              + " materialize its contract row). Find the cell id via HiveMem:search with"
-              + " where.realm=contracts (or the topic documenting the contract).")
   public WriteAck linkContract(
-      @ToolParam(description = "contracts.id to link") long contractId,
-      @ToolParam(description = "the HiveMem cell id") String hivememCellId,
-      @ToolParam(description = "optional free-text notes", required = false) String notes) {
+      long contractId,
+      String hivememCellId,
+      String notes) {
     Long counterpartyId =
         db.select(CONTRACTS.COUNTERPARTY_ID)
             .from(CONTRACTS)
@@ -476,29 +416,14 @@ public class WriteTools {
         counterpartyId, "linked contract " + contractId + " to HiveMem cell " + hivememCellId);
   }
 
-  @Tool(
-      name = "dismiss_counterparty",
-      description =
-          "Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally"
-              + " contractId to dismiss just that contract). BATCH: pass counterpartyIds OR a"
-              + " where-selector (never both, never with contractId/counterpartyId) -- each id is"
-              + " dismissed at counterparty level (its mandate-less recurring series is"
-              + " materialized+dismissed; a non-recurring counterparty gets status='dismissed')."
-              + " A no-contractId dismiss also sets reviewed=true. Batches of 200+ require"
-              + " confirm=true; over 1000 rejected. reason is required.")
   @Transactional
   public BatchWriteAck dismissCounterparty(
-      @ToolParam(description = "counterparties.id (single-item mode)", required = false)
-          Long counterpartyId,
-      @ToolParam(description = "contracts.id to dismiss (single-item only)", required = false)
-          Long contractId,
-      @ToolParam(description = "explicit ids (batch mode)", required = false)
-          List<Long> counterpartyIds,
-      @ToolParam(description = "where-selector (batch mode)", required = false)
-          CounterpartySelector where,
-      @ToolParam(description = "why these were dismissed") String reason,
-      @ToolParam(description = "must be true for a batch of 200 or more", required = false)
-          Boolean confirm) {
+      Long counterpartyId,
+      Long contractId,
+      List<Long> counterpartyIds,
+      CounterpartySelector where,
+      String reason,
+      Boolean confirm) {
     List<Long> batchIds =
         resolveBatchTarget(
             counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
@@ -731,24 +656,9 @@ public class WriteTools {
              (SELECT count(*) FROM upd)     AS changed
       """;
 
-  @Tool(
-      name = "reattribute_transaction",
-      description =
-          "Stamp the real merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the"
-              + " deterministic PayPal resolver cannot parse it). Pass the exact transactions as"
-              + " refs (get contentHash/occurrenceIndex from counterparty_transactions) and the"
-              + " real merchant as attributedName; pass attributedName=null to clear the"
-              + " attribution. Sets attribution_source='manual', which wins permanently over the"
-              + " PayPal resolver. Attribute a whole recurring series consistently (all its refs)."
-              + " Clearing a PayPal-creditor row is transient (the deterministic resolver re-stamps"
-              + " it) -- to correct a wrong PayPal parse, set a manual name instead. Teardown of a"
-              + " no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId).")
   public BatchWriteAck reattributeTransaction(
-      @ToolParam(description = "the exact transactions to (re)attribute") List<TxReference> refs,
-      @ToolParam(
-              description = "the real merchant name; null clears the attribution",
-              required = false)
-          String attributedName) {
+      List<TxReference> refs,
+      String attributedName) {
     if (refs == null || refs.isEmpty()) {
       throw new IllegalArgumentException("refs must be non-empty");
     }
@@ -835,56 +745,22 @@ public class WriteTools {
 
   // --- split_transaction (Phase 2 core) ---
 
-  @Tool(
-      name = "split_transaction",
-      description =
-          "Split an existing raw transaction into logical child positions (replace semantics)."
-              + " If allocations is null/empty or unsplit=true, deletes all children (unsplit)."
-              + " Otherwise validates that sum(allocations.amount) equals the original transaction"
-              + " amount exactly and that each allocation.amount is strictly positive, deletes any"
-              + " prior children for this parent, creates name-based counterparties on demand"
-              + " (Bargeld auto gets nature=umbuchung), inserts deterministic synthetic child rows"
-              + " with split_parent_* backrefs, import_id=null, occurrence_index=0, and attribution"
-              + " driven from counterpartyId identity (creditor_id/iban/name) or displayName for"
-              + " correct resolution on purchase vs pseudo parts. Idempotent replace. All inside"
-              + " one transaction.")
   public SplitTransactionAck splitTransaction(
-      @ToolParam(description = "reference to the parent transaction to split (by natural key)")
-          TxReference tx,
-      @ToolParam(
-              description =
-                  "list of target allocations; null/empty triggers unsplit. Each allocation targets"
-                      + " either an existing counterpartyId or a displayName (to create name-based"
-                      + " CP). Each allocation.amount must be strictly positive.",
-              required = false)
-          List<Allocation> allocations,
-      @ToolParam(
-              description = "if true force unsplit (delete children) even if allocations provided",
-              required = false)
-          Boolean unsplit) {
+      TxReference tx,
+      List<Allocation> allocations,
+      Boolean unsplit) {
     return splitService.splitTransaction(tx, allocations, unsplit);
   }
 
   // --- tag rules (#37 auto-tagging rules) ---
 
-  @Tool(
-      name = "create_tag_rule",
-      description =
-          "Create a persistent auto-tagging rule (Outlook-style). conditions are AND-ed; actions set"
-              + " tags (source=confirmed) on matching counterparties, overwriting 'auto' tags and"
-              + " skipping dimensions already 'confirmed'. dryRun=true writes nothing and returns the"
-              + " match preview -- always dry-run first. dryRun=false persists (enabled) and, if"
-              + " backfill=true, tags existing counterparties now; the rule also runs on every future"
-              + " ingest. A match set of 200+ needs confirm=true.")
   public CreateTagRuleAck createTagRule(
-      @ToolParam(description = "human-readable rule name") String name,
-      @ToolParam(description = "AND-ed conditions {field, op, value}; >=1") List<RuleCondition> conditions,
-      @ToolParam(description = "tags to set {dimension, value}; >=1") List<RuleAction> actions,
-      @ToolParam(description = "true = preview only, write nothing") Boolean dryRun,
-      @ToolParam(description = "when persisting, also tag existing counterparties now", required = false)
-          Boolean backfill,
-      @ToolParam(description = "must be true to apply a rule matching 200+ counterparties", required = false)
-          Boolean confirm) {
+      String name,
+      List<RuleCondition> conditions,
+      List<RuleAction> actions,
+      Boolean dryRun,
+      Boolean backfill,
+      Boolean confirm) {
     if (name == null || name.isBlank()) {
       throw new IllegalArgumentException("name must not be blank");
     }
@@ -921,12 +797,9 @@ public class WriteTools {
         wouldSetTags);
   }
 
-  @Tool(
-      name = "set_tag_rule_enabled",
-      description = "Pause or resume a tag rule without deleting it.")
   public TagRuleAck setTagRuleEnabled(
-      @ToolParam(description = "tag_rules.id") Long ruleId,
-      @ToolParam(description = "true = enabled, false = paused") Boolean enabled) {
+      Long ruleId,
+      Boolean enabled) {
     int updated =
         db.update(de.visterion.aletheia.jooq.Tables.TAG_RULES)
             .set(de.visterion.aletheia.jooq.Tables.TAG_RULES.ENABLED, Boolean.TRUE.equals(enabled))
@@ -938,12 +811,7 @@ public class WriteTools {
     return new TagRuleAck(ruleId, Boolean.TRUE.equals(enabled) ? "enabled" : "disabled");
   }
 
-  @Tool(
-      name = "delete_tag_rule",
-      description =
-          "Delete a tag rule. Does NOT roll back tags it already applied (those are confirmed"
-              + " decisions; adjust them with classify_counterparty).")
-  public TagRuleAck deleteTagRule(@ToolParam(description = "tag_rules.id") Long ruleId) {
+  public TagRuleAck deleteTagRule(Long ruleId) {
     int deleted =
         db.deleteFrom(de.visterion.aletheia.jooq.Tables.TAG_RULES)
             .where(de.visterion.aletheia.jooq.Tables.TAG_RULES.ID.eq(ruleId))

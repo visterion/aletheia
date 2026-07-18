@@ -1,0 +1,709 @@
+[ {
+  "name" : "wake_up",
+  "description" : "Call this FIRST, before any other action. Returns this customer's Aletheia operating guide, their recorded preferences, and a live snapshot of the current state (open reviews, opaque payment passthroughs, obligations). Follow the guide. Record durable preferences with update_preferences.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : { }
+  }
+}, {
+  "name" : "taxonomy",
+  "description" : "The emergent tag vocabulary already in use, per dimension (domain|nature|necessity), with counts -- reuse these values instead of inventing synonyms.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : { }
+  }
+}, {
+  "name" : "obligations_register",
+  "description" : "The documented obligations register: confirmed contracts (TP1 contract grain -- one row per confirmed contracts row, so a counterparty with two confirmed contracts, e.g. two insurance policies, produces two rows) with annual cost, tags and contract-link status, ordered by annual cost, plus the total. Each row's annual cost is scoped to its OWN contract -- never the counterparty's combined debit. All debit/annual cost figures are derived from the logical transaction view (NOT EXISTS on split_parent_* excludes superseded parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags do not exclude.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : { }
+  }
+}, {
+  "name" : "list_income",
+  "description" : "Incoming payments (CRDT): counterparties whose predominant direction is credit (salary, transfers received) -- kept out of the obligations queue but available here, ordered by total received.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : { }
+  }
+}, {
+  "name" : "describe_schema",
+  "description" : "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query can be written without guessing. No data rows.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : { }
+  }
+}, {
+  "name" : "list_tag_rules",
+  "description" : "List all auto-tagging rules (enabled and paused), oldest first.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : { }
+  }
+}, {
+  "name" : "list_counterparties",
+  "description" : "List counterparties with their evidence aggregates, current tags, recurring series and contract-link status. Evidence is computed over the logical view of transactions (split parents excluded via NOT EXISTS on split_parent_*; only children and unsplit originals contribute to counts/spend).",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : {
+      "filter" : {
+        "type" : "string",
+        "description" : "default all",
+        "enum" : [ "untagged", "unreviewed", "has_recurring", "all" ]
+      },
+      "sort" : {
+        "type" : "string",
+        "description" : "default spend_desc",
+        "enum" : [ "spend_desc", "recent" ]
+      }
+    }
+  }
+}, {
+  "name" : "get_review_queue",
+  "description" : "The obligations still needing a human decision, ordered descending by estimated annual cost. Two shapes: an OPEN contract (contracts.status='open') -- the primary decision unit for any counterparty that has a contract layer at all, confirm/dismiss it via confirm_counterparty/dismiss_counterparty(contractId); or, for a counterparty with no contract row whatsoever (e.g. an ELV obligation that never carried a mandate_id), the whole open counterparty (contractId null) -- confirm/dismiss it without a contractId. Annual cost is recurring.typical_amount * periods/year, or the DBIT-only spend of the last 365 days if no recurring series is recorded yet, scoped to the contract when one exists (never the counterparty's combined debit). Excludes CRDT-predominant counterparties (salary, incoming transfers -- see list_income); a counterparty with no evidence row yet (unknown direction) stays in the queue, since nothing should skip human review. Compact by default ({id, contractId, displayName, identityType, cadence, annualCostEstimate, txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob. All evidence/spend numbers use the logical transaction view (parents with split children are excluded via NOT EXISTS on split_parent_*).",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : {
+      "verbose" : {
+        "description" : "false (default): compact rows without the evidence/recurring blob; true: full evidence/recurring detail",
+        "type" : "boolean"
+      },
+      "limit" : {
+        "description" : "max rows to return (default 50)",
+        "type" : "integer"
+      }
+    }
+  }
+}, {
+  "name" : "list_unmatched_recurring",
+  "description" : "Recurring debits without a documented contract (TP1 contract grain, spec §5 M3): UNION of (1) an unlinked mandate contract -- a contracts row whose hivemem_cell_id is not yet set, with its recurring series, and (2) a mandate-less auto series -- a recurring row with no contract_id at all (never carried a mandate_id). contractId distinguishes the two shapes (set for (1), null for (2)).",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : {
+      "sort" : {
+        "type" : "string",
+        "description" : "annual_cost_desc, optional -- default unsorted",
+        "enum" : [ "annual_cost_desc" ]
+      },
+      "limit" : {
+        "description" : "max rows to return, optional -- default all",
+        "type" : "integer"
+      }
+    }
+  }
+}, {
+  "name" : "sql_query",
+  "description" : "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema. Runs on a SELECT-only DB role; non-SELECT, stacked, and SELECT INTO statements are rejected before execution.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "sql" : {
+        "description" : "a single SELECT statement",
+        "type" : "string"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "sql" ]
+  }
+}, {
+  "name" : "counterparty_transactions",
+  "description" : "The underlying bookings for one counterparty (evidence detail), optionally limited to the last N days via period, or to an inclusive [dateFrom, dateTo] absolute range on booking_date. When dateFrom and dateTo are both given, the absolute range wins over period (period is ignored). Returns only current logical positions: split parents are hidden (NOT EXISTS filter on split_parent_*); children and unsplit originals are shown (javadoc references logical view). Identity priority: attributed_name > creditor_id > iban > normalized name.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "dateFrom" : {
+        "description" : "inclusive range start on booking_date; wins over period when set together with dateTo",
+        "type" : "string"
+      },
+      "period" : {
+        "description" : "restrict to the last N days; omit for all history; ignored when dateFrom and dateTo are both given",
+        "type" : "integer"
+      },
+      "dateTo" : {
+        "description" : "inclusive range end on booking_date; wins over period when set together with dateFrom",
+        "type" : "string"
+      },
+      "counterpartyId" : {
+        "description" : "counterparties.id",
+        "type" : "integer"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "counterpartyId" ]
+  }
+}, {
+  "name" : "aggregate",
+  "description" : "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date range -- replaces in-head arithmetic. Value expression: for a single direction (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to that direction; for direction=BOTH there is no direction filter and the amount is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) = credit total minus debit total (can be negative). COUNT is always count(*), unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and where are omitted AND byCounterparty=false, the aggregate runs directly over transactions with no counterparty-identity join, so unresolved bookings (cash withdrawals/fees with no creditor_id, iban, or name) are still counted. Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins through the identity-CASE resolution (attributed_name > creditor_id > iban > normalized name) and therefore excludes unresolved bookings. When byCounterparty=true, buckets are keyed on counterparties.id (never displayName -- two distinct identities, e.g. a creditor_id and an iban, can share one display name). Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only current leaf positions (children and unsplit originals) are aggregated.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "direction" : {
+        "type" : "string",
+        "description" : "DBIT | CRDT | BOTH (BOTH nets signed amounts, no direction filter)",
+        "enum" : [ "DBIT", "CRDT", "BOTH" ]
+      },
+      "metric" : {
+        "type" : "string",
+        "description" : "SUM | AVG | MEDIAN | COUNT",
+        "enum" : [ "SUM", "AVG", "MEDIAN", "COUNT" ]
+      },
+      "byCounterparty" : {
+        "description" : "also split buckets per counterparty, keyed on id",
+        "type" : "boolean"
+      },
+      "groupBy" : {
+        "type" : "string",
+        "description" : "TOTAL | MONTH | QUARTER | YEAR",
+        "enum" : [ "TOTAL", "MONTH", "QUARTER", "YEAR" ]
+      },
+      "where" : {
+        "type" : "object",
+        "additionalProperties" : false,
+        "properties" : {
+          "hasContract" : {
+            "type" : "boolean"
+          },
+          "namePattern" : {
+            "type" : "string"
+          },
+          "untagged" : {
+            "type" : "boolean"
+          },
+          "reviewed" : {
+            "type" : "boolean"
+          },
+          "domainIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "natureIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "predominantDirection" : {
+            "enum" : [ "DBIT", "CRDT", "BOTH" ],
+            "type" : "string"
+          },
+          "minAnnualCost" : {
+            "type" : "number"
+          }
+        },
+        "description" : "declarative counterparty selector, resolved when counterpartyIds is absent"
+      },
+      "dateFrom" : {
+        "description" : "inclusive range start",
+        "type" : "string"
+      },
+      "dateTo" : {
+        "description" : "inclusive range end",
+        "type" : "string"
+      },
+      "counterpartyIds" : {
+        "type" : "array",
+        "items" : {
+          "type" : "integer"
+        },
+        "description" : "explicit counterparty id scope; takes precedence over where"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "dateFrom", "dateTo", "groupBy", "metric", "direction" ]
+  }
+}, {
+  "name" : "update_preferences",
+  "description" : "Record durable customer preferences (markdown). Replaces the preferences section only -- the operating guide is protected. wake_up first, edit, write back the full preferences markdown.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "preferences" : {
+        "description" : "the full new preferences markdown",
+        "type" : "string"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "preferences" ]
+  }
+}, {
+  "name" : "classify_counterparty",
+  "description" : "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit ids or a where-selector). Never sets counterparties.reviewed or status -- only confirm/dismiss do that. Batches of 200+ require confirm=true; batches over 1000 are always rejected.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "where" : {
+        "type" : "object",
+        "additionalProperties" : false,
+        "properties" : {
+          "hasContract" : {
+            "type" : "boolean"
+          },
+          "namePattern" : {
+            "type" : "string"
+          },
+          "untagged" : {
+            "type" : "boolean"
+          },
+          "reviewed" : {
+            "type" : "boolean"
+          },
+          "domainIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "natureIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "predominantDirection" : {
+            "enum" : [ "DBIT", "CRDT", "BOTH" ],
+            "type" : "string"
+          },
+          "minAnnualCost" : {
+            "type" : "number"
+          }
+        },
+        "description" : "selector to resolve target ids, optional"
+      },
+      "source" : {
+        "type" : "string",
+        "description" : "provenance of this classification",
+        "enum" : [ "auto", "confirmed" ]
+      },
+      "confirm" : {
+        "description" : "must be true to run a batch of 200 or more",
+        "type" : "boolean"
+      },
+      "counterpartyIds" : {
+        "type" : "array",
+        "items" : {
+          "type" : "integer"
+        },
+        "description" : "explicit counterparties.id list, optional"
+      },
+      "tags" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "properties" : {
+            "value" : {
+              "type" : "string"
+            },
+            "dimension" : {
+              "type" : "string"
+            }
+          },
+          "additionalProperties" : false,
+          "required" : [ "dimension", "value" ]
+        },
+        "description" : "the {dimension, value} pairs to set"
+      },
+      "confidence" : {
+        "description" : "0..1, optional",
+        "type" : "number"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "tags", "source" ]
+  }
+}, {
+  "name" : "mark_recurring",
+  "description" : "Record/replace the recurring series for a counterparty, keyed by (counterparty_id, contract_id) -- pass contractId (a contracts.id) to target that specific contract's series, or null for the counterparty's mandate-less series. An auto-source call can never overwrite an already-confirmed row. Never sets counterparties.reviewed or status. Note: on a MANDATE contract (a contractId whose contracts row has a mandate_id), measured values such as typical_amount are refreshed from transactions by ContractResolver on every startup, so a manual override here is not durable for mandate contracts -- mandate-less series (contractId=null) are not resolver-owned.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "cadence" : {
+        "type" : "string",
+        "description" : "recurrence interval",
+        "enum" : [ "monthly", "quarterly", "half_yearly", "yearly", "irregular" ]
+      },
+      "counterpartyId" : {
+        "description" : "counterparties.id",
+        "type" : "integer"
+      },
+      "typicalAmount" : {
+        "description" : "the representative amount per occurrence",
+        "type" : "number"
+      },
+      "amountMin" : {
+        "description" : "smallest observed amount, optional",
+        "type" : "number"
+      },
+      "source" : {
+        "type" : "string",
+        "description" : "provenance of this classification",
+        "enum" : [ "auto", "confirmed" ]
+      },
+      "amountMax" : {
+        "description" : "largest observed amount, optional",
+        "type" : "number"
+      },
+      "contractId" : {
+        "description" : "contracts.id to target, or null for the mandate-less series",
+        "type" : "integer"
+      },
+      "confidence" : {
+        "description" : "0..1, optional",
+        "type" : "number"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "counterpartyId", "cadence", "typicalAmount", "source" ]
+  }
+}, {
+  "name" : "confirm_counterparty",
+  "description" : "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that contract). BATCH: counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is confirmed at counterparty level (contractId=null): a mandate-less recurring series is materialized+confirmed (appears in the obligations register); otherwise auto tags/status flip to confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single confirm(id, contractId) for those. Batches of 200+ require confirm=true.",
+  "inputSchema" : {
+    "type" : "object",
+    "additionalProperties" : false,
+    "properties" : {
+      "counterpartyIds" : {
+        "type" : "array",
+        "items" : {
+          "type" : "integer"
+        },
+        "description" : "explicit ids (batch mode)"
+      },
+      "where" : {
+        "type" : "object",
+        "additionalProperties" : false,
+        "properties" : {
+          "hasContract" : {
+            "type" : "boolean"
+          },
+          "namePattern" : {
+            "type" : "string"
+          },
+          "untagged" : {
+            "type" : "boolean"
+          },
+          "reviewed" : {
+            "type" : "boolean"
+          },
+          "domainIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "natureIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "predominantDirection" : {
+            "enum" : [ "DBIT", "CRDT", "BOTH" ],
+            "type" : "string"
+          },
+          "minAnnualCost" : {
+            "type" : "number"
+          }
+        },
+        "description" : "where-selector (batch mode)"
+      },
+      "confirm" : {
+        "description" : "must be true for a batch of 200 or more",
+        "type" : "boolean"
+      },
+      "counterpartyId" : {
+        "description" : "counterparties.id (single-item mode)",
+        "type" : "integer"
+      },
+      "contractId" : {
+        "description" : "contracts.id to confirm (single-item only)",
+        "type" : "integer"
+      }
+    }
+  }
+}, {
+  "name" : "link_contract",
+  "description" : "Link a contract to a HiveMem contract cell. contractId is a contracts.id -- get it from list_unmatched_recurring/get_review_queue (for a mandate-less obligation, confirm_counterparty/dismiss_counterparty without a contractId first to materialize its contract row). Find the cell id via HiveMem:search with where.realm=contracts (or the topic documenting the contract).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "notes" : {
+        "description" : "optional free-text notes",
+        "type" : "string"
+      },
+      "hivememCellId" : {
+        "description" : "the HiveMem cell id",
+        "type" : "string"
+      },
+      "contractId" : {
+        "description" : "contracts.id to link",
+        "type" : "integer"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "contractId", "hivememCellId" ]
+  }
+}, {
+  "name" : "dismiss_counterparty",
+  "description" : "Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally contractId to dismiss just that contract). BATCH: pass counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is dismissed at counterparty level (its mandate-less recurring series is materialized+dismissed; a non-recurring counterparty gets status='dismissed'). A no-contractId dismiss also sets reviewed=true. Batches of 200+ require confirm=true; over 1000 rejected. reason is required.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "where" : {
+        "type" : "object",
+        "additionalProperties" : false,
+        "properties" : {
+          "hasContract" : {
+            "type" : "boolean"
+          },
+          "namePattern" : {
+            "type" : "string"
+          },
+          "untagged" : {
+            "type" : "boolean"
+          },
+          "reviewed" : {
+            "type" : "boolean"
+          },
+          "domainIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "natureIn" : {
+            "items" : {
+              "type" : "string"
+            },
+            "type" : "array"
+          },
+          "predominantDirection" : {
+            "enum" : [ "DBIT", "CRDT", "BOTH" ],
+            "type" : "string"
+          },
+          "minAnnualCost" : {
+            "type" : "number"
+          }
+        },
+        "description" : "where-selector (batch mode)"
+      },
+      "confirm" : {
+        "description" : "must be true for a batch of 200 or more",
+        "type" : "boolean"
+      },
+      "counterpartyId" : {
+        "description" : "counterparties.id (single-item mode)",
+        "type" : "integer"
+      },
+      "counterpartyIds" : {
+        "type" : "array",
+        "items" : {
+          "type" : "integer"
+        },
+        "description" : "explicit ids (batch mode)"
+      },
+      "reason" : {
+        "description" : "why these were dismissed",
+        "type" : "string"
+      },
+      "contractId" : {
+        "description" : "contracts.id to dismiss (single-item only)",
+        "type" : "integer"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "reason" ]
+  }
+}, {
+  "name" : "reattribute_transaction",
+  "description" : "Stamp the real merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the deterministic PayPal resolver cannot parse it). Pass the exact transactions as refs (get contentHash/occurrenceIndex from counterparty_transactions) and the real merchant as attributedName; pass attributedName=null to clear the attribution. Sets attribution_source='manual', which wins permanently over the PayPal resolver. Attribute a whole recurring series consistently (all its refs). Clearing a PayPal-creditor row is transient (the deterministic resolver re-stamps it) -- to correct a wrong PayPal parse, set a manual name instead. Teardown of a no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "refs" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "properties" : {
+            "occurrenceIndex" : {
+              "type" : "integer"
+            },
+            "contentHash" : {
+              "type" : "string"
+            }
+          },
+          "additionalProperties" : false,
+          "required" : [ "contentHash", "occurrenceIndex" ]
+        },
+        "description" : "the exact transactions to (re)attribute"
+      },
+      "attributedName" : {
+        "description" : "the real merchant name; null clears the attribution",
+        "type" : "string"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "refs" ]
+  }
+}, {
+  "name" : "split_transaction",
+  "description" : "Split an existing raw transaction into logical child positions (replace semantics). If allocations is null/empty or unsplit=true, deletes all children (unsplit). Otherwise validates that sum(allocations.amount) equals the original transaction amount exactly and that each allocation.amount is strictly positive, deletes any prior children for this parent, creates name-based counterparties on demand (Bargeld auto gets nature=umbuchung), inserts deterministic synthetic child rows with split_parent_* backrefs, import_id=null, occurrence_index=0, and attribution driven from counterpartyId identity (creditor_id/iban/name) or displayName for correct resolution on purchase vs pseudo parts. Idempotent replace. All inside one transaction.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "tx" : {
+        "type" : "object",
+        "properties" : {
+          "occurrenceIndex" : {
+            "type" : "integer"
+          },
+          "contentHash" : {
+            "type" : "string"
+          }
+        },
+        "required" : [ "contentHash", "occurrenceIndex" ],
+        "additionalProperties" : false,
+        "description" : "reference to the parent transaction to split (by natural key)"
+      },
+      "allocations" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "properties" : {
+            "displayName" : {
+              "type" : "string"
+            },
+            "amount" : {
+              "type" : "number"
+            },
+            "counterpartyId" : {
+              "type" : "integer"
+            },
+            "mandateId" : {
+              "type" : "string"
+            },
+            "remittanceInfo" : {
+              "type" : "string"
+            }
+          },
+          "additionalProperties" : false,
+          "required" : [ "amount", "counterpartyId", "displayName", "mandateId", "remittanceInfo" ]
+        },
+        "description" : "list of target allocations; null/empty triggers unsplit. Each allocation targets either an existing counterpartyId or a displayName (to create name-based CP). Each allocation.amount must be strictly positive."
+      },
+      "unsplit" : {
+        "description" : "if true force unsplit (delete children) even if allocations provided",
+        "type" : "boolean"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "tx" ]
+  }
+}, {
+  "name" : "create_tag_rule",
+  "description" : "Create a persistent auto-tagging rule (Outlook-style). conditions are AND-ed; actions set tags (source=confirmed) on matching counterparties, overwriting 'auto' tags and skipping dimensions already 'confirmed'. dryRun=true writes nothing and returns the match preview -- always dry-run first. dryRun=false persists (enabled) and, if backfill=true, tags existing counterparties now; the rule also runs on every future ingest. A match set of 200+ needs confirm=true.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "confirm" : {
+        "description" : "must be true to apply a rule matching 200+ counterparties",
+        "type" : "boolean"
+      },
+      "backfill" : {
+        "description" : "when persisting, also tag existing counterparties now",
+        "type" : "boolean"
+      },
+      "name" : {
+        "description" : "human-readable rule name",
+        "type" : "string"
+      },
+      "dryRun" : {
+        "description" : "true = preview only, write nothing",
+        "type" : "boolean"
+      },
+      "conditions" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "properties" : {
+            "field" : {
+              "enum" : [ "remittance_info", "counterparty_name", "creditor_id", "counterparty_iban", "direction" ],
+              "type" : "string"
+            },
+            "op" : {
+              "enum" : [ "contains", "equals" ],
+              "type" : "string"
+            },
+            "value" : {
+              "type" : "string"
+            }
+          },
+          "additionalProperties" : false,
+          "required" : [ "field", "op", "value" ]
+        },
+        "description" : "AND-ed conditions {field, op, value}; >=1"
+      },
+      "actions" : {
+        "type" : "array",
+        "items" : {
+          "type" : "object",
+          "properties" : {
+            "value" : {
+              "type" : "string"
+            },
+            "dimension" : {
+              "type" : "string"
+            }
+          },
+          "additionalProperties" : false,
+          "required" : [ "dimension", "value" ]
+        },
+        "description" : "tags to set {dimension, value}; >=1"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "name", "conditions", "actions", "dryRun" ]
+  }
+}, {
+  "name" : "set_tag_rule_enabled",
+  "description" : "Pause or resume a tag rule without deleting it.",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "enabled" : {
+        "description" : "true = enabled, false = paused",
+        "type" : "boolean"
+      },
+      "ruleId" : {
+        "description" : "tag_rules.id",
+        "type" : "integer"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "ruleId", "enabled" ]
+  }
+}, {
+  "name" : "delete_tag_rule",
+  "description" : "Delete a tag rule. Does NOT roll back tags it already applied (those are confirmed decisions; adjust them with classify_counterparty).",
+  "inputSchema" : {
+    "type" : "object",
+    "properties" : {
+      "ruleId" : {
+        "description" : "tag_rules.id",
+        "type" : "integer"
+      }
+    },
+    "additionalProperties" : false,
+    "required" : [ "ruleId" ]
+  }
+} ]
