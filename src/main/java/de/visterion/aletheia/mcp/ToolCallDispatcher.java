@@ -66,6 +66,13 @@ public class ToolCallDispatcher {
                 return McpResponse.toolResult(requestId, json);
               } catch (McpArgumentException e) {
                 return McpResponse.invalidParams(requestId, messageOf(e));
+              } catch (IllegalArgumentException e) {
+                // Expected business/validation signal (e.g. "pass confirm=true" on a large batch,
+                // "no such counterparty"). Surfaced to the model as an isError tool result and
+                // typically acted on (retry with confirm=true). Log at WARN without a stacktrace so
+                // ERROR stays reserved for genuine, unexpected faults.
+                log.warn("Tool call rejected by {}: {}", toolName, messageOf(e));
+                return McpResponse.toolExecutionError(requestId, messageOf(e));
               } catch (Exception e) {
                 log.error("Tool call failed: {}", toolName, e);
                 return McpResponse.toolExecutionError(requestId, messageOf(e));
