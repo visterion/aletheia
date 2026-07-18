@@ -124,6 +124,16 @@ class ToolInputSchemaTest {
   }
 
   @Test
+  void requiredBooleanEmitsBooleanWithoutFormatAndMarksRequired() {
+    Map<String, Object> schema = ToolInputSchema.object().requiredBoolean("b", "d").build();
+
+    @SuppressWarnings("unchecked")
+    Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
+    assertThat(properties).containsEntry("b", Map.of("type", "boolean", "description", "d"));
+    assertThat(schema).containsEntry("required", List.of("b"));
+  }
+
+  @Test
   void requiredObjectAppendsToRequiredList() {
     Map<String, Object> schema =
         ToolInputSchema.object()

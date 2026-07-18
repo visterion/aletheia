@@ -13,11 +13,6 @@ import tools.jackson.databind.JsonNode;
 /**
  * Hand-rolled {@code set_tag_rule_enabled} write tool handler; delegates to {@link
  * WriteTools#setTagRuleEnabled(Long, Boolean)}.
- *
- * <p>{@code enabled} is required (no {@code required = false} on its {@code @ToolParam}), but
- * {@link ToolInputSchema} has no {@code requiredBoolean} builder -- the schema declares it via
- * {@code optionalBoolean} and {@link #call} enforces presence with {@link
- * ArgumentParser#requiredBoolean}.
  */
 @Component
 @Order(22)
@@ -43,7 +38,7 @@ public class SetTagRuleEnabledToolHandler implements ToolHandler {
   public Map<String, Object> inputSchema() {
     return ToolInputSchema.object()
         .requiredLong("ruleId", "tag_rules.id")
-        .optionalBoolean("enabled", "true = enabled, false = paused")
+        .requiredBoolean("enabled", "true = enabled, false = paused")
         .build();
   }
 
