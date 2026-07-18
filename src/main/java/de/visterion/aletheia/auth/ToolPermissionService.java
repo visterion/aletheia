@@ -37,7 +37,8 @@ public class ToolPermissionService {
           "aggregate",
           "obligations_register",
           "list_income",
-          "wake_up");
+          "wake_up",
+          "list_tag_rules");
 
   /** Additional write-scope tools (spec §5 "Write"), on top of everything READER can do. */
   private static final Set<String> WRITE_TOOLS =
@@ -49,7 +50,10 @@ public class ToolPermissionService {
           "dismiss_counterparty",
           "split_transaction",
           "reattribute_transaction",
-          "update_preferences");
+          "update_preferences",
+          "create_tag_rule",
+          "set_tag_rule_enabled",
+          "delete_tag_rule");
 
   private static final Set<String> WRITER_TOOLS = union(READ_TOOLS, WRITE_TOOLS);
 
