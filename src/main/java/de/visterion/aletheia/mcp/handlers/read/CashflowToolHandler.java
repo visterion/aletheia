@@ -107,8 +107,17 @@ public class CashflowToolHandler implements ToolHandler {
     Boolean exTransfers = ArgumentParser.optionalBoolean(arguments, "excludeInternalTransfers");
     Boolean exPassthroughs = ArgumentParser.optionalBoolean(arguments, "excludePassthroughs");
     String investment = ArgumentParser.optionalText(arguments, "investmentMode");
+    if (investment != null && !investment.equals("as_saving") && !investment.equals("exclude")) {
+      throw new McpArgumentException("investmentMode must be 'as_saving' or 'exclude'");
+    }
     Integer topN = ArgumentParser.optionalInteger(arguments, "topN");
     BigDecimal minShare = ArgumentParser.optionalDecimal(arguments, "minShare");
+    if (topN != null && topN < 0) {
+      throw new McpArgumentException("topN must be >= 0");
+    }
+    if (minShare != null && minShare.signum() < 0) {
+      throw new McpArgumentException("minShare must be >= 0");
+    }
 
     CashflowParams params =
         new CashflowParams(
