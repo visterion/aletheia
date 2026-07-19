@@ -181,6 +181,21 @@ public final class ArgumentParser {
     return List.copyOf(values);
   }
 
+  public static List<Long> requiredLongList(JsonNode arguments, String name) {
+    JsonNode node = requiredNode(arguments, name);
+    if (!node.isArray() || node.isEmpty()) {
+      throw new McpArgumentException("Invalid " + name);
+    }
+    List<Long> values = new ArrayList<>(node.size());
+    for (JsonNode item : node) {
+      if (!item.isIntegralNumber()) {
+        throw new McpArgumentException("Invalid " + name);
+      }
+      values.add(item.asLong());
+    }
+    return List.copyOf(values);
+  }
+
   public static List<Long> optionalLongList(JsonNode arguments, String name) {
     JsonNode node = optionalNode(arguments, name);
     if (node == null) {

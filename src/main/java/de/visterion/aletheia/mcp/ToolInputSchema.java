@@ -97,6 +97,10 @@ public final class ToolInputSchema {
     return addArray(name, "integer", description, false);
   }
 
+  public ToolInputSchema requiredLongList(String name, String description) {
+    return addArray(name, "integer", description, true);
+  }
+
   public ToolInputSchema requiredDate(String name, String description) {
     return addScalar(name, "string", description, true);
   }

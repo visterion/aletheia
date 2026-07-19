@@ -23,6 +23,7 @@ import de.visterion.aletheia.mcp.handlers.write.DeleteTagRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.DismissCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.LinkContractToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MarkRecurringToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.MergeCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.ReattributeTransactionToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SetTagRuleEnabledToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SplitTransactionToolHandler;
@@ -74,13 +75,14 @@ class ToolPermissionCoverageTest {
         new SplitTransactionToolHandler(null),
         new CreateTagRuleToolHandler(null),
         new SetTagRuleEnabledToolHandler(null),
-        new DeleteTagRuleToolHandler(null));
+        new DeleteTagRuleToolHandler(null),
+        new MergeCounterpartyToolHandler(null));
   }
 
   @Test
-  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentyThree() {
+  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentyFour() {
     List<ToolHandler> handlers = allHandlers();
-    assertThat(handlers).as("exactly 23 MCP tool handlers are registered").hasSize(23);
+    assertThat(handlers).as("exactly 24 MCP tool handlers are registered").hasSize(24);
 
     Set<String> allToolNames = new HashSet<>();
     for (ToolHandler handler : handlers) {
@@ -94,7 +96,7 @@ class ToolPermissionCoverageTest {
     assertThat(allowedForWriter)
         .as("every registered tool handler name must be present in the WRITER permission union")
         .containsAll(allToolNames);
-    assertThat(allowedForWriter).as("exactly 23 tools are visible to WRITER").hasSize(23);
+    assertThat(allowedForWriter).as("exactly 24 tools are visible to WRITER").hasSize(24);
 
     Set<String> allowedForReader = new ToolPermissionService().allowedTools(AuthRole.READER);
     assertThat(allowedForReader).as("exactly 12 tools are visible to READER").hasSize(12);
