@@ -272,13 +272,17 @@ class MergeCounterpartyIT extends AbstractPostgresIT {
 
     // Only one contract-less recurring row can exist per counterparty (NULLS NOT DISTINCT), so
     // the second source's mandate-less series collides with the first and is dropped/upgraded --
-    // either way, something under the target must survive (never silently lost).
-    Integer targetRows =
-        db.fetchOne(
-                "SELECT count(*) c FROM recurring WHERE counterparty_id = ? AND contract_id IS NULL",
-                target)
-            .get("c", Integer.class);
-    assertThat(targetRows).isEqualTo(1);
+    // either way, something under the target must survive (never silently lost). It must
+    // specifically be the human-confirmed series (cadence/amount), never the auto one.
+    var targetRow =
+        db.selectFrom(RECURRING)
+            .where(RECURRING.COUNTERPARTY_ID.eq(target))
+            .and(RECURRING.CONTRACT_ID.isNull())
+            .fetchOne();
+    assertThat(targetRow).isNotNull();
+    assertThat(targetRow.getSource()).isEqualTo("confirmed");
+    assertThat(targetRow.getCadence()).isEqualTo("monthly");
+    assertThat(targetRow.getTypicalAmount()).isEqualByComparingTo("12.00");
     Integer sourceRowsRemaining =
         db.fetchOne(
                 "SELECT count(*) c FROM recurring WHERE counterparty_id IN (?, ?)",
