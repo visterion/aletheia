@@ -5,6 +5,7 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
@@ -278,6 +279,19 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
               assertThat(row.get(COUNTERPARTIES.STATUS)).isEqualTo("confirmed");
               assertThat(row.get(COUNTERPARTIES.REVIEWED)).isTrue();
             });
+  }
+
+  @Test
+  void newFieldOnlyWhereIsAnEffectiveBatchFilter() { // Task 3
+    // A where with only a new field (txnCountMax) must not trip the "must contribute at least
+    // one filter" whole-table-match guard; it should reach id resolution instead (an empty
+    // table here resolves to zero affected rows, not an exception).
+    var where =
+        new CounterpartySelector(
+            null, null, null, null, null, null, null, null,
+            1L, null, null, null, null, null, null);
+    assertThatCode(() -> writeTools.dismissCounterparty(null, null, null, where, "noise", true))
+        .doesNotThrowAnyException();
   }
 
   private String status(long id) {

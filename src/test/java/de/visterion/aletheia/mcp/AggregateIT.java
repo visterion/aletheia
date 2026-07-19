@@ -281,4 +281,30 @@ class AggregateIT extends AbstractPostgresIT {
     assertThat(unsplitAgg).hasSize(1);
     assertThat(unsplitAgg.get(0).value()).isEqualByComparingTo("7.00");
   }
+
+  @Test
+  void aggregateHonoursNewSelectorFields() { // Task 3
+    long imp = importId();
+    // Alpha: 2 txns -> excluded by txnCountMax=1.
+    insertTxn(imp, "hash-nf-alpha-1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-NF-ALPHA", null, "Alpha");
+    insertTxn(imp, "hash-nf-alpha-2", LocalDate.of(2025, 2, 5), "10.00", "DBIT", "CDTR-NF-ALPHA", null, "Alpha");
+    // Beta and Gamma: 1 txn each -> included.
+    insertTxn(imp, "hash-nf-beta-1", LocalDate.of(2025, 3, 5), "20.00", "DBIT", "CDTR-NF-BETA", null, "Beta");
+    insertTxn(imp, "hash-nf-gamma-1", LocalDate.of(2025, 4, 5), "30.00", "DBIT", "CDTR-NF-GAMMA", null, "Gamma");
+    resolver.run(null);
+
+    var where =
+        new CounterpartySelector(
+            null, null, null, null, null, null, null, null,
+            1L, null, null, null, null, null, null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.SUM, Direction.DBIT, true, null,
+            where);
+
+    assertThat(out)
+        .extracting(AggregateBucket::displayName)
+        .containsExactlyInAnyOrder("Beta", "Gamma");
+  }
 }

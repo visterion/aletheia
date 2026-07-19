@@ -40,7 +40,13 @@ public class DismissCounterpartyToolHandler implements ToolHandler {
         + " dismissed at counterparty level (its mandate-less recurring series is"
         + " materialized+dismissed; a non-recurring counterparty gets status='dismissed')."
         + " A no-contractId dismiss also sets reviewed=true. Batches of 200+ require"
-        + " confirm=true; over 1000 rejected. reason is required.";
+        + " confirm=true; over 1000 rejected. reason is required."
+        + " The where selector also supports: txnCountMax (logical booking count <= N; a"
+        + " counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude"
+        + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
+        + " (largest single booking in absolute EUR, credits included, within these bounds;"
+        + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
+        + " (last booking date, inclusive).";
   }
 
   @Override
