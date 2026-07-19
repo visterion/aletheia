@@ -504,7 +504,7 @@
   },
   {
     "name": "confirm_counterparty",
-    "description": "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that contract). BATCH: counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is confirmed at counterparty level (contractId=null): a mandate-less recurring series is materialized+confirmed (appears in the obligations register); otherwise auto tags/status flip to confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single confirm(id, contractId) for those. Batches of 200+ require confirm=true. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive).",
+    "description": "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that contract). BATCH: counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is confirmed at counterparty level (contractId=null): a mandate-less recurring series is materialized+confirmed (appears in the obligations register); otherwise auto tags/status flip to confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single confirm(id, contractId) for those. Batches of 200+ require confirm=true. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive). SINGLE-item mode also accepts an optional cadence (with typicalAmount and optional amountMin/amountMax): when supplied, this fuses series-creation + contract-materialize + confirm into one call, e.g. confirming a newly-seen quarterly insurance debit as recurring at EUR 45.00 in a single step.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -596,6 +596,29 @@
         "contractId": {
           "description": "contracts.id to confirm (single-item only)",
           "type": "integer"
+        },
+        "cadence": {
+          "type": "string",
+          "description": "recurrence interval; when set, materializes the series+contract for a single counterpartyId",
+          "enum": [
+            "monthly",
+            "quarterly",
+            "half_yearly",
+            "yearly",
+            "irregular"
+          ]
+        },
+        "typicalAmount": {
+          "description": "representative amount per occurrence (with cadence)",
+          "type": "number"
+        },
+        "amountMin": {
+          "description": "smallest observed amount (with cadence), optional",
+          "type": "number"
+        },
+        "amountMax": {
+          "description": "largest observed amount (with cadence), optional",
+          "type": "number"
         }
       }
     }
