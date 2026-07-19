@@ -153,7 +153,7 @@ public class CashflowGraphBuilder {
     // Transfers + opaque passthrough (meta).
     BigDecimal internalNet = transfer.net();
     boolean renderTransfer = !params.excludeInternalTransfers();
-    BigDecimal metaInternal = renderTransfer ? ZERO : internalNet;
+    BigDecimal metaInternal = internalNet;
     BigDecimal metaPassthrough = passthroughOpaque.net();
 
     BigDecimal saldo = income.subtract(outflow).subtract(saving);
@@ -191,8 +191,16 @@ public class CashflowGraphBuilder {
       String domainId = "domain:" + domain;
       nodes.add(node(domainId, domain, total, "domain"));
       links.add(link("budget:main", domainId, total));
-      emitChildren(
-          nodes, links, domainId, domainLeaves.get(domain), total, params, "sonstiges:" + domain);
+      if (params.levels().contains("counterparty")) {
+        emitChildren(
+            nodes,
+            links,
+            domainId,
+            domainLeaves.get(domain),
+            total,
+            params,
+            "sonstiges:" + domain);
+      }
     }
 
     // 4) Saving nodes: budget:main -> saving:<value> / depot:buys.
