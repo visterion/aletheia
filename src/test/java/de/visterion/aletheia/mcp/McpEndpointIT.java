@@ -111,7 +111,7 @@ class McpEndpointIT {
 
     try (McpSyncClient writer = connect(writerToken)) {
       writer.initialize();
-      assertThat(writer.listTools().tools()).hasSize(24);
+      assertThat(writer.listTools().tools()).hasSize(25);
     }
     try (McpSyncClient reader = connect(readerToken)) {
       reader.initialize();
@@ -139,8 +139,8 @@ class McpEndpointIT {
       golden = mapper.readValue(in, List.class);
     }
 
-    assertThat(liveTools).hasSize(24);
-    assertThat(golden).hasSize(24);
+    assertThat(liveTools).hasSize(25);
+    assertThat(golden).hasSize(25);
 
     List<String> mismatches = new java.util.ArrayList<>();
     for (Map<String, Object> goldenTool : golden) {
