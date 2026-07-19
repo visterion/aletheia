@@ -168,7 +168,7 @@
   },
   {
     "name": "aggregate",
-    "description": "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date range -- replaces in-head arithmetic. Value expression: for a single direction (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to that direction; for direction=BOTH there is no direction filter and the amount is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) = credit total minus debit total (can be negative). COUNT is always count(*), unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and where are omitted AND byCounterparty=false, the aggregate runs directly over transactions with no counterparty-identity join, so unresolved bookings (cash withdrawals/fees with no creditor_id, iban, or name) are still counted. Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins through the identity-CASE resolution (attributed_name > creditor_id > iban > normalized name) and therefore excludes unresolved bookings. When byCounterparty=true, buckets are keyed on counterparties.id (never displayName -- two distinct identities, e.g. a creditor_id and an iban, can share one display name). Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only current leaf positions (children and unsplit originals) are aggregated. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive).",
+    "description": "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date range -- replaces in-head arithmetic. Value expression: for a single direction (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to that direction; for direction=BOTH there is no direction filter and the amount is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) = credit total minus debit total (can be negative). COUNT is always count(*), unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and where are omitted AND byCounterparty=false, the aggregate runs directly over transactions with no counterparty-identity join, so unresolved bookings (cash withdrawals/fees with no creditor_id, iban, or name) are still counted. Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins through the identity-CASE resolution (attributed_name > creditor_id > iban > normalized name) and therefore excludes unresolved bookings. When byCounterparty=true, buckets are keyed on counterparties.id (never displayName -- two distinct identities, e.g. a creditor_id and an iban, can share one display name). Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only current leaf positions (children and unsplit originals) are aggregated. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive). groupBy also accepts DOMAIN and NATURE: buckets are the counterparty's domain/nature tag values (resolved through the identity CASE; a counterparty maps to a single value per dimension -- confirmed over auto, then highest confidence, then alphabetical; untagged or unresolved -> \"(untagged)\"). For a spend-by-category breakdown in ONE call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -197,12 +197,14 @@
         },
         "groupBy": {
           "type": "string",
-          "description": "TOTAL | MONTH | QUARTER | YEAR",
+          "description": "TOTAL | MONTH | QUARTER | YEAR | DOMAIN | NATURE",
           "enum": [
             "TOTAL",
             "MONTH",
             "QUARTER",
-            "YEAR"
+            "YEAR",
+            "DOMAIN",
+            "NATURE"
           ]
         },
         "where": {

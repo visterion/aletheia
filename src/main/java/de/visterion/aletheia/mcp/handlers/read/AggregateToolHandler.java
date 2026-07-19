@@ -62,7 +62,12 @@ public class AggregateToolHandler implements ToolHandler {
         + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
         + " (largest single booking in absolute EUR, credits included, within these bounds;"
         + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
-        + " (last booking date, inclusive).";
+        + " (last booking date, inclusive)."
+        + " groupBy also accepts DOMAIN and NATURE: buckets are the counterparty's domain/nature"
+        + " tag values (resolved through the identity CASE; a counterparty maps to a single value"
+        + " per dimension -- confirmed over auto, then highest confidence, then alphabetical;"
+        + " untagged or unresolved -> \"(untagged)\"). For a spend-by-category breakdown in ONE"
+        + " call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this.";
   }
 
   @Override
@@ -70,7 +75,10 @@ public class AggregateToolHandler implements ToolHandler {
     return ToolInputSchema.object()
         .requiredDate("dateFrom", "inclusive range start")
         .requiredDate("dateTo", "inclusive range end")
-        .requiredEnumString("groupBy", "TOTAL | MONTH | QUARTER | YEAR", "TOTAL", "MONTH", "QUARTER", "YEAR")
+        .requiredEnumString(
+            "groupBy",
+            "TOTAL | MONTH | QUARTER | YEAR | DOMAIN | NATURE",
+            "TOTAL", "MONTH", "QUARTER", "YEAR", "DOMAIN", "NATURE")
         .requiredEnumString("metric", "SUM | AVG | MEDIAN | COUNT", "SUM", "AVG", "MEDIAN", "COUNT")
         .requiredEnumString(
             "direction",
