@@ -70,6 +70,7 @@ public class CounterpartySelectorResolver {
     }
 
     List<Condition> conditions = new ArrayList<>();
+    conditions.add(COUNTERPARTIES.MERGED_INTO.isNull());
     if (where != null) {
       if (Boolean.TRUE.equals(where.untagged())) {
         conditions.add(

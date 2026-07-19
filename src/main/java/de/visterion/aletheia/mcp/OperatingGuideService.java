@@ -27,11 +27,15 @@ public class OperatingGuideService {
     String prefs = (prefsRaw == null || prefsRaw.isBlank()) ? "(none recorded yet)" : prefsRaw;
 
     long unreviewed =
-        (Long) db.fetchValue("SELECT count(*) FROM counterparties WHERE reviewed = false");
+        (Long)
+            db.fetchValue(
+                "SELECT count(*) FROM counterparties WHERE reviewed = false "
+                    + "AND merged_into IS NULL");
     long opaquePassthroughs =
         (Long)
             db.fetchValue(
-                "SELECT count(*) FROM counterparties c WHERE c.reviewed = false AND EXISTS ("
+                "SELECT count(*) FROM counterparties c WHERE c.reviewed = false "
+                    + "AND c.merged_into IS NULL AND EXISTS ("
                     + "SELECT 1 FROM counterparty_tags t WHERE t.counterparty_id = c.id "
                     + "AND t.dimension = 'nature' AND t.value = 'zahlungsdienst')");
     long openContracts =
