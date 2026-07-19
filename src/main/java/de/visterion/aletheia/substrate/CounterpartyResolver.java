@@ -94,6 +94,11 @@ public class CounterpartyResolver implements ApplicationRunner {
           ) normalized
       ) identified
       WHERE identity_type IS NOT NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM counterparty_alias a
+            WHERE a.identity_type = identified.identity_type
+              AND a.identity_value = identified.identity_value
+        )
       GROUP BY identity_type, identity_value
       ON CONFLICT (identity_type, identity_value) DO UPDATE
       SET display_name = EXCLUDED.display_name
