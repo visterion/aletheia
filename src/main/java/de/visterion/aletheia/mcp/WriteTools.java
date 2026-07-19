@@ -832,7 +832,9 @@ public class WriteTools {
     if (Boolean.TRUE.equals(dryRun)) {
       List<CounterpartySample> samples =
           db
-              .select(COUNTERPARTIES.ID, COUNTERPARTIES.DISPLAY_NAME)
+              .select(
+                  COUNTERPARTIES.ID,
+                  DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME))
               .from(COUNTERPARTIES)
               .where(COUNTERPARTIES.ID.in(matched))
               .limit(20)
