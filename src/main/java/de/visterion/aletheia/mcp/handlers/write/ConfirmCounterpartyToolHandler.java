@@ -40,7 +40,13 @@ public class ConfirmCounterpartyToolHandler implements ToolHandler {
         + " (contractId=null): a mandate-less recurring series is materialized+confirmed"
         + " (appears in the obligations register); otherwise auto tags/status flip to"
         + " confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single"
-        + " confirm(id, contractId) for those. Batches of 200+ require confirm=true.";
+        + " confirm(id, contractId) for those. Batches of 200+ require confirm=true."
+        + " The where selector also supports: txnCountMax (logical booking count <= N; a"
+        + " counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude"
+        + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
+        + " (largest single booking in absolute EUR, credits included, within these bounds;"
+        + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
+        + " (last booking date, inclusive).";
   }
 
   @Override

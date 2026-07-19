@@ -532,7 +532,14 @@ public class WriteTools {
         || (w.domainIn() != null && !w.domainIn().isEmpty())
         || (w.natureIn() != null && !w.natureIn().isEmpty())
         || w.reviewed() != null
-        || w.hasContract() != null;
+        || w.hasContract() != null
+        || w.txnCountMax() != null
+        || (w.natureNotIn() != null && !w.natureNotIn().isEmpty())
+        || (w.domainNotIn() != null && !w.domainNotIn().isEmpty())
+        || w.amountMin() != null
+        || w.amountMax() != null
+        || w.lastSeenBefore() != null
+        || w.lastSeenAfter() != null;
   }
 
   /**

@@ -41,7 +41,13 @@ public class ClassifyCounterpartyToolHandler implements ToolHandler {
     return "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit"
         + " ids or a where-selector). Never sets counterparties.reviewed or status -- only"
         + " confirm/dismiss do that. Batches of 200+ require confirm=true; batches over"
-        + " 1000 are always rejected.";
+        + " 1000 are always rejected."
+        + " The where selector also supports: txnCountMax (logical booking count <= N; a"
+        + " counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude"
+        + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
+        + " (largest single booking in absolute EUR, credits included, within these bounds;"
+        + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
+        + " (last booking date, inclusive).";
   }
 
   @Override

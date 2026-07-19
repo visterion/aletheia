@@ -56,7 +56,13 @@ public class AggregateToolHandler implements ToolHandler {
         + " are keyed on counterparties.id (never displayName -- two distinct identities,"
         + " e.g. a creditor_id and an iban, can share one display name)."
         + " Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only"
-        + " current leaf positions (children and unsplit originals) are aggregated.";
+        + " current leaf positions (children and unsplit originals) are aggregated."
+        + " The where selector also supports: txnCountMax (logical booking count <= N; a"
+        + " counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude"
+        + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
+        + " (largest single booking in absolute EUR, credits included, within these bounds;"
+        + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
+        + " (last booking date, inclusive).";
   }
 
   @Override
