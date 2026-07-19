@@ -22,6 +22,8 @@ import java.util.List;
  * @param hasContract whether a {@code contracts} row links this counterparty to HiveMem
  * @param contractCount the number of {@code contracts} rows for this counterparty (TP1 -- a
  *     counterparty can have more than one, e.g. two insurance policies with the same insurer)
+ * @param aliases the {@code counterparty_alias} source identities folded into this counterparty
+ *     (sub-project A/P1 counterparty merge); empty when none
  */
 public record CounterpartySummary(
     long id,
@@ -34,4 +36,5 @@ public record CounterpartySummary(
     List<CounterpartyTagView> tags,
     RecurringView recurring,
     boolean hasContract,
-    int contractCount) {}
+    int contractCount,
+    List<CounterpartyAliasView> aliases) {}
