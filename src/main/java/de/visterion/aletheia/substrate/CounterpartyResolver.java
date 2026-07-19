@@ -10,8 +10,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * On startup (after ingest, spec §3), upserts {@code counterparties} from the distinct identities
- * present in {@code transactions} and synchronizes each display name with the latest usable raw
- * booking name.
+ * present in {@code transactions} and synchronizes each display name with the most-frequent
+ * normalized name over the counterparty's bookings (alias-aware; tie &rarr; most recent).
  *
  * <p>Only raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}. Split
  * children are ignored to avoid creating duplicate counterparties (e.g. "Bargeld" must only be
@@ -25,9 +25,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>{@code @Order(3)} runs this after {@link de.visterion.aletheia.ingest.IngestRunner}
  * ({@code @Order(1)}) and {@link PayPalAttributionResolver} ({@code @Order(2)}) -- Spring does
- * not order {@link ApplicationRunner} beans without explicit {@code @Order}. The upsert is
- * idempotent: conflicts update only {@code display_name}, and only when the latest derived value
- * is distinct from the stored value.
+ * not order {@link ApplicationRunner} beans without explicit {@code @Order}. The insert is
+ * idempotent ({@code ON CONFLICT DO NOTHING}, bootstrapping a display name only for brand-new
+ * rows); the most-frequent normalized name over the counterparty's bookings (alias-aware; tie
+ * &rarr; most recent) is the sole authority for subsequent updates.
  */
 @Component
 @Order(3)
@@ -100,10 +101,83 @@ public class CounterpartyResolver implements ApplicationRunner {
               AND a.identity_value = identified.identity_value
         )
       GROUP BY identity_type, identity_value
-      ON CONFLICT (identity_type, identity_value) DO UPDATE
-      SET display_name = EXCLUDED.display_name
-      WHERE EXCLUDED.display_name IS NOT NULL
-        AND counterparties.display_name IS DISTINCT FROM EXCLUDED.display_name
+      ON CONFLICT (identity_type, identity_value) DO NOTHING
+      """;
+
+  // Intentionally duplicates UPSERT_COUNTERPARTIES's identity CASE ladder verbatim (spec-mandated,
+  // Spec B/P2): the refresh must resolve identities with the resolver's own ladder, not the V15
+  // evidence-view ladder, which differs on whitespace-only names. Keep both in sync by hand.
+  // language=SQL
+  private static final String REFRESH_DISPLAY_NAMES =
+      """
+      UPDATE counterparties c
+      SET display_name = ranked.display_name
+      FROM (
+          SELECT effective_cp,
+                 (array_agg(display_name ORDER BY cnt DESC, last_booking DESC, display_name ASC))[1]
+                   AS display_name
+          FROM (
+              SELECT
+                  COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp,
+                  identified.normalized_display                  AS display_name,
+                  count(*)                                       AS cnt,
+                  max(identified.booking_date)                   AS last_booking
+              FROM (
+                  SELECT
+                      CASE
+                          WHEN attributed_name IS NOT NULL THEN 'name'
+                          WHEN creditor_id IS NOT NULL THEN 'creditor_id'
+                          WHEN counterparty_iban IS NOT NULL THEN 'iban'
+                          WHEN normalized_name <> '' THEN 'name'
+                      END AS identity_type,
+                      CASE
+                          WHEN attributed_name IS NOT NULL THEN upper(normalized_attributed)
+                          WHEN creditor_id IS NOT NULL THEN creditor_id
+                          WHEN counterparty_iban IS NOT NULL THEN counterparty_iban
+                          WHEN normalized_name <> '' THEN upper(normalized_name)
+                      END AS identity_value,
+                      normalized_display,
+                      booking_date
+                  FROM (
+                      SELECT
+                          creditor_id,
+                          counterparty_iban,
+                          attributed_name,
+                          trim(regexp_replace(
+                              normalize(counterparty_name, NFC), '\\s+', ' ', 'g'
+                          )) AS normalized_name,
+                          trim(regexp_replace(
+                              normalize(attributed_name, NFC), '\\s+', ' ', 'g'
+                          )) AS normalized_attributed,
+                          trim(regexp_replace(
+                              normalize(COALESCE(attributed_name, counterparty_name), NFC),
+                              '\\s+', ' ', 'g'
+                          )) AS normalized_display,
+                          booking_date
+                      FROM transactions
+                  """
+          + " WHERE "
+          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          + "\n"
+          + """
+                  ) normalized
+              ) identified
+              LEFT JOIN counterparty_alias al
+                  ON al.identity_type = identified.identity_type
+                 AND al.identity_value = identified.identity_value
+              LEFT JOIN counterparties own
+                  ON own.identity_type = identified.identity_type
+                 AND own.identity_value = identified.identity_value
+              WHERE identified.identity_type IS NOT NULL
+                AND identified.normalized_display <> ''
+              GROUP BY effective_cp, identified.normalized_display
+          ) per_name
+          WHERE effective_cp IS NOT NULL
+          GROUP BY effective_cp
+      ) ranked
+      WHERE c.id = ranked.effective_cp
+        AND c.merged_into IS NULL
+        AND c.display_name IS DISTINCT FROM ranked.display_name
       """;
 
   private final DSLContext db;
@@ -123,9 +197,13 @@ public class CounterpartyResolver implements ApplicationRunner {
     }
   }
 
-  /** Idempotent counterparty upsert. Callable at startup and after each ingest. */
+  /** Idempotent counterparty upsert + alias-aware most-frequent display-name refresh. */
   public void resolve() {
-    int affected = db.execute(UPSERT_COUNTERPARTIES);
-    log.info("Counterparty resolution inserted or refreshed {} counterparties", affected);
+    int inserted = db.execute(UPSERT_COUNTERPARTIES);
+    int refreshed = db.execute(REFRESH_DISPLAY_NAMES);
+    log.info(
+        "Counterparty resolution inserted {} counterparties, refreshed {} display names",
+        inserted,
+        refreshed);
   }
 }
