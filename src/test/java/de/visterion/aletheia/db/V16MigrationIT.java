@@ -7,12 +7,21 @@ import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import org.jooq.DSLContext;
 import org.jooq.exception.DataAccessException;
 import org.jooq.impl.DSL;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 class V16MigrationIT extends AbstractPostgresIT {
 
   @Autowired DSLContext db;
+
+  // statusCheckAcceptsEndedAndRejectsGarbage seeds counterparties + contracts into the shared
+  // Testcontainers Postgres; truncate them so this class does not pollute later ITs (the container
+  // is reused across test classes via Spring context caching, and class order differs local vs CI).
+  @AfterEach
+  void cleanUp() {
+    db.execute("TRUNCATE TABLE counterparties RESTART IDENTITY CASCADE");
+  }
 
   @Test
   void addsDisplayNameOverrideAndEndDateColumns() {
