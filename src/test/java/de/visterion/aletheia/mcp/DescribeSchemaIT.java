@@ -47,4 +47,20 @@ class DescribeSchemaIT extends AbstractPostgresIT {
         .singleElement()
         .satisfies(c -> assertThat(c.primaryKey()).isTrue());
   }
+
+  @Test
+  void exposesV16Columns() {
+    var cols = readTools.describeSchema();
+    assertThat(cols)
+        .anySatisfy(
+            c -> {
+              assertThat(c.table()).isEqualTo("counterparties");
+              assertThat(c.column()).isEqualTo("display_name_override");
+            })
+        .anySatisfy(
+            c -> {
+              assertThat(c.table()).isEqualTo("contracts");
+              assertThat(c.column()).isEqualTo("end_date");
+            });
+  }
 }

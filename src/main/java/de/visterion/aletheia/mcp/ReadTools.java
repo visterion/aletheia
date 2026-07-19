@@ -79,7 +79,21 @@ public class ReadTools {
           "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)",
           "recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular",
           "v_counterparty_evidence.direction",
-              "predominant direction across the counterparty's bookings");
+              "predominant direction across the counterparty's bookings",
+          "counterparties.display_name_override",
+              "Manual display-name override (set_display_name); wins over the derived display_name at read time. Never affects identity.",
+          "contracts.end_date", "Date an ended obligation stopped (status='ended'); NULL while active.");
+
+  /**
+   * The read-time effective display name (P2 manual override, Spec B): every read that surfaces a
+   * counterparty label selects this instead of the bare {@code display_name} column, so a manual
+   * {@code display_name_override} wins without ever touching identity resolution. Aliased {@code
+   * display_name} so downstream {@code row.get("display_name", ...)}/{@code row.get(FIELD)} reads
+   * are unaffected.
+   */
+  private static final Field<String> DISPLAY_NAME_EFFECTIVE =
+      DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME)
+          .as("display_name");
 
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
 
@@ -231,7 +245,9 @@ public class ReadTools {
 
     StringBuilder sql = new StringBuilder("SELECT ").append(period).append(" AS period");
     if (effectiveByCounterparty) {
-      sql.append(", c.id AS counterparty_id, c.display_name AS display_name");
+      sql.append(
+          ", c.id AS counterparty_id, "
+              + "COALESCE(c.display_name_override, c.display_name) AS display_name");
     }
     sql.append(", ").append(valueExpr).append(" AS value ");
 
@@ -277,7 +293,7 @@ public class ReadTools {
     }
     if (effectiveByCounterparty) {
       groupByCols.add("c.id");
-      groupByCols.add("c.display_name");
+      groupByCols.add("COALESCE(c.display_name_override, c.display_name)");
     }
     if (!groupByCols.isEmpty()) {
       sql.append("GROUP BY ").append(String.join(", ", groupByCols)).append(' ');
@@ -360,7 +376,7 @@ public class ReadTools {
     var query =
         db.select(
                 COUNTERPARTIES.ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 COUNTERPARTIES.IDENTITY_VALUE,
                 COUNTERPARTIES.STATUS,
@@ -456,7 +472,7 @@ public class ReadTools {
       result.add(
           new CounterpartySummary(
               id,
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(COUNTERPARTIES.IDENTITY_VALUE),
               row.get(COUNTERPARTIES.STATUS),
@@ -499,7 +515,7 @@ public class ReadTools {
                 CONTRACTS.ID,
                 CONTRACTS.COUNTERPARTY_ID,
                 CONTRACTS.MANDATE_ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 RECURRING.ID,
                 RECURRING.CADENCE,
@@ -569,7 +585,7 @@ public class ReadTools {
       entries.add(
           new ReviewQueueEntry(
               counterpartyId,
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(CONTRACTS.ID),
               verbose ? evidence : null,
@@ -591,7 +607,7 @@ public class ReadTools {
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 RECURRING.ID,
                 RECURRING.CADENCE,
@@ -653,7 +669,7 @@ public class ReadTools {
       entries.add(
           new ReviewQueueEntry(
               id,
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               null,
               verbose ? evidence : null,
@@ -691,7 +707,7 @@ public class ReadTools {
         db.select(
                 CONTRACTS.ID,
                 CONTRACTS.COUNTERPARTY_ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 COUNTERPARTIES.IDENTITY_VALUE,
                 RECURRING.ID,
@@ -724,6 +740,7 @@ public class ReadTools {
             // must not surface as "unmatched recurring" (#29 retroactivity; prevents the stale
             // lumped PayPal series double-count).
             .and(CONTRACTS.STATUS.ne("dismissed"))
+            .and(CONTRACTS.STATUS.ne("ended"))
             .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .fetch();
 
@@ -736,7 +753,7 @@ public class ReadTools {
       entries.add(
           new UnmatchedRecurringEntry(
               row.get(CONTRACTS.COUNTERPARTY_ID),
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(COUNTERPARTIES.IDENTITY_VALUE),
               row.get(CONTRACTS.ID),
@@ -755,7 +772,7 @@ public class ReadTools {
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 COUNTERPARTIES.IDENTITY_VALUE,
                 RECURRING.ID,
@@ -785,7 +802,7 @@ public class ReadTools {
       entries.add(
           new UnmatchedRecurringEntry(
               row.get(COUNTERPARTIES.ID),
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(COUNTERPARTIES.IDENTITY_VALUE),
               null,
@@ -870,7 +887,7 @@ public class ReadTools {
                 CONTRACTS.COUNTERPARTY_ID,
                 CONTRACTS.MANDATE_ID,
                 CONTRACTS.HIVEMEM_CELL_ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 RECURRING.ID,
                 RECURRING.CADENCE,
@@ -926,7 +943,7 @@ public class ReadTools {
       obligationRows.add(
           new ObligationRow(
               counterpartyId,
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(CONTRACTS.ID),
               row.get(CONTRACTS.MANDATE_ID),
@@ -951,7 +968,7 @@ public class ReadTools {
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
-                COUNTERPARTIES.DISPLAY_NAME,
+                DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 V_COUNTERPARTY_EVIDENCE.TXN_COUNT,
                 V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D,
@@ -972,7 +989,7 @@ public class ReadTools {
       income.add(
           new IncomeRow(
               row.get(COUNTERPARTIES.ID),
-              row.get(COUNTERPARTIES.DISPLAY_NAME),
+              row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               txnCount == null ? 0 : txnCount,
               row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),

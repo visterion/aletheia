@@ -21,10 +21,12 @@ import de.visterion.aletheia.mcp.handlers.write.ConfirmCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.CreateTagRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.DeleteTagRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.DismissCounterpartyToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.EndContractToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.LinkContractToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MarkRecurringToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MergeCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.ReattributeTransactionToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.SetDisplayNameToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SetTagRuleEnabledToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SplitTransactionToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.UpdatePreferencesToolHandler;
@@ -76,13 +78,15 @@ class ToolPermissionCoverageTest {
         new CreateTagRuleToolHandler(null),
         new SetTagRuleEnabledToolHandler(null),
         new DeleteTagRuleToolHandler(null),
-        new MergeCounterpartyToolHandler(null));
+        new MergeCounterpartyToolHandler(null),
+        new SetDisplayNameToolHandler(null),
+        new EndContractToolHandler(null));
   }
 
   @Test
-  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentyFour() {
+  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentySix() {
     List<ToolHandler> handlers = allHandlers();
-    assertThat(handlers).as("exactly 24 MCP tool handlers are registered").hasSize(24);
+    assertThat(handlers).as("exactly 26 MCP tool handlers are registered").hasSize(26);
 
     Set<String> allToolNames = new HashSet<>();
     for (ToolHandler handler : handlers) {
@@ -96,7 +100,7 @@ class ToolPermissionCoverageTest {
     assertThat(allowedForWriter)
         .as("every registered tool handler name must be present in the WRITER permission union")
         .containsAll(allToolNames);
-    assertThat(allowedForWriter).as("exactly 24 tools are visible to WRITER").hasSize(24);
+    assertThat(allowedForWriter).as("exactly 26 tools are visible to WRITER").hasSize(26);
 
     Set<String> allowedForReader = new ToolPermissionService().allowedTools(AuthRole.READER);
     assertThat(allowedForReader).as("exactly 12 tools are visible to READER").hasSize(12);

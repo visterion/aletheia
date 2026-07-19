@@ -80,7 +80,9 @@ public class CounterpartySelectorResolver {
                     .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
       }
       if (where.namePattern() != null && !where.namePattern().isBlank()) {
-        conditions.add(COUNTERPARTIES.DISPLAY_NAME.likeIgnoreCase("%" + where.namePattern() + "%"));
+        conditions.add(
+            DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME)
+                .likeIgnoreCase("%" + where.namePattern() + "%"));
       }
       if (where.predominantDirection() != null) {
         conditions.add(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq(where.predominantDirection().name()));
