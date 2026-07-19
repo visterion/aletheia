@@ -27,6 +27,11 @@ aletheia:
     # PayPal SEPA creditor-id allowlist for #29 transparency. Empty by default (no literal ID
     # committed); prod sets the real IDs, region-extensible (PayPal Europe/US/...).
     creditor-ids: ${ALETHEIA_PAYPAL_CREDITOR_IDS:}
+  cashflow:
+    # Payer-pinned income override (#Beihilfe/Bezuege from the Landesoberkasse). Empty by default;
+    # prod sets the real identity value(s) via env. Verify-before-build: prod scan of %beihilfe%
+    # CRDT remittances grouped by counterparty confirms the exact payer identity to configure.
+    income-payer-ids: ${ALETHEIA_CASHFLOW_INCOME_PAYER_IDS:}
   ingest:
     dir: ${ALETHEIA_INGEST_DIR:exports}
     max-file-size: ${ALETHEIA_INGEST_MAX_FILE_SIZE:32MB}
