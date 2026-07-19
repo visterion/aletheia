@@ -307,7 +307,8 @@ public class WriteTools {
   private String confirmOne(long counterpartyId, Long contractId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
-    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
+    Long endedContract = endedMandatelessContractId(counterpartyId);
+    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId) || endedContract != null) {
       long targetContract;
       if (contractId != null) {
         requireContractOwnedBy(counterpartyId, contractId);
@@ -359,6 +360,7 @@ public class WriteTools {
         .set(CONTRACTS.STATUS, "confirmed")
         .set(CONTRACTS.SOURCE, "confirmed")
         .set(CONTRACTS.CONFIRMED_AT, java.time.OffsetDateTime.now())
+        .set(CONTRACTS.END_DATE, (java.time.LocalDate) null)
         .where(CONTRACTS.ID.eq(contractId))
         .execute();
 
@@ -382,6 +384,16 @@ public class WriteTools {
             .from(RECURRING)
             .where(RECURRING.COUNTERPARTY_ID.eq(counterpartyId))
             .and(RECURRING.CONTRACT_ID.isNull()));
+  }
+
+  /** The id of this counterparty's mandate-less contract iff it is currently 'ended', else null. */
+  private Long endedMandatelessContractId(long counterpartyId) {
+    return db.select(CONTRACTS.ID)
+        .from(CONTRACTS)
+        .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
+        .and(CONTRACTS.MANDATE_ID.isNull())
+        .and(CONTRACTS.STATUS.eq("ended"))
+        .fetchOne(CONTRACTS.ID);
   }
 
   /**
@@ -450,6 +462,48 @@ public class WriteTools {
 
     return new WriteAck(
         counterpartyId, "linked contract " + contractId + " to HiveMem cell " + hivememCellId);
+  }
+
+  /**
+   * Ends an active (confirmed) contract: {@code status='ended'}, {@code end_date} set to {@code
+   * endDate} (defaults to today), with an audit history row. Rejects a contract that is not
+   * currently confirmed, and rejects a contract belonging to a folded counterparty. A mandate-less
+   * contract ended this way can later be reopened by confirming its counterparty again ({@link
+   * #confirmOne} widens its gate to reopen an {@code ended} mandate-less contract).
+   */
+  @Transactional
+  public WriteAck endContract(long contractId, java.time.LocalDate endDate, String reason) {
+    String status =
+        db.select(CONTRACTS.STATUS)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.STATUS);
+    if (status == null) {
+      throw new IllegalArgumentException("no such contract: " + contractId);
+    }
+    long counterpartyId =
+        db.select(CONTRACTS.COUNTERPARTY_ID)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.COUNTERPARTY_ID);
+    requireExistingCounterparty(counterpartyId); // rejects a folded counterparty's contract
+    if (!"confirmed".equals(status)) {
+      throw new IllegalArgumentException(
+          "contract " + contractId + " is " + status + ", not active; cannot end");
+    }
+    java.time.LocalDate effectiveEnd = endDate != null ? endDate : java.time.LocalDate.now();
+    db.update(CONTRACTS)
+        .set(CONTRACTS.STATUS, "ended")
+        .set(CONTRACTS.END_DATE, effectiveEnd)
+        .where(CONTRACTS.ID.eq(contractId))
+        .execute();
+    insertHistory(
+        counterpartyId,
+        "contract:" + contractId,
+        "confirmed",
+        "ended",
+        reason == null ? "ended" : reason);
+    return new WriteAck(counterpartyId, "contract " + contractId + " ended " + effectiveEnd);
   }
 
   @Transactional
