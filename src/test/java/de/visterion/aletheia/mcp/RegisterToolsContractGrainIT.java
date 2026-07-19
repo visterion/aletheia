@@ -115,8 +115,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     long contractA = contractIdFor(debekaId, "MANDATE-1");
     long contractB = contractIdFor(debekaId, "MANDATE-2");
 
-    writeTools.confirmCounterparty(debekaId, contractA, null, null, null);
-    writeTools.confirmCounterparty(debekaId, contractB, null, null, null);
+    writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(debekaId, contractB, null, null, null, null, null, null, null);
 
     ObligationsRegister register = readTools.obligationsRegister();
 
@@ -138,8 +138,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     long contractA = contractIdFor(debekaId, "MANDATE-1");
     long contractB = contractIdFor(debekaId, "MANDATE-2");
 
-    writeTools.confirmCounterparty(debekaId, contractA, null, null, null);
-    writeTools.confirmCounterparty(debekaId, contractB, null, null, null);
+    writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(debekaId, contractB, null, null, null, null, null, null, null);
 
     ObligationsRegister register = readTools.obligationsRegister();
 
@@ -161,7 +161,7 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     long contractA = contractIdFor(debekaId, "MANDATE-1");
     long contractB = contractIdFor(debekaId, "MANDATE-2");
 
-    writeTools.confirmCounterparty(debekaId, contractA, null, null, null);
+    writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
     // contractB stays open; counterparties.status is never flipped by the per-contract confirm.
 
     assertThat(
@@ -192,7 +192,7 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     // the materialized contract's mandate_id is NULL, v_contract_evidence has no match, so the
     // fallback must be the counterparty's own v_counterparty_evidence.debit_last_365d (30.00).
     writeTools.markRecurring(id, null, Cadence.irregular, null, null, null, TagSource.auto, null);
-    writeTools.confirmCounterparty(id, null, null, null, null);
+    writeTools.confirmCounterparty(id, null, null, null, null, null, null, null, null);
 
     Long materializedContractId = contractIdFor(id, null);
     assertThat(materializedContractId).isNotNull();
@@ -223,7 +223,7 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     // mistakenly-confirmed CRDT-predominant mandate-less contract must surface as 0.00, never
     // leaking the incoming amount as a cost.
     writeTools.markRecurring(id, null, Cadence.irregular, null, null, null, TagSource.auto, null);
-    writeTools.confirmCounterparty(id, null, null, null, null);
+    writeTools.confirmCounterparty(id, null, null, null, null, null, null, null, null);
 
     Long materializedContractId = contractIdFor(id, null);
     assertThat(materializedContractId).isNotNull();

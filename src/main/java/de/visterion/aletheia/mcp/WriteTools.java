@@ -223,8 +223,9 @@ public class WriteTools {
             .set(RECURRING.AMOUNT_MAX, amountMax)
             .set(RECURRING.SOURCE, source.name())
             .set(RECURRING.CONFIDENCE, confidence)
-            // GUARD: an auto-source call can never overwrite a row a human already confirmed.
-            .where(RECURRING.SOURCE.eq("auto"))
+            // GUARD: an auto-source call can never overwrite a row a human already confirmed. A
+            // confirmed-source call (a human) may overwrite anything, including another confirmed row.
+            .where(source == TagSource.confirmed ? DSL.trueCondition() : RECURRING.SOURCE.eq("auto"))
             .execute();
 
     // Postgres returns 0 rows affected when the ON CONFLICT DO UPDATE ... WHERE guard matches no
@@ -276,7 +277,31 @@ public class WriteTools {
       Long contractId,
       List<Long> counterpartyIds,
       CounterpartySelector where,
-      Boolean confirm) {
+      Boolean confirm,
+      Cadence cadence,
+      BigDecimal typicalAmount,
+      BigDecimal amountMin,
+      BigDecimal amountMax) {
+    if (cadence != null) {
+      // Fused create-series + materialize + confirm: single counterparty only.
+      List<Long> batchIds =
+          resolveBatchTarget(
+              counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
+      if (batchIds != null) {
+        throw new IllegalArgumentException(
+            "cadence applies to a single counterparty; not allowed with a batch (counterpartyIds/where)");
+      }
+      if (counterpartyId == null) {
+        throw new IllegalArgumentException("supply counterpartyId when passing cadence");
+      }
+      if (amountMin != null && amountMax != null && amountMin.compareTo(amountMax) > 0) {
+        throw new IllegalArgumentException("amountMin must be <= amountMax");
+      }
+      return new BatchWriteAck(
+          1,
+          List.of(confirmWithSeries(counterpartyId, cadence, typicalAmount, amountMin, amountMax)));
+    }
+
     List<Long> batchIds =
         resolveBatchTarget(
             counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
@@ -292,6 +317,48 @@ public class WriteTools {
           "supply counterpartyId, counterpartyIds, or a non-empty where");
     }
     return new BatchWriteAck(1, List.of(confirmOne(counterpartyId, contractId)));
+  }
+
+  /**
+   * Fused P4 path: create/replace the counterparty's mandate-less recurring series with the
+   * supplied (confirmed) cadence/amounts, materialize its NULL-mandate contract, and confirm it.
+   * Rejects a dismissed mandate-less contract (a routine confirm must never resurrect a human
+   * dismissal); reopens an ended one via confirmContractRow's end_date clearing.
+   */
+  private String confirmWithSeries(
+      long counterpartyId,
+      Cadence cadence,
+      BigDecimal typicalAmount,
+      BigDecimal amountMin,
+      BigDecimal amountMax) {
+    requireExistingCounterparty(counterpartyId); // rejects folded/missing
+    String existingStatus =
+        db.select(CONTRACTS.STATUS)
+            .from(CONTRACTS)
+            .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
+            .and(CONTRACTS.MANDATE_ID.isNull())
+            .fetchOne(CONTRACTS.STATUS);
+    if ("dismissed".equals(existingStatus)) {
+      throw new IllegalArgumentException(
+          "mandate-less contract is dismissed; un-dismiss it explicitly before materializing a series");
+    }
+    long contractIdResolved = materializeMandatelessContract(counterpartyId); // repoints (cp,NULL) recurring
+    markRecurring(
+        counterpartyId,
+        contractIdResolved,
+        cadence,
+        typicalAmount,
+        amountMin,
+        amountMax,
+        TagSource.confirmed,
+        BigDecimal.ONE);
+    confirmContractRow(counterpartyId, contractIdResolved); // status confirmed, end_date NULL, recurring source confirmed
+    db.update(COUNTERPARTIES)
+        .set(COUNTERPARTIES.REVIEWED, true)
+        .set(COUNTERPARTIES.STATUS, "confirmed")
+        .where(COUNTERPARTIES.ID.eq(counterpartyId))
+        .execute();
+    return "series + contract " + contractIdResolved + " confirmed";
   }
 
   /**

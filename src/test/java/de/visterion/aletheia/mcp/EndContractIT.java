@@ -239,7 +239,7 @@ class EndContractIT extends AbstractPostgresIT {
     seedRecurring(id, null, "auto", "5.00");
 
     // materialize + confirm the mandate-less contract
-    writeTools.confirmCounterparty(id, null, null, null, null);
+    writeTools.confirmCounterparty(id, null, null, null, null, null, null, null, null);
     long contractId =
         db.select(CONTRACTS.ID)
             .from(CONTRACTS)
@@ -250,7 +250,7 @@ class EndContractIT extends AbstractPostgresIT {
     writeTools.endContract(contractId, null, "cancelled for now");
     assertThat(contractRow(contractId).get(CONTRACTS.STATUS)).isEqualTo("ended");
 
-    writeTools.confirmCounterparty(id, null, null, null, null);
+    writeTools.confirmCounterparty(id, null, null, null, null, null, null, null, null);
 
     var contracts =
         db.selectFrom(CONTRACTS)
@@ -286,7 +286,7 @@ class EndContractIT extends AbstractPostgresIT {
     writeTools.endContract(contractA, null, "cancelled");
     assertThat(contractRow(contractA).get(CONTRACTS.STATUS)).isEqualTo("ended");
 
-    writeTools.confirmCounterparty(id, contractA, null, null, null);
+    writeTools.confirmCounterparty(id, contractA, null, null, null, null, null, null, null);
 
     Record row = contractRow(contractA);
     assertThat(row.get(CONTRACTS.STATUS)).isEqualTo("confirmed");
@@ -309,7 +309,7 @@ class EndContractIT extends AbstractPostgresIT {
             .fetchOne(CONTRACTS.ID);
     assertThat(contractRow(contractId).get(CONTRACTS.STATUS)).isEqualTo("dismissed");
 
-    writeTools.confirmCounterparty(id, null, null, null, null);
+    writeTools.confirmCounterparty(id, null, null, null, null, null, null, null, null);
 
     Record row = contractRow(contractId);
     assertThat(row.get(CONTRACTS.STATUS)).isEqualTo("dismissed");
@@ -332,7 +332,7 @@ class EndContractIT extends AbstractPostgresIT {
             .fetchOne(CONTRACTS.ID);
     assertThat(contractRow(contractId).get(CONTRACTS.STATUS)).isEqualTo("dismissed");
 
-    writeTools.confirmCounterparty(null, null, java.util.List.of(id), null, null);
+    writeTools.confirmCounterparty(null, null, java.util.List.of(id), null, null, null, null, null, null);
 
     Record row = contractRow(contractId);
     assertThat(row.get(CONTRACTS.STATUS)).isEqualTo("dismissed");

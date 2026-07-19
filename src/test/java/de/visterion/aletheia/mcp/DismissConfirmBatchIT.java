@@ -156,7 +156,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
   void batchConfirmMandatelessAppearsInRegister() { // C1 regression
     long cp = seedCp("rec");
     seedMandatelessRecurring(cp);
-    var ack = writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
+    var ack = writeTools.confirmCounterparty(null, null, List.of(cp), null, null, null, null, null, null);
     assertThat(ack.affectedCount()).isEqualTo(1);
 
     // a NULL-mandate contract was materialized + confirmed -> visible in the register, the
@@ -176,7 +176,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
   void batchConfirmByIdsLegacyFlip() {
     long cp = seedCp("plain");
     tag(cp, "domain", "handel");
-    writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
+    writeTools.confirmCounterparty(null, null, List.of(cp), null, null, null, null, null, null);
     assertThat(
             db.select(COUNTERPARTIES.STATUS)
                 .from(COUNTERPARTIES)
@@ -192,7 +192,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
 
   @Test
   void batchConfirmRejectsContractId() {
-    assertThatThrownBy(() -> writeTools.confirmCounterparty(null, 7L, List.of(1L), null, null))
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(null, 7L, List.of(1L), null, null, null, null, null, null))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
@@ -200,7 +200,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
   void openMandateContractNotConfirmedByBatch() { // §3 limitation
     long cp = seedCp("mandate");
     addContract(cp); // open mandate contract, no mandate-less recurring
-    writeTools.confirmCounterparty(null, null, List.of(cp), null, null);
+    writeTools.confirmCounterparty(null, null, List.of(cp), null, null, null, null, null, null);
     assertThat(
             db.fetchCount(
                 CONTRACTS, CONTRACTS.COUNTERPARTY_ID.eq(cp).and(CONTRACTS.STATUS.eq("open"))))
@@ -267,7 +267,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
     long cp = seedCp("handel-cp");
     tag(cp, "domain", "handel");
     var where = new CounterpartySelector(null, null, null, null, List.of("handel"), null, false, null, null, null, null, null, null, null, null);
-    var ack = writeTools.confirmCounterparty(null, null, null, where, null);
+    var ack = writeTools.confirmCounterparty(null, null, null, where, null, null, null, null, null);
     assertThat(ack.affectedCount()).isEqualTo(1);
     assertThat(
             db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.REVIEWED)
