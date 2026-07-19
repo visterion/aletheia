@@ -1060,5 +1060,63 @@
         "contractId"
       ]
     }
+  },
+  {
+    "name": "cashflow",
+    "description": "Build a **Sankey-ready** money-flow for a period. USE THIS whenever the user wants a monthly overview, budget flow, \"wohin fließt mein Geld\", or a finanzfluss-style diagram — instead of hand-writing SQL. Income sources → budget → categories (→ top counterparties); saving and internal-transfer handling are applied **server-side** (do NOT re-classify or re-net in the client).\n\nReturns `{nodes:[{id,label,value,kind}], links:[{source,target,value}], meta:{income,outflow,saving,saldo,excluded}}`. `kind ∈ income|budget|saving|expense|transfer|balance`. Result is **balanced** (Σ inputs = Σ outputs at every interior node; income sources, leaf counterparties, and the balance/saving/transfer nodes are terminal by design): if outflow > real income, an `\"aus Rücklagen\"` **balance** node is added as input for the difference — this is a real finding, never hide it.\n\n**Default recipe (one month):** `cashflow(dateFrom=\"<first day of month>\", dateTo=\"<last day of month>\")`, e.g. `cashflow(\"2026-06-01\",\"2026-06-30\")` — use the month's real last day (dates are strict ISO; `\"2026-06-31\"` is rejected). Defaults: internal transfers netted, passthroughs resolved/removed, depot buys counted as saving (`investmentMode=\"as_saving\"`), depot dividends excluded from income, `topN=6` (rest per level → \"Sonstiges\"). Params: `levels` (default `[\"income_source\",\"domain\",\"counterparty\"]`), `excludeInternalTransfers=true`, `excludePassthroughs=true`, `investmentMode`, `topN`, `minShare`. EUR, logical view only (split parents excluded), **read-only** (never mutates).\n\n**Consume the result:** render directly as a Plotly sankey — `node.label ← nodes[].label`, `link.{source,target,value} ← links[]` (ids are stable; map id→index). `meta` gives the KPI headline (income / outflow / saldo). Example: `cashflow(\"2026-06-01\",\"2026-06-30\")`.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dateFrom": {
+          "type": "string",
+          "description": "inclusive range start"
+        },
+        "dateTo": {
+          "type": "string",
+          "description": "inclusive range end"
+        },
+        "levels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "income_source",
+              "domain",
+              "counterparty"
+            ]
+          },
+          "description": "Sankey depth on the expense side; default [income_source,domain,counterparty]"
+        },
+        "excludeInternalTransfers": {
+          "type": "boolean",
+          "description": "net internal transfers out (default true)"
+        },
+        "excludePassthroughs": {
+          "type": "boolean",
+          "description": "resolve/remove passthroughs (default true)"
+        },
+        "investmentMode": {
+          "type": "string",
+          "enum": [
+            "as_saving",
+            "exclude"
+          ],
+          "description": "as_saving (default): depot buys counted as saving; exclude: depot buys excluded"
+        },
+        "topN": {
+          "type": "integer",
+          "description": "top N nodes per level, rest grouped into Sonstiges (default 6)"
+        },
+        "minShare": {
+          "type": "number",
+          "description": "minimum share threshold per node (default 0.0)"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dateFrom",
+        "dateTo"
+      ]
+    }
   }
 ]
