@@ -100,6 +100,32 @@ class ArgumentParserTest {
   }
 
   @Test
+  void parsesNewSelectorFields() {
+    JsonNode arguments =
+        mapper.readTree(
+            """
+            {"where":{
+              "txnCountMax":3,
+              "natureNotIn":["fixkosten"],
+              "domainNotIn":["versicherung","energie"],
+              "amountMin":50,
+              "amountMax":2000,
+              "lastSeenBefore":"2026-01-31",
+              "lastSeenAfter":"2025-01-01"
+            }}""");
+
+    CounterpartySelector where = ArgumentParser.counterpartySelector(arguments, "where");
+
+    assertThat(where.txnCountMax()).isEqualTo(3L);
+    assertThat(where.natureNotIn()).containsExactly("fixkosten");
+    assertThat(where.domainNotIn()).containsExactly("versicherung", "energie");
+    assertThat(where.amountMin()).isEqualByComparingTo(new BigDecimal("50"));
+    assertThat(where.amountMax()).isEqualByComparingTo(new BigDecimal("2000"));
+    assertThat(where.lastSeenBefore()).isEqualTo(LocalDate.parse("2026-01-31"));
+    assertThat(where.lastSeenAfter()).isEqualTo(LocalDate.parse("2025-01-01"));
+  }
+
+  @Test
   void counterpartySelectorThrowsMcpArgumentExceptionForInvalidPredominantDirection() {
     JsonNode arguments = mapper.readTree("{\"where\":{\"predominantDirection\":\"NOPE\"}}");
 

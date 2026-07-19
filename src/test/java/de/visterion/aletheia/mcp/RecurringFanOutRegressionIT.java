@@ -113,7 +113,7 @@ class RecurringFanOutRegressionIT extends AbstractPostgresIT {
   void selectorResolverReturnsTheSplitCounterpartyIdExactlyOnce() {
     long splitId = seedSplitCounterparty();
 
-    CounterpartySelector where = new CounterpartySelector(null, "Split", null, null, null, null, null, null);
+    CounterpartySelector where = new CounterpartySelector(null, "Split", null, null, null, null, null, null, null, null, null, null, null, null, null);
     List<Long> ids = selectorResolver.resolve(where);
 
     assertThat(ids).containsExactly(splitId);
@@ -123,7 +123,7 @@ class RecurringFanOutRegressionIT extends AbstractPostgresIT {
   void classifyCounterpartyViaWhereSelectorWritesExactlyOneHistoryRowPerDimension() {
     seedSplitCounterparty();
 
-    CounterpartySelector where = new CounterpartySelector(null, "Split", null, null, null, null, null, null);
+    CounterpartySelector where = new CounterpartySelector(null, "Split", null, null, null, null, null, null, null, null, null, null, null, null, null);
     writeTools.classifyCounterparty(
         null, where, List.of(new TagInput("domain", "utilities")), TagSource.auto, null, null);
 

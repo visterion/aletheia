@@ -51,7 +51,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
     var ack =
         writeTools.classifyCounterparty(
             null,
-            new CounterpartySelector(true, null, null, null, null, null, null, null),
+            new CounterpartySelector(true, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
             List.of(new TagInput("domain", "insurance")),
             TagSource.auto,
             null,
@@ -71,7 +71,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
             () ->
                 writeTools.classifyCounterparty(
                     null,
-                    new CounterpartySelector(true, null, null, null, null, null, null, null),
+                    new CounterpartySelector(true, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                     tags,
                     TagSource.auto,
                     null,
@@ -82,7 +82,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
     var ack =
         writeTools.classifyCounterparty(
             null,
-            new CounterpartySelector(true, null, null, null, null, null, null, null),
+            new CounterpartySelector(true, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
             tags,
             TagSource.auto,
             null,
@@ -100,7 +100,7 @@ class ClassifyBatchIT extends AbstractPostgresIT {
             () ->
                 writeTools.classifyCounterparty(
                     null,
-                    new CounterpartySelector(true, null, null, null, null, null, null, null),
+                    new CounterpartySelector(true, null, null, null, null, null, null, null, null, null, null, null, null, null, null),
                     tags,
                     TagSource.auto,
                     null,

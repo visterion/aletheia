@@ -111,7 +111,14 @@ class ReadToolSchemasTest {
             "predominantDirection",
             "reviewed",
             "hasContract",
-            "untagged");
+            "untagged",
+            "txnCountMax",
+            "natureNotIn",
+            "domainNotIn",
+            "amountMin",
+            "amountMax",
+            "lastSeenBefore",
+            "lastSeenAfter");
   }
 
   @Test

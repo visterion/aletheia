@@ -22,6 +22,13 @@ public final class CounterpartySelectorSchema {
         .optionalEnumString("predominantDirection", "", "DBIT", "CRDT", "BOTH")
         .optionalBoolean("reviewed", "")
         .optionalBoolean("hasContract", "")
-        .optionalBoolean("untagged", "");
+        .optionalBoolean("untagged", "")
+        .optionalLong("txnCountMax", "")
+        .optionalStringList("natureNotIn", "")
+        .optionalStringList("domainNotIn", "")
+        .optionalDecimal("amountMin", "")
+        .optionalDecimal("amountMax", "")
+        .optionalDate("lastSeenBefore", "")
+        .optionalDate("lastSeenAfter", "");
   }
 }
