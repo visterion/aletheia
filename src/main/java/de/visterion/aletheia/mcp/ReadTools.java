@@ -64,25 +64,37 @@ public class ReadTools {
           "counterparty_history",
           "imports",
           "v_counterparty_evidence",
-          "counterparty_alias");
+          "counterparty_alias",
+          "cashflow_role_map");
 
   private static final Map<String, String> COLUMN_DOCS =
-      Map.of(
-          "transactions.direction",
-              "DBIT (outgoing) | CRDT (incoming); amount is always positive",
-          "transactions.content_hash", "SHA-256 idempotency natural key",
-          "transactions.split_parent_content_hash",
-              "split_parent_* set on children only (backref); logical view (NOT EXISTS) excludes parents that have children",
-          "transactions.split_parent_occurrence_index",
-              "split_parent_* set on children only (backref); logical view (NOT EXISTS) excludes parents that have children",
-          "counterparties.identity_type", "creditor_id | iban | name",
-          "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)",
-          "recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular",
-          "v_counterparty_evidence.direction",
-              "predominant direction across the counterparty's bookings",
-          "counterparties.display_name_override",
-              "Manual display-name override (set_display_name); wins over the derived display_name at read time. Never affects identity.",
-          "contracts.end_date", "Date an ended obligation stopped (status='ended'); NULL while active.");
+      Map.ofEntries(
+          Map.entry(
+              "transactions.direction",
+              "DBIT (outgoing) | CRDT (incoming); amount is always positive"),
+          Map.entry("transactions.content_hash", "SHA-256 idempotency natural key"),
+          Map.entry(
+              "transactions.split_parent_content_hash",
+              "split_parent_* set on children only (backref); logical view (NOT EXISTS) excludes parents that have children"),
+          Map.entry(
+              "transactions.split_parent_occurrence_index",
+              "split_parent_* set on children only (backref); logical view (NOT EXISTS) excludes parents that have children"),
+          Map.entry("counterparties.identity_type", "creditor_id | iban | name"),
+          Map.entry(
+              "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)"),
+          Map.entry("recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular"),
+          Map.entry(
+              "v_counterparty_evidence.direction",
+              "predominant direction across the counterparty's bookings"),
+          Map.entry(
+              "counterparties.display_name_override",
+              "Manual display-name override (set_display_name); wins over the derived display_name at read time. Never affects identity."),
+          Map.entry(
+              "contracts.end_date",
+              "Date an ended obligation stopped (status='ended'); NULL while active."),
+          Map.entry(
+              "cashflow_role_map.role",
+              "income | saving | transfer | depot | passthrough; a tag value absent from this table defaults to expense (consumed by the cashflow tool)"));
 
   /**
    * The read-time effective display name (P2 manual override, Spec B): every read that surfaces a
