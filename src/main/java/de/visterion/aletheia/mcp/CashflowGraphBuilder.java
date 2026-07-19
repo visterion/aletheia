@@ -65,7 +65,7 @@ public class CashflowGraphBuilder {
     // --- Aggregation buckets -------------------------------------------------
     Map<String, Flow> incomeById = new LinkedHashMap<>();
     Map<String, Map<String, Flow>> expenseByDomain = new LinkedHashMap<>();
-    Map<String, Flow> savingByValue = new LinkedHashMap<>();
+    Map<String, Map<String, Flow>> savingByValue = new LinkedHashMap<>();
     Flow depot = new Flow();
     Flow transfer = new Flow();
     Flow passthroughOpaque = new Flow();
@@ -80,9 +80,7 @@ public class CashflowGraphBuilder {
                 .add(r.direction(), r.amount(), r.label());
         case EXPENSE ->
             putExpense(expenseByDomain, domainValue(r.domainTag()), r);
-        case SAVING ->
-            savingByValue.computeIfAbsent(savingValue(r, roleMap), k -> new Flow())
-                .add(r.direction(), r.amount(), r.label());
+        case SAVING -> putSaving(savingByValue, savingValue(r, roleMap), r);
         case DEPOT -> depot.add(r.direction(), r.amount(), r.label());
         case TRANSFER -> transfer.add(r.direction(), r.amount(), r.label());
         case PASSTHROUGH -> {
@@ -132,14 +130,20 @@ public class CashflowGraphBuilder {
     }
     BigDecimal outflow = domainTotals.values().stream().reduce(ZERO, BigDecimal::add);
 
-    // Saving (value-level) + depot.
+    // Saving: floored per (effectiveCp, value) pair, then summed by value.
     List<Leaf> savingLeaves = new ArrayList<>();
-    for (Map.Entry<String, Flow> e : savingByValue.entrySet()) {
-      BigDecimal natural = e.getValue().dbit.subtract(e.getValue().crdt); // money-out
-      if (natural.signum() > 0) {
-        savingLeaves.add(new Leaf("saving:" + e.getKey(), e.getKey(), natural));
-      } else if (natural.signum() < 0) {
-        refundsIn = refundsIn.add(natural.negate());
+    for (Map.Entry<String, Map<String, Flow>> ve : savingByValue.entrySet()) {
+      BigDecimal valueTotal = ZERO;
+      for (Map.Entry<String, Flow> ce : ve.getValue().entrySet()) {
+        BigDecimal natural = ce.getValue().dbit.subtract(ce.getValue().crdt); // money-out
+        if (natural.signum() > 0) {
+          valueTotal = valueTotal.add(natural);
+        } else if (natural.signum() < 0) {
+          refundsIn = refundsIn.add(natural.negate());
+        }
+      }
+      if (valueTotal.signum() > 0) {
+        savingLeaves.add(new Leaf("saving:" + ve.getKey(), ve.getKey(), valueTotal));
       }
     }
     BigDecimal depotIncome = depot.crdt;
@@ -285,6 +289,15 @@ public class CashflowGraphBuilder {
     String leafId = r.effectiveCp() == null ? "cp:unresolved" : "cp:" + r.effectiveCp();
     expenseByDomain
         .computeIfAbsent(domain, k -> new LinkedHashMap<>())
+        .computeIfAbsent(leafId, k -> new Flow())
+        .add(r.direction(), r.amount(), r.label());
+  }
+
+  private static void putSaving(
+      Map<String, Map<String, Flow>> savingByValue, String value, CashflowRow r) {
+    String leafId = r.effectiveCp() == null ? "cp:unresolved" : "cp:" + r.effectiveCp();
+    savingByValue
+        .computeIfAbsent(value, k -> new LinkedHashMap<>())
         .computeIfAbsent(leafId, k -> new Flow())
         .add(r.direction(), r.amount(), r.label());
   }

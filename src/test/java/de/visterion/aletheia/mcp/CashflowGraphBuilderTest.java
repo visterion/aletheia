@@ -322,6 +322,26 @@ class CashflowGraphBuilderTest {
   }
 
   @Test
+  void savingFlooredPerCounterpartyNotAcrossValue() {
+    Map<RoleKey, CashflowRole> roleMap =
+        Map.of(
+            new RoleKey("domain", "einkommen"), CashflowRole.INCOME,
+            new RoleKey("domain", "ruecklage"), CashflowRole.SAVING);
+    var rows =
+        List.of(
+            row(1L, "Employer", "einkommen", null, "CRDT", "1000.00"),
+            row(20L, "Saver A", "ruecklage", null, "DBIT", "100.00"), // nets +100
+            row(21L, "Saver B", "ruecklage", null, "CRDT", "30.00")); // nets -30, floors to 0
+    var cf = builder.build(rows, roleMap, Set.of(), defaults());
+
+    // per-CP flooring: A contributes 100, B floors to 0 (its 30 -> refundsIn).
+    // value-level netting would incorrectly give 100 - 30 = 70.
+    assertThat(nodeValue(cf, "saving:ruecklage")).isEqualByComparingTo("100.00");
+    assertThat(cf.meta().excluded().refundsIn()).isGreaterThanOrEqualTo(new BigDecimal("30.00"));
+    assertInteriorNodesBalanced(cf);
+  }
+
+  @Test
   void levelsOmittingCounterpartyStopsAtDomain() {
     var rows =
         List.of(
