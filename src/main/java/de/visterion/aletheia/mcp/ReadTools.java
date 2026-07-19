@@ -229,7 +229,10 @@ public class ReadTools {
       CounterpartySelector where) {
     boolean effectiveByCounterparty = Boolean.TRUE.equals(byCounterparty);
     List<Long> ids = resolveAggregateScope(counterpartyIds, where);
-    boolean joinIdentity = ids != null || effectiveByCounterparty;
+    // DOMAIN/NATURE bucket by a tag value; that requires effective_cp (the identity source),
+    // so force the identity join even when unscoped.
+    boolean tagGrouping = groupBy == AggregateGroupBy.DOMAIN || groupBy == AggregateGroupBy.NATURE;
+    boolean joinIdentity = ids != null || effectiveByCounterparty || tagGrouping;
     if (joinIdentity && ids != null && ids.isEmpty()) {
       return List.of();
     }
@@ -239,7 +242,11 @@ public class ReadTools {
     String directionRef = txnAlias + ".direction";
     String amountRef = txnAlias + ".amount";
 
-    String period = periodExpr(groupBy, dateRef);
+    // For DOMAIN/NATURE the bucket is the tag value; tag-less/unresolved rows COALESCE to
+    // '(untagged)'. This is handled here, before periodExpr, so the new enum values never reach
+    // periodExpr's date_trunc default (which would emit date_trunc('domain', ...) -- a runtime error).
+    String period =
+        tagGrouping ? "COALESCE(tv.value, '(untagged)')" : periodExpr(groupBy, dateRef);
     String amountExpr = signedAmountExpr(direction, amountRef, directionRef);
     String valueExpr = "CAST(" + valueExpr(metric, amountExpr) + " AS numeric)";
 
@@ -251,7 +258,22 @@ public class ReadTools {
     }
     sql.append(", ").append(valueExpr).append(" AS value ");
 
-    if (joinIdentity) {
+    if (tagGrouping) {
+      // Single tag per counterparty per dimension: confirmed > higher confidence > lexical.
+      // The dimension literal is enum-derived (injection-safe), so it is inlined -- no bind.
+      // LEFT JOIN (not inner counterparties) so NULL-effective_cp / tag-less rows survive.
+      String dimension = groupBy == AggregateGroupBy.DOMAIN ? "domain" : "nature";
+      sql.append("FROM (")
+          .append(IDENTITY_RESOLVED_TRANSACTIONS_SQL)
+          .append(") i LEFT JOIN (SELECT DISTINCT ON (counterparty_id) counterparty_id, value "
+              + "FROM counterparty_tags WHERE dimension = '")
+          .append(dimension)
+          .append("' ORDER BY counterparty_id, (source = 'confirmed') DESC, "
+              + "confidence DESC NULLS LAST, value) tv ON tv.counterparty_id = i.effective_cp ");
+      if (effectiveByCounterparty) {
+        sql.append("JOIN counterparties c ON c.id = i.effective_cp ");
+      }
+    } else if (joinIdentity) {
       sql.append("FROM (")
           .append(IDENTITY_RESOLVED_TRANSACTIONS_SQL)
           .append(") i JOIN counterparties c ON c.id = i.effective_cp ");
@@ -270,7 +292,10 @@ public class ReadTools {
     }
 
     if (joinIdentity && ids != null) {
-      sql.append("AND c.id IN (")
+      // With byCounterparty the counterparties table is joined (alias c); the tag-grouping path
+      // without byCounterparty has no c, so it filters on the identity source directly.
+      String scopeCol = (tagGrouping && !effectiveByCounterparty) ? "i.effective_cp" : "c.id";
+      sql.append("AND ").append(scopeCol).append(" IN (")
           .append(ids.stream().map(id -> "?").collect(Collectors.joining(",")))
           .append(") ");
       binds.addAll(ids);
