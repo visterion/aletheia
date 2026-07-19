@@ -2,6 +2,7 @@ package de.visterion.aletheia.mcp;
 
 import static de.visterion.aletheia.jooq.Tables.CONTRACTS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.IMPORTS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
@@ -380,5 +381,58 @@ class ConfirmMaterializeIT extends AbstractPostgresIT {
     List<? extends Record> recurring = recurringRowsFor(id);
     assertThat(recurring).hasSize(1);
     assertThat(recurring.get(0).get(RECURRING.SOURCE)).isEqualTo("auto"); // untouched
+  }
+
+  // --- I1: contractId + cadence is rejected (money-path double-count) ---
+
+  @Test
+  void contractIdCombinedWithCadenceIsRejectedAndMakesNoChange() {
+    long id = counterpartyWithOneTransaction("CDTR-FUSE-CONTRACTID", "Fuse ContractId Co");
+    long contractId = seedContract(id, "MANDATE-EXISTING", "confirmed");
+    seedRecurring(id, contractId, "confirmed", "9.99");
+
+    assertThatThrownBy(
+            () ->
+                writeTools.confirmCounterparty(
+                    id,
+                    contractId,
+                    null,
+                    null,
+                    null,
+                    Cadence.monthly,
+                    new BigDecimal("45.00"),
+                    null,
+                    null))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    // no second (mandate-less) contract was created
+    assertThat(mandatelessContractRow(id)).isNull();
+    // the existing mandate contract is unchanged
+    assertThat(contractRow(contractId).get(CONTRACTS.STATUS)).isEqualTo("confirmed");
+    // no new recurring row was written
+    List<? extends Record> recurring = recurringRowsFor(id);
+    assertThat(recurring).hasSize(1);
+    assertThat(recurring.get(0).get(RECURRING.CONTRACT_ID)).isEqualTo(contractId);
+    assertThat(recurring.get(0).get(RECURRING.TYPICAL_AMOUNT))
+        .isEqualByComparingTo(new BigDecimal("9.99")); // untouched
+  }
+
+  // --- M1: fused confirm writes a counterparty_history status row (audit parity) ---
+
+  @Test
+  void fusedConfirmWritesCounterpartyStatusHistoryRow() {
+    long id = counterpartyWithOneTransaction("CDTR-FUSE-HISTORY", "Fuse History Co");
+
+    writeTools.confirmCounterparty(
+        id, null, null, null, null, Cadence.monthly, new BigDecimal("9.99"), null, null);
+
+    boolean hasStatusHistory =
+        db.fetchExists(
+            db.selectOne()
+                .from(COUNTERPARTY_HISTORY)
+                .where(COUNTERPARTY_HISTORY.COUNTERPARTY_ID.eq(id))
+                .and(COUNTERPARTY_HISTORY.FIELD.eq("status"))
+                .and(COUNTERPARTY_HISTORY.NEW_VALUE.eq("confirmed")));
+    assertThat(hasStatusHistory).isTrue();
   }
 }

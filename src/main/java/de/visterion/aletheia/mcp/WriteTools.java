@@ -294,6 +294,11 @@ public class WriteTools {
       if (counterpartyId == null) {
         throw new IllegalArgumentException("supply counterpartyId when passing cadence");
       }
+      if (contractId != null) {
+        throw new IllegalArgumentException(
+            "contractId cannot be combined with cadence: cadence materializes the mandate-less"
+                + " contract; use mark_recurring to set a series on a specific mandate contract");
+      }
       if (amountMin != null && amountMax != null && amountMin.compareTo(amountMax) > 0) {
         throw new IllegalArgumentException("amountMin must be <= amountMax");
       }
@@ -331,7 +336,7 @@ public class WriteTools {
       BigDecimal typicalAmount,
       BigDecimal amountMin,
       BigDecimal amountMax) {
-    requireExistingCounterparty(counterpartyId); // rejects folded/missing
+    String oldStatus = requireExistingCounterparty(counterpartyId); // rejects folded/missing
     String existingStatus =
         db.select(CONTRACTS.STATUS)
             .from(CONTRACTS)
@@ -358,6 +363,7 @@ public class WriteTools {
         .set(COUNTERPARTIES.STATUS, "confirmed")
         .where(COUNTERPARTIES.ID.eq(counterpartyId))
         .execute();
+    insertHistory(counterpartyId, "status", oldStatus, "confirmed", "confirmed");
     return "series + contract " + contractIdResolved + " confirmed";
   }
 
