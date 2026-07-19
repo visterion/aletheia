@@ -187,6 +187,7 @@ class CashflowGraphBuilderTest {
 
     assertThat(nodeValue(cf, "transfer:internal")).isEqualByComparingTo("300.00");
     assertThat(linkValue(cf, "budget:main", "transfer:internal")).isEqualByComparingTo("300.00");
+    assertThat(cf.meta().excluded().internal()).isEqualByComparingTo("-300.00");
     assertInteriorNodesBalanced(cf); // budget:main must still balance
   }
 
@@ -318,5 +319,45 @@ class CashflowGraphBuilderTest {
             .map(CashflowLink::target)
             .toList();
     assertThat(domainChildOrder).containsExactly("cp:2", "cp:3");
+  }
+
+  @Test
+  void levelsOmittingCounterpartyStopsAtDomain() {
+    var rows =
+        List.of(
+            row(1L, "Employer", "einkommen", null, "CRDT", "1000.00"),
+            row(2L, "Rewe", "lebensmittel", null, "DBIT", "100.00"),
+            row(3L, "Edeka", "lebensmittel", null, "DBIT", "50.00"));
+
+    var fullParams =
+        new CashflowParams(
+            LocalDate.of(2026, 6, 1),
+            LocalDate.of(2026, 6, 30),
+            List.of("income_source", "domain", "counterparty"),
+            true,
+            true,
+            InvestmentMode.AS_SAVING,
+            6,
+            BigDecimal.ZERO);
+    var shortParams =
+        new CashflowParams(
+            LocalDate.of(2026, 6, 1),
+            LocalDate.of(2026, 6, 30),
+            List.of("income_source", "domain"),
+            true,
+            true,
+            InvestmentMode.AS_SAVING,
+            6,
+            BigDecimal.ZERO);
+
+    var full = builder.build(rows, ROLE_MAP, Set.of(), fullParams);
+    var shortCf = builder.build(rows, ROLE_MAP, Set.of(), shortParams);
+
+    assertThat(nodeValue(full, "domain:lebensmittel")).isEqualByComparingTo("150.00");
+    assertThat(nodeValue(shortCf, "domain:lebensmittel")).isEqualByComparingTo("150.00");
+
+    assertThat(shortCf.nodes()).noneMatch(n -> n.id().startsWith("cp:"));
+    assertThat(shortCf.nodes()).noneMatch(n -> n.id().startsWith("sonstiges:"));
+    assertThat(shortCf.links()).noneMatch(l -> l.source().equals("domain:lebensmittel"));
   }
 }
