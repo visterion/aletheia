@@ -21,8 +21,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import org.jooq.DSLContext;
 import org.jooq.impl.DSL;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 
@@ -40,6 +44,8 @@ import org.springframework.web.context.request.RequestContextHolder;
 @Component
 public class WriteTools {
 
+  private static final Logger log = LoggerFactory.getLogger(WriteTools.class);
+
   private static final int MAX_BATCH_SIZE = 1000;
   private static final int CONFIRM_REQUIRED_THRESHOLD = 200;
 
@@ -51,6 +57,8 @@ public class WriteTools {
   private final ContractResolver contractResolver;
   private final SubstrateLock substrateLock;
   private final TagRuleResolver tagRuleResolver;
+  private final CounterpartyMergeService mergeService;
+  private final TransactionTemplate txTemplate;
 
   public WriteTools(
       DSLContext db,
@@ -60,7 +68,9 @@ public class WriteTools {
       CounterpartyResolver counterpartyResolver,
       ContractResolver contractResolver,
       SubstrateLock substrateLock,
-      TagRuleResolver tagRuleResolver) {
+      TagRuleResolver tagRuleResolver,
+      CounterpartyMergeService mergeService,
+      PlatformTransactionManager txManager) {
     this.db = db;
     this.selectorResolver = selectorResolver;
     this.splitService = splitService;
@@ -69,6 +79,8 @@ public class WriteTools {
     this.contractResolver = contractResolver;
     this.substrateLock = substrateLock;
     this.tagRuleResolver = tagRuleResolver;
+    this.mergeService = mergeService;
+    this.txTemplate = new TransactionTemplate(txManager);
   }
 
   public String updatePreferences(
@@ -570,16 +582,30 @@ public class WriteTools {
     return contractId;
   }
 
+  /**
+   * Confirms {@code counterpartyId} exists and is not folded (spec §Task 4, alias merge): a
+   * counterparty with {@code merged_into IS NOT NULL} is a soft-deleted source that reads already
+   * hide, so no write may target it either -- callers must resolve to the canonical id first.
+   */
   private String requireExistingCounterparty(long counterpartyId) {
-    String status =
-        db.select(COUNTERPARTIES.STATUS)
+    var row =
+        db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.MERGED_INTO)
             .from(COUNTERPARTIES)
             .where(COUNTERPARTIES.ID.eq(counterpartyId))
-            .fetchOne(COUNTERPARTIES.STATUS);
-    if (status == null) {
+            .fetchOne();
+    if (row == null) {
       throw new IllegalArgumentException("no such counterparty: " + counterpartyId);
     }
-    return status;
+    Long mergedInto = row.get(COUNTERPARTIES.MERGED_INTO);
+    if (mergedInto != null) {
+      throw new IllegalArgumentException(
+          "counterparty "
+              + counterpartyId
+              + " has been merged into "
+              + mergedInto
+              + "; use the canonical id");
+    }
+    return row.get(COUNTERPARTIES.STATUS);
   }
 
   private void insertHistory(
@@ -747,6 +773,33 @@ public class WriteTools {
         throw new IllegalArgumentException(
             "cannot reattribute a split parent (it has been split into children): " + ref);
       }
+    }
+  }
+
+  // --- merge_counterparty (counterparty-merge-alias design, sub-project A) ---
+
+  /**
+   * Folds {@code sourceIds} into {@code targetId} (spec §3): guards, then the merge core runs in
+   * its own transaction under {@link #substrateLock} (mirrors {@link #reattributeTransaction}
+   * exactly -- NOT {@code @Transactional}); after it commits, the resolvers settle outside that
+   * transaction, still under the lock, with {@link TagRuleResolver} wrapped in try/catch so one
+   * failing rule cannot fail an otherwise-successful merge.
+   */
+  public BatchWriteAck mergeCounterparty(long targetId, List<Long> sourceIds, String reason) {
+    substrateLock.lock();
+    try {
+      Integer merged = txTemplate.execute(status -> mergeService.mergeCore(targetId, sourceIds, reason));
+      counterpartyResolver.resolve();
+      contractResolver.resolve();
+      try {
+        tagRuleResolver.resolve();
+      } catch (RuntimeException e) {
+        log.warn("Auto-tagging rules failed after merge; will retry next pass: {}", e.toString());
+      }
+      return new BatchWriteAck(
+          merged, List.of("merged " + merged + " counterparty(ies) into " + targetId));
+    } finally {
+      substrateLock.unlock();
     }
   }
 

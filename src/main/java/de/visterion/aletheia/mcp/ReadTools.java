@@ -2,6 +2,7 @@ package de.visterion.aletheia.mcp;
 
 import static de.visterion.aletheia.jooq.Tables.CONTRACTS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_ALIAS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 import static de.visterion.aletheia.jooq.Tables.V_CONTRACT_EVIDENCE;
@@ -62,7 +63,8 @@ public class ReadTools {
           "contracts",
           "counterparty_history",
           "imports",
-          "v_counterparty_evidence");
+          "v_counterparty_evidence",
+          "counterparty_alias");
 
   private static final Map<String, String> COLUMN_DOCS =
       Map.of(
@@ -120,8 +122,9 @@ public class ReadTools {
           + "\n"
           + """
       ) i
-      JOIN counterparties c ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value
-      WHERE c.id = ?
+      LEFT JOIN counterparty_alias al ON al.identity_type = i.identity_type AND al.identity_value = i.identity_value
+      LEFT JOIN counterparties own ON own.identity_type = i.identity_type AND own.identity_value = i.identity_value
+      WHERE COALESCE(al.canonical_counterparty_id, own.id) = ?
         AND (
           (CAST(? AS date) IS NOT NULL AND CAST(? AS date) IS NOT NULL
               AND i.booking_date BETWEEN CAST(? AS date) AND CAST(? AS date))
@@ -141,25 +144,33 @@ public class ReadTools {
   // language=SQL
   private static final String IDENTITY_RESOLVED_TRANSACTIONS_SQL =
       """
-      SELECT t.*,
-          CASE
-              WHEN t.attributed_name IS NOT NULL THEN 'name'
-              WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
-              WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
-              WHEN t.counterparty_name IS NOT NULL THEN 'name'
-      END AS identity_type,
-          CASE
-              WHEN t.attributed_name IS NOT NULL THEN
-                  upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
-              WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
-              WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
-              WHEN t.counterparty_name IS NOT NULL THEN
-                  upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
-          END AS identity_value
-      FROM transactions t
-      """
+      SELECT ident.*, COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp
+      FROM (
+          SELECT t.*,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN 'name'
+                  WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+                  WHEN t.counterparty_iban IS NOT NULL THEN 'iban'
+                  WHEN t.counterparty_name IS NOT NULL THEN 'name'
+          END AS identity_type,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN
+                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                  WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+                  WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
+                  WHEN t.counterparty_name IS NOT NULL THEN
+                      upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
+              END AS identity_value
+          FROM transactions t
+          """
           + " WHERE "
-          + TransactionLayerSql.notExistsSupersededParent("t");
+          + TransactionLayerSql.notExistsSupersededParent("t")
+          + "\n"
+          + """
+      ) ident
+      LEFT JOIN counterparty_alias al ON al.identity_type = ident.identity_type AND al.identity_value = ident.identity_value
+      LEFT JOIN counterparties own ON own.identity_type = ident.identity_type AND own.identity_value = ident.identity_value
+      """;
 
   private final DSLContext db;
   private final DSLContext roDsl;
@@ -227,8 +238,7 @@ public class ReadTools {
     if (joinIdentity) {
       sql.append("FROM (")
           .append(IDENTITY_RESOLVED_TRANSACTIONS_SQL)
-          .append(") i JOIN counterparties c"
-              + " ON c.identity_type = i.identity_type AND c.identity_value = i.identity_value ");
+          .append(") i JOIN counterparties c ON c.id = i.effective_cp ");
     } else {
       sql.append("FROM transactions t ");
     }
@@ -405,10 +415,15 @@ public class ReadTools {
                   DSL.notExists(
                       DSL.selectOne()
                           .from(COUNTERPARTY_TAGS)
-                          .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))));
-          case unreviewed -> query.where(COUNTERPARTIES.REVIEWED.eq(false));
-          case has_recurring -> query.where(RECURRING.ID.isNotNull());
-          case all -> query.where(DSL.trueCondition());
+                          .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID)))
+                      .and(COUNTERPARTIES.MERGED_INTO.isNull()));
+          case unreviewed ->
+              query.where(
+                  COUNTERPARTIES.REVIEWED.eq(false).and(COUNTERPARTIES.MERGED_INTO.isNull()));
+          case has_recurring ->
+              query.where(
+                  RECURRING.ID.isNotNull().and(COUNTERPARTIES.MERGED_INTO.isNull()));
+          case all -> query.where(COUNTERPARTIES.MERGED_INTO.isNull());
         };
 
     var sortedQuery =
@@ -421,6 +436,7 @@ public class ReadTools {
     Result<Record> rows = sortedQuery.fetch();
 
     Map<Long, List<CounterpartyTagView>> tagsByCounterparty = fetchTagsByCounterparty();
+    Map<Long, List<CounterpartyAliasView>> aliasesByCounterparty = fetchAliasesByCounterparty();
 
     // A counterparty may now have multiple `recurring` rows (one per contract, TP1) -- the
     // leftJoin(RECURRING) above fans a split counterparty into multiple rows here. Keep only the
@@ -449,7 +465,8 @@ public class ReadTools {
               tagsByCounterparty.getOrDefault(id, List.of()),
               mapRecurring(row),
               Boolean.TRUE.equals(row.get("has_contract", Boolean.class)),
-              contractCount == null ? 0 : contractCount));
+              contractCount == null ? 0 : contractCount,
+              aliasesByCounterparty.getOrDefault(id, List.of())));
     }
     return result;
   }
@@ -527,6 +544,7 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.STATUS.eq("open"))
+            .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .fetch();
 
     List<ReviewQueueEntry> entries = new ArrayList<>();
@@ -607,6 +625,7 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
             .where(COUNTERPARTIES.STATUS.eq("open"))
+            .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .and(
                 DSL.notExists(
                     DSL.selectOne()
@@ -705,6 +724,7 @@ public class ReadTools {
             // must not surface as "unmatched recurring" (#29 retroactivity; prevents the stale
             // lumped PayPal series double-count).
             .and(CONTRACTS.STATUS.ne("dismissed"))
+            .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .fetch();
 
     List<UnmatchedRecurringEntry> entries = new ArrayList<>();
@@ -755,6 +775,7 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(RECURRING.COUNTERPARTY_ID))
             .where(RECURRING.CONTRACT_ID.isNull())
+            .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .fetch();
 
     List<UnmatchedRecurringEntry> entries = new ArrayList<>();
@@ -819,6 +840,9 @@ public class ReadTools {
                 COUNTERPARTY_TAGS.VALUE,
                 DSL.count().as("value_count"))
             .from(COUNTERPARTY_TAGS)
+            .join(COUNTERPARTIES)
+            .on(COUNTERPARTIES.ID.eq(COUNTERPARTY_TAGS.COUNTERPARTY_ID))
+            .where(COUNTERPARTIES.MERGED_INTO.isNull())
             .groupBy(COUNTERPARTY_TAGS.DIMENSION, COUNTERPARTY_TAGS.VALUE)
             .orderBy(COUNTERPARTY_TAGS.DIMENSION, DSL.field("value_count", Integer.class).desc())
             .fetch();
@@ -878,6 +902,7 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.STATUS.eq("confirmed"))
+            .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .and(
                 DSL.notExists(
                     DSL.selectOne()
@@ -937,6 +962,7 @@ public class ReadTools {
             .join(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
             .where(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT"))
+            .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc())
             .fetch();
 
@@ -1101,6 +1127,23 @@ public class ReadTools {
                             tagRow.get(COUNTERPARTY_TAGS.VALUE),
                             tagRow.get(COUNTERPARTY_TAGS.SOURCE),
                             tagRow.get(COUNTERPARTY_TAGS.CONFIDENCE))));
+    return byCounterparty;
+  }
+
+  private Map<Long, List<CounterpartyAliasView>> fetchAliasesByCounterparty() {
+    Map<Long, List<CounterpartyAliasView>> byCounterparty = new LinkedHashMap<>();
+    db.selectFrom(COUNTERPARTY_ALIAS)
+        .fetch()
+        .forEach(
+            aliasRow ->
+                byCounterparty
+                    .computeIfAbsent(
+                        aliasRow.get(COUNTERPARTY_ALIAS.CANONICAL_COUNTERPARTY_ID),
+                        key -> new ArrayList<>())
+                    .add(
+                        new CounterpartyAliasView(
+                            aliasRow.get(COUNTERPARTY_ALIAS.IDENTITY_TYPE),
+                            aliasRow.get(COUNTERPARTY_ALIAS.IDENTITY_VALUE))));
     return byCounterparty;
   }
 

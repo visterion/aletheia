@@ -53,7 +53,8 @@ public class ToolPermissionService {
           "update_preferences",
           "create_tag_rule",
           "set_tag_rule_enabled",
-          "delete_tag_rule");
+          "delete_tag_rule",
+          "merge_counterparty");
 
   private static final Set<String> WRITER_TOOLS = union(READ_TOOLS, WRITE_TOOLS);
 

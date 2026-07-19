@@ -86,8 +86,12 @@ public class TagRuleResolver implements ApplicationRunner {
                 WHEN normalized_name <> '' THEN 'name'
             END) IS NOT NULL
       ) t
+      LEFT JOIN counterparty_alias al
+        ON al.identity_type = t.identity_type AND al.identity_value = t.identity_value
+      LEFT JOIN counterparties own
+        ON own.identity_type = t.identity_type AND own.identity_value = t.identity_value
       JOIN counterparties cp
-        ON cp.identity_type = t.identity_type AND cp.identity_value = t.identity_value
+        ON cp.id = COALESCE(al.canonical_counterparty_id, own.id)
       WHERE cp.status <> 'dismissed'
       """;
 

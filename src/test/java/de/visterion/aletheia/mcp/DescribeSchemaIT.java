@@ -23,7 +23,8 @@ class DescribeSchemaIT extends AbstractPostgresIT {
             "contracts",
             "counterparty_history",
             "imports",
-            "v_counterparty_evidence");
+            "v_counterparty_evidence",
+            "counterparty_alias");
     assertThat(tables)
         .doesNotContain("api_tokens", "oauth_tokens", "oauth_clients", "oauth_authorization_codes");
     // a known column with its curated description

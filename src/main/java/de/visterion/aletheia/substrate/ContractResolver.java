@@ -42,34 +42,45 @@ public class ContractResolver implements ApplicationRunner {
   private static final String UPSERT_CONTRACTS =
       """
       INSERT INTO contracts (counterparty_id, mandate_id, source, status)
-      SELECT c.id, r.mandate_id, 'auto', 'open'
+      SELECT r.effective_cp, r.mandate_id, 'auto', 'open'
       FROM (
           SELECT
-              CASE
-                  WHEN t.attributed_name IS NOT NULL THEN 'name'
-                  WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
-              END AS identity_type,
-              CASE
-                  WHEN t.attributed_name IS NOT NULL THEN
-                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
-                  WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
-              END AS identity_value,
+              COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp,
               CASE
                   WHEN t.attributed_name IS NOT NULL THEN 'attributed'
                   ELSE t.mandate_id
               END AS mandate_id,
               date_trunc('month', t.booking_date) AS month
           FROM transactions t
+          LEFT JOIN counterparty_alias al
+              ON al.identity_type = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN 'name'
+                     WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+                 END
+             AND al.identity_value = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN
+                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                     WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+                 END
+          LEFT JOIN counterparties own
+              ON own.identity_type = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN 'name'
+                     WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+                 END
+             AND own.identity_value = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN
+                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                     WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+                 END
           WHERE t."""
           + TransactionLayerSql.RAW_ROOT_PREDICATE
           + """
 
             AND (t.attributed_name IS NOT NULL
                  OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
+            AND COALESCE(al.canonical_counterparty_id, own.id) IS NOT NULL
       ) r
-      JOIN counterparties c
-          ON c.identity_type = r.identity_type AND c.identity_value = r.identity_value
-      GROUP BY c.id, r.mandate_id
+      GROUP BY r.effective_cp, r.mandate_id
       HAVING count(DISTINCT r.month) >= 2
       ON CONFLICT (counterparty_id, mandate_id) DO NOTHING
       """;
@@ -91,19 +102,9 @@ public class ContractResolver implements ApplicationRunner {
           m.last_seen,
           m.occurrence_count,
           'auto'
-      FROM contracts ct
-      JOIN counterparties c ON c.id = ct.counterparty_id
-      JOIN (
+      FROM (
           SELECT
-              CASE
-                  WHEN t.attributed_name IS NOT NULL THEN 'name'
-                  WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
-              END AS identity_type,
-              CASE
-                  WHEN t.attributed_name IS NOT NULL THEN
-                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
-                  WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
-              END AS identity_value,
+              COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp,
               CASE
                   WHEN t.attributed_name IS NOT NULL THEN 'attributed'
                   ELSE t.mandate_id
@@ -115,16 +116,37 @@ public class ContractResolver implements ApplicationRunner {
               max(t.booking_date) AS last_seen,
               count(*) AS occurrence_count
           FROM transactions t
+          LEFT JOIN counterparty_alias al
+              ON al.identity_type = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN 'name'
+                     WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+                 END
+             AND al.identity_value = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN
+                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                     WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+                 END
+          LEFT JOIN counterparties own
+              ON own.identity_type = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN 'name'
+                     WHEN t.creditor_id IS NOT NULL THEN 'creditor_id'
+                 END
+             AND own.identity_value = CASE
+                     WHEN t.attributed_name IS NOT NULL THEN
+                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+                     WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
+                 END
           WHERE t."""
           + TransactionLayerSql.RAW_ROOT_PREDICATE
           + """
 
             AND (t.attributed_name IS NOT NULL
                  OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
-          GROUP BY 1, 2, 3
-      ) m ON m.identity_type = c.identity_type
-         AND m.identity_value = c.identity_value
-         AND m.mandate_id = ct.mandate_id
+            AND COALESCE(al.canonical_counterparty_id, own.id) IS NOT NULL
+          GROUP BY 1, 2
+      ) m
+      JOIN contracts ct
+          ON ct.counterparty_id = m.effective_cp AND ct.mandate_id = m.mandate_id
       WHERE ct.mandate_id IS NOT NULL
       ON CONFLICT (counterparty_id, contract_id) DO UPDATE SET
           typical_amount   = EXCLUDED.typical_amount,
