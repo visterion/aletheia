@@ -55,7 +55,7 @@ class SelectorTagStatusIT extends AbstractPostgresIT {
 
   private CounterpartySelector where(
       List<String> domainIn, List<String> natureIn, Boolean reviewed, Boolean hasContract) {
-    return new CounterpartySelector(null, null, null, null, domainIn, natureIn, reviewed, hasContract);
+    return new CounterpartySelector(null, null, null, null, domainIn, natureIn, reviewed, hasContract, null, null, null, null, null, null, null);
   }
 
   @Test

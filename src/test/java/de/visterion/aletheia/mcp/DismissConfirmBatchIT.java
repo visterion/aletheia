@@ -77,7 +77,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
     long obligation = seedCp("ob");
     tag(obligation, "domain", "transfer-privat");
     addContract(obligation);
-    var where = new CounterpartySelector(null, null, null, null, List.of("transfer-privat"), null, false, false);
+    var where = new CounterpartySelector(null, null, null, null, List.of("transfer-privat"), null, false, false, null, null, null, null, null, null, null);
     var ack = writeTools.dismissCounterparty(null, null, null, where, "sweep", null);
     assertThat(ack.affectedCount()).isEqualTo(1);
     assertThat(status(noise)).isEqualTo("dismissed");
@@ -92,17 +92,17 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
 
   @Test
   void batchDismissRejectsIdsAndWhereTogether() {
-    var where = new CounterpartySelector(null, null, null, null, List.of("x"), null, null, null);
+    var where = new CounterpartySelector(null, null, null, null, List.of("x"), null, null, null, null, null, null, null, null, null, null);
     assertThatThrownBy(() -> writeTools.dismissCounterparty(null, null, List.of(1L), where, "x", null))
         .isInstanceOf(IllegalArgumentException.class);
   }
 
   @Test
   void batchDismissRejectsZeroEffectiveWhere() {
-    var untaggedFalse = new CounterpartySelector(false, null, null, null, null, null, null, null);
+    var untaggedFalse = new CounterpartySelector(false, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     assertThatThrownBy(() -> writeTools.dismissCounterparty(null, null, null, untaggedFalse, "x", null))
         .isInstanceOf(IllegalArgumentException.class);
-    var blankName = new CounterpartySelector(null, "", null, null, null, null, null, null);
+    var blankName = new CounterpartySelector(null, "", null, null, null, null, null, null, null, null, null, null, null, null, null);
     assertThatThrownBy(() -> writeTools.dismissCounterparty(null, null, null, blankName, "x", null))
         .isInstanceOf(IllegalArgumentException.class);
   }
@@ -144,7 +144,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
     long recurring = seedCp("rec");
     tag(recurring, "domain", "transfer-privat");
     seedMandatelessRecurring(recurring); // helper: recurring row, contract_id NULL
-    var where = new CounterpartySelector(null, null, null, null, List.of("transfer-privat"), null, false, null);
+    var where = new CounterpartySelector(null, null, null, null, List.of("transfer-privat"), null, false, null, null, null, null, null, null, null, null);
     assertThat(writeTools.dismissCounterparty(null, null, null, where, "s", null).affectedCount())
         .isEqualTo(2);
     assertThat(writeTools.dismissCounterparty(null, null, null, where, "s", null).affectedCount())
@@ -240,7 +240,8 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
     // whole table.
     var zeroMinAnnualCost =
         new CounterpartySelector(
-            null, null, java.math.BigDecimal.ZERO, null, null, null, null, null);
+            null, null, java.math.BigDecimal.ZERO, null, null, null, null, null,
+            null, null, null, null, null, null, null);
     assertThatThrownBy(
             () ->
                 writeTools.dismissCounterparty(
@@ -252,7 +253,8 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
   void batchDismissAcceptsGenuinelyNarrowingMinAnnualCost() { // final review fix 1
     var narrowingMinAnnualCost =
         new CounterpartySelector(
-            null, null, new java.math.BigDecimal("100"), null, null, null, null, null);
+            null, null, new java.math.BigDecimal("100"), null, null, null, null, null,
+            null, null, null, null, null, null, null);
     // Must not throw for the zero-effective-conditions reason; the resolved (possibly empty)
     // batch is dismissed normally.
     var ack = writeTools.dismissCounterparty(null, null, null, narrowingMinAnnualCost, "x", true);
@@ -263,7 +265,7 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
   void batchConfirmByWhereSelector() { // final review fix 4
     long cp = seedCp("handel-cp");
     tag(cp, "domain", "handel");
-    var where = new CounterpartySelector(null, null, null, null, List.of("handel"), null, false, null);
+    var where = new CounterpartySelector(null, null, null, null, List.of("handel"), null, false, null, null, null, null, null, null, null, null);
     var ack = writeTools.confirmCounterparty(null, null, null, where, null);
     assertThat(ack.affectedCount()).isEqualTo(1);
     assertThat(

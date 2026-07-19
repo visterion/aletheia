@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Verifies the hand-rolled {@link CounterpartySelectorSchema#where()} JSON-Schema fragment for
- * {@link CounterpartySelector}: none of its 8 fields are marked required (a partial {@code where}
+ * {@link CounterpartySelector}: none of its 15 fields are marked required (a partial {@code where}
  * filter -- only some fields set -- must be a valid payload for the {@code aggregate}, {@code
  * classify_counterparty}, {@code dismiss_counterparty}, and {@code confirm_counterparty} tools),
  * and {@code predominantDirection} carries the correct enum values.
@@ -29,7 +29,14 @@ class SelectorSchemaTest {
           "domainIn",
           "natureIn",
           "reviewed",
-          "hasContract");
+          "hasContract",
+          "txnCountMax",
+          "natureNotIn",
+          "domainNotIn",
+          "amountMin",
+          "amountMax",
+          "lastSeenBefore",
+          "lastSeenAfter");
 
   @Test
   @SuppressWarnings("unchecked")

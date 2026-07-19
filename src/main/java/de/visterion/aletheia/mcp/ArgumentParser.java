@@ -201,7 +201,7 @@ public final class ArgumentParser {
 
   /**
    * Parses a {@code where} argument object into a {@link CounterpartySelector}. Field names match
-   * {@link CounterpartySelector}'s 8 components exactly. Returns {@code null} when {@code where}
+   * {@link CounterpartySelector}'s 15 components exactly. Returns {@code null} when {@code where}
    * is absent or JSON {@code null} (no selector given).
    */
   public static CounterpartySelector counterpartySelector(JsonNode arguments, String name) {
@@ -219,8 +219,16 @@ public final class ArgumentParser {
     List<String> natureIn = optionalTextList(where, "natureIn");
     Boolean reviewed = optionalBoolean(where, "reviewed");
     Boolean hasContract = optionalBoolean(where, "hasContract");
+    Long txnCountMax = optionalLong(where, "txnCountMax");
+    List<String> natureNotIn = optionalTextList(where, "natureNotIn");
+    List<String> domainNotIn = optionalTextList(where, "domainNotIn");
+    BigDecimal amountMin = optionalDecimal(where, "amountMin");
+    BigDecimal amountMax = optionalDecimal(where, "amountMax");
+    LocalDate lastSeenBefore = optionalDate(where, "lastSeenBefore");
+    LocalDate lastSeenAfter = optionalDate(where, "lastSeenAfter");
     return new CounterpartySelector(
-        untagged, namePattern, minAnnualCost, predominantDirection, domainIn, natureIn, reviewed, hasContract);
+        untagged, namePattern, minAnnualCost, predominantDirection, domainIn, natureIn, reviewed, hasContract,
+        txnCountMax, natureNotIn, domainNotIn, amountMin, amountMax, lastSeenBefore, lastSeenAfter);
   }
 
   /** Parses a required enum-string field, throwing {@link McpArgumentException} on a bad value. */

@@ -199,6 +199,29 @@
           },
           "minAnnualCost" : {
             "type" : "number"
+          },
+          "txnCountMax" : {
+            "type" : "integer"
+          },
+          "natureNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "domainNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "amountMin" : {
+            "type" : "number"
+          },
+          "amountMax" : {
+            "type" : "number"
+          },
+          "lastSeenBefore" : {
+            "type" : "string"
+          },
+          "lastSeenAfter" : {
+            "type" : "string"
           }
         },
         "description" : "declarative counterparty selector, resolved when counterpartyIds is absent"
@@ -276,6 +299,29 @@
           },
           "minAnnualCost" : {
             "type" : "number"
+          },
+          "txnCountMax" : {
+            "type" : "integer"
+          },
+          "natureNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "domainNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "amountMin" : {
+            "type" : "number"
+          },
+          "amountMax" : {
+            "type" : "number"
+          },
+          "lastSeenBefore" : {
+            "type" : "string"
+          },
+          "lastSeenAfter" : {
+            "type" : "string"
           }
         },
         "description" : "selector to resolve target ids, optional"
@@ -413,6 +459,29 @@
           },
           "minAnnualCost" : {
             "type" : "number"
+          },
+          "txnCountMax" : {
+            "type" : "integer"
+          },
+          "natureNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "domainNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "amountMin" : {
+            "type" : "number"
+          },
+          "amountMax" : {
+            "type" : "number"
+          },
+          "lastSeenBefore" : {
+            "type" : "string"
+          },
+          "lastSeenAfter" : {
+            "type" : "string"
           }
         },
         "description" : "where-selector (batch mode)"
@@ -493,6 +562,29 @@
           },
           "minAnnualCost" : {
             "type" : "number"
+          },
+          "txnCountMax" : {
+            "type" : "integer"
+          },
+          "natureNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "domainNotIn" : {
+            "type" : "array",
+            "items" : { "type" : "string" }
+          },
+          "amountMin" : {
+            "type" : "number"
+          },
+          "amountMax" : {
+            "type" : "number"
+          },
+          "lastSeenBefore" : {
+            "type" : "string"
+          },
+          "lastSeenAfter" : {
+            "type" : "string"
           }
         },
         "description" : "where-selector (batch mode)"

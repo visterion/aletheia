@@ -2,6 +2,7 @@ package de.visterion.aletheia.mcp;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -25,6 +26,20 @@ import java.util.List;
  * @param reviewed matches {@code counterparties.reviewed}
  * @param hasContract {@code true}/{@code false} for whether any {@code contracts} row exists for
  *     the counterparty
+ * @param txnCountMax matches when the logical booking count ({@code v_counterparty_evidence.txn_count},
+ *     split parents excluded) is &le; this value; a no-evidence counterparty (count 0) matches
+ * @param natureNotIn matches when the counterparty has NO {@code nature} tag whose value is in this
+ *     list (untagged passes); an empty (non-null) list is rejected as ambiguous
+ * @param domainNotIn matches when the counterparty has NO {@code domain} tag whose value is in this
+ *     list (untagged passes); an empty (non-null) list is rejected as ambiguous
+ * @param amountMin matches when {@code v_counterparty_evidence.amount_max} (= max(abs(booking)),
+ *     credits included) is &ge; this value; a no-evidence counterparty is excluded
+ * @param amountMax matches when {@code amount_max} is &le; this value; a no-evidence counterparty
+ *     is excluded
+ * @param lastSeenBefore matches when {@code v_counterparty_evidence.last_seen} is &le; this date
+ *     (inclusive); a no-evidence counterparty is excluded
+ * @param lastSeenAfter matches when {@code last_seen} is &ge; this date (inclusive); a no-evidence
+ *     counterparty is excluded
  */
 public record CounterpartySelector(
     @JsonProperty(required = false) Boolean untagged,
@@ -34,4 +49,11 @@ public record CounterpartySelector(
     @JsonProperty(required = false) List<String> domainIn,
     @JsonProperty(required = false) List<String> natureIn,
     @JsonProperty(required = false) Boolean reviewed,
-    @JsonProperty(required = false) Boolean hasContract) {}
+    @JsonProperty(required = false) Boolean hasContract,
+    @JsonProperty(required = false) Long txnCountMax,
+    @JsonProperty(required = false) List<String> natureNotIn,
+    @JsonProperty(required = false) List<String> domainNotIn,
+    @JsonProperty(required = false) BigDecimal amountMin,
+    @JsonProperty(required = false) BigDecimal amountMax,
+    @JsonProperty(required = false) LocalDate lastSeenBefore,
+    @JsonProperty(required = false) LocalDate lastSeenAfter) {}
