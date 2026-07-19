@@ -186,6 +186,11 @@ public class ReadTools {
       LEFT JOIN counterparties own ON own.identity_type = ident.identity_type AND own.identity_value = ident.identity_value
       """;
 
+  /** Package-private: shared identity-resolved leaf-transaction SQL for CashflowService. */
+  static String identityResolvedTransactionsSql() {
+    return IDENTITY_RESOLVED_TRANSACTIONS_SQL;
+  }
+
   private final DSLContext db;
   private final DSLContext roDsl;
   private final CounterpartySelectorResolver selectorResolver;
