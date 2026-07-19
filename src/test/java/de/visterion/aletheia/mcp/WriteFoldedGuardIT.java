@@ -143,7 +143,7 @@ class WriteFoldedGuardIT extends AbstractPostgresIT {
     long[] ids = seedMergedPair();
     long b = ids[1];
 
-    assertThatThrownBy(() -> writeTools.confirmCounterparty(b, null, null, null, null))
+    assertThatThrownBy(() -> writeTools.confirmCounterparty(b, null, null, null, null, null, null, null, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("merged into");
   }

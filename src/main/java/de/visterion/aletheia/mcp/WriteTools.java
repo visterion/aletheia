@@ -223,8 +223,9 @@ public class WriteTools {
             .set(RECURRING.AMOUNT_MAX, amountMax)
             .set(RECURRING.SOURCE, source.name())
             .set(RECURRING.CONFIDENCE, confidence)
-            // GUARD: an auto-source call can never overwrite a row a human already confirmed.
-            .where(RECURRING.SOURCE.eq("auto"))
+            // GUARD: an auto-source call can never overwrite a row a human already confirmed. A
+            // confirmed-source call (a human) may overwrite anything, including another confirmed row.
+            .where(source == TagSource.confirmed ? DSL.trueCondition() : RECURRING.SOURCE.eq("auto"))
             .execute();
 
     // Postgres returns 0 rows affected when the ON CONFLICT DO UPDATE ... WHERE guard matches no
@@ -247,12 +248,65 @@ public class WriteTools {
   }
 
   @Transactional
+  public WriteAck setDisplayName(long counterpartyId, String name) {
+    requireExistingCounterparty(counterpartyId); // rejects missing + merged_into IS NOT NULL
+    String normalized =
+        (name == null || name.isBlank())
+            ? null
+            : java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC)
+                .trim()
+                .replaceAll("\\s+", " ");
+    String old =
+        db.select(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.ID.eq(counterpartyId))
+            .fetchOne(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE);
+    db.update(COUNTERPARTIES)
+        .set(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, normalized)
+        .where(COUNTERPARTIES.ID.eq(counterpartyId))
+        .execute();
+    insertHistory(counterpartyId, "display_name_override", old, normalized, "manual");
+    return new WriteAck(
+        counterpartyId,
+        normalized == null ? "display name override cleared" : "display name override set");
+  }
+
+  @Transactional
   public BatchWriteAck confirmCounterparty(
       Long counterpartyId,
       Long contractId,
       List<Long> counterpartyIds,
       CounterpartySelector where,
-      Boolean confirm) {
+      Boolean confirm,
+      Cadence cadence,
+      BigDecimal typicalAmount,
+      BigDecimal amountMin,
+      BigDecimal amountMax) {
+    if (cadence != null) {
+      // Fused create-series + materialize + confirm: single counterparty only.
+      List<Long> batchIds =
+          resolveBatchTarget(
+              counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
+      if (batchIds != null) {
+        throw new IllegalArgumentException(
+            "cadence applies to a single counterparty; not allowed with a batch (counterpartyIds/where)");
+      }
+      if (counterpartyId == null) {
+        throw new IllegalArgumentException("supply counterpartyId when passing cadence");
+      }
+      if (contractId != null) {
+        throw new IllegalArgumentException(
+            "contractId cannot be combined with cadence: cadence materializes the mandate-less"
+                + " contract; use mark_recurring to set a series on a specific mandate contract");
+      }
+      if (amountMin != null && amountMax != null && amountMin.compareTo(amountMax) > 0) {
+        throw new IllegalArgumentException("amountMin must be <= amountMax");
+      }
+      return new BatchWriteAck(
+          1,
+          List.of(confirmWithSeries(counterpartyId, cadence, typicalAmount, amountMin, amountMax)));
+    }
+
     List<Long> batchIds =
         resolveBatchTarget(
             counterpartyId, contractId, counterpartyIds, where, Boolean.TRUE.equals(confirm));
@@ -271,6 +325,49 @@ public class WriteTools {
   }
 
   /**
+   * Fused P4 path: create/replace the counterparty's mandate-less recurring series with the
+   * supplied (confirmed) cadence/amounts, materialize its NULL-mandate contract, and confirm it.
+   * Rejects a dismissed mandate-less contract (a routine confirm must never resurrect a human
+   * dismissal); reopens an ended one via confirmContractRow's end_date clearing.
+   */
+  private String confirmWithSeries(
+      long counterpartyId,
+      Cadence cadence,
+      BigDecimal typicalAmount,
+      BigDecimal amountMin,
+      BigDecimal amountMax) {
+    String oldStatus = requireExistingCounterparty(counterpartyId); // rejects folded/missing
+    String existingStatus =
+        db.select(CONTRACTS.STATUS)
+            .from(CONTRACTS)
+            .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
+            .and(CONTRACTS.MANDATE_ID.isNull())
+            .fetchOne(CONTRACTS.STATUS);
+    if ("dismissed".equals(existingStatus)) {
+      throw new IllegalArgumentException(
+          "mandate-less contract is dismissed; un-dismiss it explicitly before materializing a series");
+    }
+    long contractIdResolved = materializeMandatelessContract(counterpartyId); // repoints (cp,NULL) recurring
+    markRecurring(
+        counterpartyId,
+        contractIdResolved,
+        cadence,
+        typicalAmount,
+        amountMin,
+        amountMax,
+        TagSource.confirmed,
+        BigDecimal.ONE);
+    confirmContractRow(counterpartyId, contractIdResolved); // status confirmed, end_date NULL, recurring source confirmed
+    db.update(COUNTERPARTIES)
+        .set(COUNTERPARTIES.REVIEWED, true)
+        .set(COUNTERPARTIES.STATUS, "confirmed")
+        .where(COUNTERPARTIES.ID.eq(counterpartyId))
+        .execute();
+    insertHistory(counterpartyId, "status", oldStatus, "confirmed", "confirmed");
+    return "series + contract " + contractIdResolved + " confirmed";
+  }
+
+  /**
    * The former single-item confirm body, returning its message. If {@code contractId} is given,
    * confirms just that contract: {@code status='confirmed'}, {@code source='confirmed'}, {@code
    * confirmed_at=now()}, and its linked recurring row's {@code source='confirmed'} -- the
@@ -283,7 +380,8 @@ public class WriteTools {
   private String confirmOne(long counterpartyId, Long contractId) {
     String oldStatus = requireExistingCounterparty(counterpartyId);
 
-    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId)) {
+    Long endedContract = endedMandatelessContractId(counterpartyId);
+    if (contractId != null || hasMandatelessAutoRecurring(counterpartyId) || endedContract != null) {
       long targetContract;
       if (contractId != null) {
         requireContractOwnedBy(counterpartyId, contractId);
@@ -335,6 +433,7 @@ public class WriteTools {
         .set(CONTRACTS.STATUS, "confirmed")
         .set(CONTRACTS.SOURCE, "confirmed")
         .set(CONTRACTS.CONFIRMED_AT, java.time.OffsetDateTime.now())
+        .set(CONTRACTS.END_DATE, (java.time.LocalDate) null)
         .where(CONTRACTS.ID.eq(contractId))
         .execute();
 
@@ -358,6 +457,16 @@ public class WriteTools {
             .from(RECURRING)
             .where(RECURRING.COUNTERPARTY_ID.eq(counterpartyId))
             .and(RECURRING.CONTRACT_ID.isNull()));
+  }
+
+  /** The id of this counterparty's mandate-less contract iff it is currently 'ended', else null. */
+  private Long endedMandatelessContractId(long counterpartyId) {
+    return db.select(CONTRACTS.ID)
+        .from(CONTRACTS)
+        .where(CONTRACTS.COUNTERPARTY_ID.eq(counterpartyId))
+        .and(CONTRACTS.MANDATE_ID.isNull())
+        .and(CONTRACTS.STATUS.eq("ended"))
+        .fetchOne(CONTRACTS.ID);
   }
 
   /**
@@ -426,6 +535,48 @@ public class WriteTools {
 
     return new WriteAck(
         counterpartyId, "linked contract " + contractId + " to HiveMem cell " + hivememCellId);
+  }
+
+  /**
+   * Ends an active (confirmed) contract: {@code status='ended'}, {@code end_date} set to {@code
+   * endDate} (defaults to today), with an audit history row. Rejects a contract that is not
+   * currently confirmed, and rejects a contract belonging to a folded counterparty. A mandate-less
+   * contract ended this way can later be reopened by confirming its counterparty again ({@link
+   * #confirmOne} widens its gate to reopen an {@code ended} mandate-less contract).
+   */
+  @Transactional
+  public WriteAck endContract(long contractId, java.time.LocalDate endDate, String reason) {
+    String status =
+        db.select(CONTRACTS.STATUS)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.STATUS);
+    if (status == null) {
+      throw new IllegalArgumentException("no such contract: " + contractId);
+    }
+    long counterpartyId =
+        db.select(CONTRACTS.COUNTERPARTY_ID)
+            .from(CONTRACTS)
+            .where(CONTRACTS.ID.eq(contractId))
+            .fetchOne(CONTRACTS.COUNTERPARTY_ID);
+    requireExistingCounterparty(counterpartyId); // rejects a folded counterparty's contract
+    if (!"confirmed".equals(status)) {
+      throw new IllegalArgumentException(
+          "contract " + contractId + " is " + status + ", not active; cannot end");
+    }
+    java.time.LocalDate effectiveEnd = endDate != null ? endDate : java.time.LocalDate.now();
+    db.update(CONTRACTS)
+        .set(CONTRACTS.STATUS, "ended")
+        .set(CONTRACTS.END_DATE, effectiveEnd)
+        .where(CONTRACTS.ID.eq(contractId))
+        .execute();
+    insertHistory(
+        counterpartyId,
+        "contract:" + contractId,
+        "confirmed",
+        "ended",
+        reason == null ? "ended" : reason);
+    return new WriteAck(counterpartyId, "contract " + contractId + " ended " + effectiveEnd);
   }
 
   @Transactional
@@ -832,7 +983,9 @@ public class WriteTools {
     if (Boolean.TRUE.equals(dryRun)) {
       List<CounterpartySample> samples =
           db
-              .select(COUNTERPARTIES.ID, COUNTERPARTIES.DISPLAY_NAME)
+              .select(
+                  COUNTERPARTIES.ID,
+                  DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME))
               .from(COUNTERPARTIES)
               .where(COUNTERPARTIES.ID.in(matched))
               .limit(20)
