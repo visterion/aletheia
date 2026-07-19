@@ -50,6 +50,23 @@ public class CounterpartySelectorResolver {
         throw new IllegalArgumentException(
             "empty natureIn is ambiguous; omit the field for no filter");
       }
+      if (where.natureNotIn() != null && where.natureNotIn().isEmpty()) {
+        throw new IllegalArgumentException(
+            "empty natureNotIn is ambiguous; omit the field for no filter");
+      }
+      if (where.domainNotIn() != null && where.domainNotIn().isEmpty()) {
+        throw new IllegalArgumentException(
+            "empty domainNotIn is ambiguous; omit the field for no filter");
+      }
+      if (where.txnCountMax() != null && where.txnCountMax() < 0) {
+        throw new IllegalArgumentException("txnCountMax must not be negative");
+      }
+      if (where.amountMin() != null && where.amountMin().signum() < 0) {
+        throw new IllegalArgumentException("amountMin must not be negative");
+      }
+      if (where.amountMax() != null && where.amountMax().signum() < 0) {
+        throw new IllegalArgumentException("amountMax must not be negative");
+      }
     }
 
     List<Condition> conditions = new ArrayList<>();
@@ -79,6 +96,28 @@ public class CounterpartySelectorResolver {
       if (where.hasContract() != null) {
         Condition exists = contractExists();
         conditions.add(where.hasContract() ? exists : DSL.not(exists));
+      }
+      if (where.txnCountMax() != null) {
+        conditions.add(
+            DSL.coalesce(V_COUNTERPARTY_EVIDENCE.TXN_COUNT, DSL.inline(0L)).le(where.txnCountMax()));
+      }
+      if (where.natureNotIn() != null) {
+        conditions.add(DSL.not(tagExists("nature", where.natureNotIn())));
+      }
+      if (where.domainNotIn() != null) {
+        conditions.add(DSL.not(tagExists("domain", where.domainNotIn())));
+      }
+      if (where.amountMin() != null) {
+        conditions.add(V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX.ge(where.amountMin()));
+      }
+      if (where.amountMax() != null) {
+        conditions.add(V_COUNTERPARTY_EVIDENCE.AMOUNT_MAX.le(where.amountMax()));
+      }
+      if (where.lastSeenBefore() != null) {
+        conditions.add(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.le(where.lastSeenBefore()));
+      }
+      if (where.lastSeenAfter() != null) {
+        conditions.add(V_COUNTERPARTY_EVIDENCE.LAST_SEEN.ge(where.lastSeenAfter()));
       }
     }
 

@@ -125,4 +125,137 @@ class CounterpartySelectorResolverIT extends AbstractPostgresIT {
                     new CounterpartySelector(null, null, null, Direction.BOTH, null, null, null, null, null, null, null, null, null, null, null)))
         .isInstanceOf(IllegalArgumentException.class);
   }
+
+  private CounterpartySelector sel(
+      Long txnCountMax,
+      java.util.List<String> natureNotIn,
+      java.util.List<String> domainNotIn,
+      BigDecimal amountMin,
+      BigDecimal amountMax,
+      LocalDate lastSeenBefore,
+      LocalDate lastSeenAfter) {
+    return new CounterpartySelector(
+        null, null, null, null, null, null, null, null,
+        txnCountMax, natureNotIn, domainNotIn, amountMin, amountMax, lastSeenBefore, lastSeenAfter);
+  }
+
+  /** Seeds a counterparty whose only booking is a split parent, so it has no v_counterparty_evidence row. */
+  private long seedNoEvidenceCounterparty() {
+    long imp = importId();
+    insertTxn(imp, "hash-delta-root", LocalDate.now().minusDays(3), "80.00", "DBIT", "CDTR-DELTA", null, "Delta");
+    resolver.run(null); // creates the Delta counterparty (+ its evidence, for now)
+    // A split child supersedes the root -> the root is NOT a logical leaf -> Delta drops out of the view.
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "hash-delta-child")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, imp)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.now().minusDays(3))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("80.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Bargeld")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, "hash-delta-root")
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+    return counterpartyIdFor("CDTR-DELTA");
+  }
+
+  @Test
+  void txnCountMaxSelectsFewTxnCounterparties() {
+    seedFixtures();
+    List<Long> ids =
+        selectorResolver.resolve(sel(1L, null, null, null, null, null, null));
+    assertThat(ids)
+        .contains(counterpartyIdFor("CDTR-BETA"), counterpartyIdFor("CDTR-GAMMA"))
+        .doesNotContain(counterpartyIdFor("CDTR-ALPHA")); // Alpha has 2 txns
+  }
+
+  @Test
+  void txnCountMaxMatchesNoEvidenceCounterpartyAsZero() {
+    long deltaId = seedNoEvidenceCounterparty();
+    List<Long> ids = selectorResolver.resolve(sel(1L, null, null, null, null, null, null));
+    assertThat(ids).contains(deltaId); // coalesce(txn_count,0)=0 <= 1
+  }
+
+  @Test
+  void amountMaxExcludesLargeSingleBookings() {
+    seedFixtures();
+    List<Long> ids =
+        selectorResolver.resolve(sel(null, null, null, null, new BigDecimal("100"), null, null));
+    assertThat(ids)
+        .contains(counterpartyIdFor("CDTR-GAMMA")) // amount_max 5 <= 100
+        .doesNotContain(counterpartyIdFor("CDTR-ALPHA"), counterpartyIdFor("CDTR-BETA")); // 150, 200 > 100
+  }
+
+  @Test
+  void amountFiltersExcludeNoEvidenceCounterparty() {
+    long deltaId = seedNoEvidenceCounterparty();
+    List<Long> ids =
+        selectorResolver.resolve(sel(null, null, null, null, new BigDecimal("100"), null, null));
+    assertThat(ids).doesNotContain(deltaId); // NULL amount_max fails the predicate
+  }
+
+  @Test
+  void amountMinCountsCreditBookings() {
+    seedFixtures();
+    List<Long> ids =
+        selectorResolver.resolve(sel(null, null, null, new BigDecimal("160"), null, null, null));
+    assertThat(ids)
+        .contains(counterpartyIdFor("CDTR-BETA")) // CRDT amount_max 200 >= 160
+        .doesNotContain(counterpartyIdFor("CDTR-ALPHA"), counterpartyIdFor("CDTR-GAMMA"));
+  }
+
+  @Test
+  void domainNotInExcludesTaggedKeepsUntagged() {
+    seedFixtures();
+    List<Long> ids =
+        selectorResolver.resolve(sel(null, null, List.of("income"), null, null, null, null));
+    assertThat(ids)
+        .contains(counterpartyIdFor("CDTR-ALPHA"), counterpartyIdFor("CDTR-GAMMA")) // untagged pass
+        .doesNotContain(counterpartyIdFor("CDTR-BETA")); // domain=income excluded
+  }
+
+  @Test
+  void lastSeenBeforeAndAfterAreInclusiveWindows() {
+    seedFixtures();
+    List<Long> before =
+        selectorResolver.resolve(sel(null, null, null, null, null, LocalDate.now().minusDays(7), null));
+    assertThat(before).contains(counterpartyIdFor("CDTR-ALPHA")); // last_seen now-10 <= now-7
+    List<Long> after =
+        selectorResolver.resolve(sel(null, null, null, null, null, null, LocalDate.now().minusDays(7)));
+    assertThat(after)
+        .contains(counterpartyIdFor("CDTR-BETA"), counterpartyIdFor("CDTR-GAMMA")) // now-5 >= now-7
+        .doesNotContain(counterpartyIdFor("CDTR-ALPHA"));
+  }
+
+  @Test
+  void emptyNotInListsAndNegativeNumbersAreRejected() {
+    assertThatThrownBy(() -> selectorResolver.resolve(sel(null, List.of(), null, null, null, null, null)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> selectorResolver.resolve(sel(null, null, List.of(), null, null, null, null)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> selectorResolver.resolve(sel(-1L, null, null, null, null, null, null)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> selectorResolver.resolve(sel(null, null, null, new BigDecimal("-1"), null, null, null)))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> selectorResolver.resolve(sel(null, null, null, null, new BigDecimal("-1"), null, null)))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void combinedDrainSelectorSelectsOnlyOneOffNoise() {
+    seedFixtures();
+    // {txnCountMax:1, domainNotIn:[income], amountMax:2000, reviewed:false, hasContract:false}
+    CounterpartySelector drain =
+        new CounterpartySelector(
+            null, null, null, null, null, null, false, false,
+            1L, List.of("fixkosten"), List.of("income"), null, new BigDecimal("2000"), null, null);
+    List<Long> ids = selectorResolver.resolve(drain);
+    assertThat(ids)
+        .contains(counterpartyIdFor("CDTR-GAMMA")) // 1 txn, untagged, 5 <= 2000, not reviewed, no contract
+        .doesNotContain(counterpartyIdFor("CDTR-ALPHA")) // 2 txns
+        .doesNotContain(counterpartyIdFor("CDTR-BETA")); // domain=income
+  }
 }
