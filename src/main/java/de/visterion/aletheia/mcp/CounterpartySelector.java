@@ -16,7 +16,8 @@ import java.util.List;
  * filter on (the common case for a partial {@code where} selector).
  *
  * @param untagged {@code true} to require no rows in {@code counterparty_tags}
- * @param namePattern case-insensitive substring match against {@code counterparties.display_name}
+ * @param namePattern case-insensitive substring match against the effective name (the
+ *     override-first {@code COALESCE(display_name_override, display_name)})
  * @param minAnnualCost minimum {@link AnnualCost#estimate}, evaluated in Java (not a column)
  * @param predominantDirection {@code v_counterparty_evidence.direction}; {@code BOTH} is rejected
  * @param domainIn matches when a {@code counterparty_tags} row with {@code dimension = 'domain'}

@@ -247,6 +247,30 @@ public class WriteTools {
   }
 
   @Transactional
+  public WriteAck setDisplayName(long counterpartyId, String name) {
+    requireExistingCounterparty(counterpartyId); // rejects missing + merged_into IS NOT NULL
+    String normalized =
+        (name == null || name.isBlank())
+            ? null
+            : java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC)
+                .trim()
+                .replaceAll("\\s+", " ");
+    String old =
+        db.select(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE)
+            .from(COUNTERPARTIES)
+            .where(COUNTERPARTIES.ID.eq(counterpartyId))
+            .fetchOne(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE);
+    db.update(COUNTERPARTIES)
+        .set(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, normalized)
+        .where(COUNTERPARTIES.ID.eq(counterpartyId))
+        .execute();
+    insertHistory(counterpartyId, "display_name_override", old, normalized, "manual");
+    return new WriteAck(
+        counterpartyId,
+        normalized == null ? "display name override cleared" : "display name override set");
+  }
+
+  @Transactional
   public BatchWriteAck confirmCounterparty(
       Long counterpartyId,
       Long contractId,
