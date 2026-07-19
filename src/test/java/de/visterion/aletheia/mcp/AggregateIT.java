@@ -370,6 +370,99 @@ class AggregateIT extends AbstractPostgresIT {
   }
 
   @Test
+  void domainGroupingTieBreakByConfidenceWhenSameSource() {
+    long imp = importId();
+    insertTxn(imp, "h-tb-conf-1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-TB-CONF", null, "Multi");
+    resolver.run(null);
+    long cp = cpId("CDTR-TB-CONF");
+    // Same source ('auto'): higher confidence must win.
+    insertTag(cp, "domain", "handel", "auto", "0.100");
+    insertTag(cp, "domain", "lebensmittel", "auto", "0.900");
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    assertThat(out).hasSize(1);
+    assertThat(out.get(0).period()).isEqualTo("lebensmittel");
+    assertThat(out.get(0).value()).isEqualByComparingTo("10.00");
+  }
+
+  @Test
+  void domainGroupingTieBreakLexicalWhenSameSourceAndConfidence() {
+    long imp = importId();
+    insertTxn(imp, "h-tb-lex-1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-TB-LEX", null, "Multi");
+    resolver.run(null);
+    long cp = cpId("CDTR-TB-LEX");
+    // Same source and same confidence: alphabetically-first value must win.
+    insertTag(cp, "domain", "handel", "confirmed", "0.500");
+    insertTag(cp, "domain", "energie", "confirmed", "0.500");
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    assertThat(out).hasSize(1);
+    assertThat(out.get(0).period()).isEqualTo("energie");
+    assertThat(out.get(0).value()).isEqualByComparingTo("10.00");
+  }
+
+  @Test
+  void domainGroupingExcludesSplitParentsShowingOnlyChildren() {
+    long imp = importId();
+    String parentHash = "parent-for-split-domain-001";
+    insertTxn(
+        imp, parentHash, LocalDate.of(2025, 7, 1), "100.00", "DBIT", "CDTR-SPLIT", null, "Split Merchant");
+
+    // Child 1: purchase part (keeps attribution)
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-purchase-domain-synth")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.of(2025, 7, 1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("60.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Split Merchant")
+        .set(TRANSACTIONS.CREDITOR_ID, "CDTR-SPLIT")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    // Child 2: pseudo part (e.g. Bargeld), unresolved/untagged.
+    db.insertInto(TRANSACTIONS)
+        .set(TRANSACTIONS.CONTENT_HASH, "child-bargeld-domain-synth")
+        .set(TRANSACTIONS.OCCURRENCE_INDEX, 0)
+        .set(TRANSACTIONS.IMPORT_ID, (Long) null)
+        .set(TRANSACTIONS.BOOKING_DATE, LocalDate.of(2025, 7, 1))
+        .set(TRANSACTIONS.AMOUNT, new BigDecimal("40.00"))
+        .set(TRANSACTIONS.CURRENCY, "EUR")
+        .set(TRANSACTIONS.DIRECTION, "DBIT")
+        .set(TRANSACTIONS.BOOKING_STATUS, "BOOK")
+        .set(TRANSACTIONS.COUNTERPARTY_NAME, "Bargeld")
+        .set(TRANSACTIONS.RAW, JSONB.valueOf(RAW))
+        .set(TRANSACTIONS.SPLIT_PARENT_CONTENT_HASH, parentHash)
+        .set(TRANSACTIONS.SPLIT_PARENT_OCCURRENCE_INDEX, 0)
+        .execute();
+
+    resolver.run(null);
+    insertTag(cpId("CDTR-SPLIT"), "domain", "lebensmittel", "confirmed", null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    // Parent (100.00) must be excluded; only children are visible: 60.00 (lebensmittel, tagged
+    // via CDTR-SPLIT identity) + 40.00 (untagged, Bargeld has no creditor identity). Total across
+    // buckets must equal the children's sum (100.00), not double-counted with the parent (200.00).
+    BigDecimal sumOfBuckets =
+        out.stream().map(AggregateBucket::value).reduce(BigDecimal.ZERO, BigDecimal::add);
+    assertThat(sumOfBuckets).isEqualByComparingTo("100.00");
+  }
+
+  @Test
   void domainGroupingTaglessAndUnresolvedFallIntoUntagged() {
     long imp = importId();
     insertTxn(imp, "h-food", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FOOD", null, "Rewe");
