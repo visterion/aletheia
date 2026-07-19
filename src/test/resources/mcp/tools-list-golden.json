@@ -1010,5 +1010,30 @@
         "counterpartyId"
       ]
     }
+  },
+  {
+    "name": "end_contract",
+    "description": "Mark an active (confirmed) contract as ended: it leaves the obligations register and the unmatched-recurring list, but its history is preserved. Pass endDate (YYYY-MM-DD) or omit for today, and an optional reason. Only a confirmed contract can be ended. To reactivate a mandate-less contract later, confirm the counterparty again -- it reopens the ended row. Example: end_contract(contractId=17, endDate=\"2026-06-30\", reason=\"cancelled\").",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "contractId": {
+          "type": "integer",
+          "description": "contracts.id to end"
+        },
+        "endDate": {
+          "type": "string",
+          "description": "YYYY-MM-DD; defaults to today"
+        },
+        "reason": {
+          "type": "string",
+          "description": "why it ended, optional"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "contractId"
+      ]
+    }
   }
 ]

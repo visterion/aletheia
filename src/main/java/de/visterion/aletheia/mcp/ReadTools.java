@@ -740,6 +740,7 @@ public class ReadTools {
             // must not surface as "unmatched recurring" (#29 retroactivity; prevents the stale
             // lumped PayPal series double-count).
             .and(CONTRACTS.STATUS.ne("dismissed"))
+            .and(CONTRACTS.STATUS.ne("ended"))
             .and(COUNTERPARTIES.MERGED_INTO.isNull())
             .fetch();
 
