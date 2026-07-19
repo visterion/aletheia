@@ -79,7 +79,10 @@ public class ReadTools {
           "counterparty_tags.dimension", "domain | nature | necessity (value is emergent/free)",
           "recurring.cadence", "monthly | quarterly | half_yearly | yearly | irregular",
           "v_counterparty_evidence.direction",
-              "predominant direction across the counterparty's bookings");
+              "predominant direction across the counterparty's bookings",
+          "counterparties.display_name_override",
+              "Manual display-name override (set_display_name); wins over the derived display_name at read time. Never affects identity.",
+          "contracts.end_date", "Date an ended obligation stopped (status='ended'); NULL while active.");
 
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
 
