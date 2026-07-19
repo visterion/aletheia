@@ -68,6 +68,27 @@ class AggregateIT extends AbstractPostgresIT {
         .execute();
   }
 
+  private void insertTag(long cpId, String dimension, String value, String source, String confidence) {
+    var step =
+        db.insertInto(
+                org.jooq.impl.DSL.table("counterparty_tags"),
+                org.jooq.impl.DSL.field("counterparty_id"),
+                org.jooq.impl.DSL.field("dimension"),
+                org.jooq.impl.DSL.field("value"),
+                org.jooq.impl.DSL.field("source"),
+                org.jooq.impl.DSL.field("confidence"))
+            .values(cpId, dimension, value, source,
+                confidence == null ? null : new BigDecimal(confidence));
+    step.execute();
+  }
+
+  private long cpId(String identityValue) {
+    return db.select(COUNTERPARTIES.ID)
+        .from(COUNTERPARTIES)
+        .where(COUNTERPARTIES.IDENTITY_VALUE.eq(identityValue))
+        .fetchOne(COUNTERPARTIES.ID);
+  }
+
   @Test
   void totalSumDbitOverRange() {
     long imp = importId();
@@ -306,5 +327,149 @@ class AggregateIT extends AbstractPostgresIT {
     assertThat(out)
         .extracting(AggregateBucket::displayName)
         .containsExactlyInAnyOrder("Beta", "Gamma");
+  }
+
+  @Test
+  void domainGroupingBucketsByTagValue() {
+    long imp = importId();
+    insertTxn(imp, "h-food-1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FOOD", null, "Rewe");
+    insertTxn(imp, "h-food-2", LocalDate.of(2025, 2, 5), "20.00", "DBIT", "CDTR-FOOD", null, "Rewe");
+    insertTxn(imp, "h-energy-1", LocalDate.of(2025, 3, 5), "50.00", "DBIT", "CDTR-ENERGY", null, "Eprimo");
+    resolver.run(null);
+    insertTag(cpId("CDTR-FOOD"), "domain", "lebensmittel", "confirmed", null);
+    insertTag(cpId("CDTR-ENERGY"), "domain", "energie", "confirmed", null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    assertThat(out)
+        .extracting(AggregateBucket::period, AggregateBucket::value)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple("lebensmittel", new BigDecimal("30.00")),
+            org.assertj.core.groups.Tuple.tuple("energie", new BigDecimal("50.00")));
+  }
+
+  @Test
+  void domainGroupingSingleTagTieBreakPrefersConfirmedThenConfidenceThenLexical() {
+    long imp = importId();
+    insertTxn(imp, "h-tb-1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-TB", null, "Multi");
+    resolver.run(null);
+    long cp = cpId("CDTR-TB");
+    // auto with high confidence must LOSE to confirmed with low confidence.
+    insertTag(cp, "domain", "handel", "auto", "0.900");
+    insertTag(cp, "domain", "lebensmittel", "confirmed", "0.100");
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    assertThat(out).hasSize(1);
+    assertThat(out.get(0).period()).isEqualTo("lebensmittel");
+    assertThat(out.get(0).value()).isEqualByComparingTo("10.00");
+  }
+
+  @Test
+  void domainGroupingTaglessAndUnresolvedFallIntoUntagged() {
+    long imp = importId();
+    insertTxn(imp, "h-food", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FOOD", null, "Rewe");
+    insertTxn(imp, "h-notag", LocalDate.of(2025, 2, 5), "7.00", "DBIT", "CDTR-NOTAG", null, "NoTag Co");
+    insertTxn(imp, "h-cash", LocalDate.of(2025, 3, 5), "3.00", "DBIT", null, null, null); // unresolved
+    resolver.run(null);
+    insertTag(cpId("CDTR-FOOD"), "domain", "lebensmittel", "confirmed", null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    assertThat(out)
+        .extracting(AggregateBucket::period, AggregateBucket::value)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple("lebensmittel", new BigDecimal("10.00")),
+            org.assertj.core.groups.Tuple.tuple("(untagged)", new BigDecimal("10.00")));
+  }
+
+  @Test
+  void domainBucketSumEqualsUnscopedTotal() {
+    long imp = importId();
+    insertTxn(imp, "h-food", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FOOD", null, "Rewe");
+    insertTxn(imp, "h-notag", LocalDate.of(2025, 2, 5), "7.00", "DBIT", "CDTR-NOTAG", null, "NoTag Co");
+    insertTxn(imp, "h-cash", LocalDate.of(2025, 3, 5), "3.00", "DBIT", null, null, null);
+    resolver.run(null);
+    insertTag(cpId("CDTR-FOOD"), "domain", "lebensmittel", "confirmed", null);
+
+    var byDomain =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+    var total =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.TOTAL, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    BigDecimal sumOfBuckets =
+        byDomain.stream().map(AggregateBucket::value).reduce(BigDecimal.ZERO, BigDecimal::add);
+    assertThat(sumOfBuckets).isEqualByComparingTo(total.get(0).value());
+  }
+
+  @Test
+  void domainGroupingWithByCounterpartyKeysPerCpAndExcludesUnresolved() {
+    long imp = importId();
+    insertTxn(imp, "h-food-1", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FOOD-A", null, "Rewe");
+    insertTxn(imp, "h-food-2", LocalDate.of(2025, 2, 5), "20.00", "DBIT", "CDTR-FOOD-B", null, "Edeka");
+    insertTxn(imp, "h-cash", LocalDate.of(2025, 3, 5), "99.00", "DBIT", null, null, null); // unresolved -> excluded
+    resolver.run(null);
+    insertTag(cpId("CDTR-FOOD-A"), "domain", "lebensmittel", "confirmed", null);
+    insertTag(cpId("CDTR-FOOD-B"), "domain", "lebensmittel", "confirmed", null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, true, null, null);
+
+    assertThat(out).allSatisfy(b -> assertThat(b.period()).isEqualTo("lebensmittel"));
+    assertThat(out).extracting(AggregateBucket::displayName)
+        .containsExactlyInAnyOrder("Rewe", "Edeka"); // no unresolved bucket
+  }
+
+  @Test
+  void domainGroupingRespectsWhereDomainNotIn() {
+    long imp = importId();
+    insertTxn(imp, "h-food", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FOOD", null, "Rewe");
+    insertTxn(imp, "h-energy", LocalDate.of(2025, 2, 5), "50.00", "DBIT", "CDTR-ENERGY", null, "Eprimo");
+    resolver.run(null);
+    insertTag(cpId("CDTR-FOOD"), "domain", "lebensmittel", "confirmed", null);
+    insertTag(cpId("CDTR-ENERGY"), "domain", "energie", "confirmed", null);
+
+    var where =
+        new CounterpartySelector(
+            null, null, null, null, null, null, null, null,
+            null, null, List.of("energie"), null, null, null, null); // domainNotIn=[energie]
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.DOMAIN, AggregateMetric.SUM, Direction.DBIT, false, null, where);
+
+    assertThat(out)
+        .extracting(AggregateBucket::period)
+        .containsExactly("lebensmittel");
+  }
+
+  @Test
+  void natureGroupingBucketsSymmetrically() {
+    long imp = importId();
+    insertTxn(imp, "h-fix", LocalDate.of(2025, 1, 5), "10.00", "DBIT", "CDTR-FIX", null, "Fixed Co");
+    insertTxn(imp, "h-var", LocalDate.of(2025, 2, 5), "20.00", "DBIT", "CDTR-VAR", null, "Var Co");
+    resolver.run(null);
+    // CDTR-FIX has a domain tag but NO nature tag -> nature bucket must be (untagged).
+    insertTag(cpId("CDTR-FIX"), "domain", "energie", "confirmed", null);
+    insertTag(cpId("CDTR-VAR"), "nature", "variabel", "confirmed", null);
+
+    var out =
+        readTools.aggregate(
+            FROM, TO, AggregateGroupBy.NATURE, AggregateMetric.SUM, Direction.DBIT, false, null, null);
+
+    assertThat(out)
+        .extracting(AggregateBucket::period, AggregateBucket::value)
+        .containsExactlyInAnyOrder(
+            org.assertj.core.groups.Tuple.tuple("variabel", new BigDecimal("20.00")),
+            org.assertj.core.groups.Tuple.tuple("(untagged)", new BigDecimal("10.00")));
   }
 }

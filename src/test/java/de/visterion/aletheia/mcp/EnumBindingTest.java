@@ -31,6 +31,6 @@ class EnumBindingTest {
     assertThat(Arrays.stream(AggregateMetric.values()).map(Enum::name))
         .containsExactly("SUM", "AVG", "MEDIAN", "COUNT");
     assertThat(Arrays.stream(AggregateGroupBy.values()).map(Enum::name))
-        .containsExactly("TOTAL", "MONTH", "QUARTER", "YEAR");
+        .containsExactly("TOTAL", "MONTH", "QUARTER", "YEAR", "DOMAIN", "NATURE");
   }
 }

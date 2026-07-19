@@ -1,9 +1,11 @@
 package de.visterion.aletheia.mcp;
 
-/** Aggregation grouping for a future analytics tool. Not yet wired to a tool. */
+/** Aggregation grouping for the {@code aggregate} read tool. */
 public enum AggregateGroupBy {
   TOTAL,
   MONTH,
   QUARTER,
-  YEAR
+  YEAR,
+  DOMAIN,
+  NATURE
 }
