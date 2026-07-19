@@ -1,6 +1,7 @@
 package de.visterion.aletheia.mcp;
 
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTIES;
+import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_ALIAS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 
@@ -114,12 +115,18 @@ public class TransactionSplitService {
             db.select(
                     COUNTERPARTIES.IDENTITY_TYPE,
                     COUNTERPARTIES.IDENTITY_VALUE,
-                    COUNTERPARTIES.DISPLAY_NAME)
+                    COUNTERPARTIES.DISPLAY_NAME,
+                    COUNTERPARTIES.MERGED_INTO)
                 .from(COUNTERPARTIES)
                 .where(COUNTERPARTIES.ID.eq(cpId))
                 .fetchOne();
         if (cp == null) {
           throw new IllegalArgumentException("no such counterparty: " + cpId);
+        }
+        Long mergedInto = cp.get(COUNTERPARTIES.MERGED_INTO);
+        if (mergedInto != null) {
+          throw new IllegalArgumentException(
+              "counterparty " + cpId + " has been merged into " + mergedInto + "; use the canonical id");
         }
         String idType = cp.get(COUNTERPARTIES.IDENTITY_TYPE);
         String idValue = cp.get(COUNTERPARTIES.IDENTITY_VALUE);
@@ -157,8 +164,17 @@ public class TransactionSplitService {
           mndt = a.mandateId();
         }
       } else if (a.displayName() != null && !a.displayName().isBlank()) {
-        // check pre-existence BEFORE ensure (for createdCpIds ack)
+        // check pre-existence BEFORE ensure (for createdCpIds ack) -- an alias mapping this
+        // identity onto a canonical counterparty counts as "already existing" too, since it
+        // resolves to that canonical row rather than inserting a new one (see
+        // ensureCounterpartyByDisplayName).
         String normForCheck = upperNormalize(a.displayName());
+        boolean aliasedBefore =
+            db.fetchExists(
+                db.selectOne()
+                    .from(COUNTERPARTY_ALIAS)
+                    .where(COUNTERPARTY_ALIAS.IDENTITY_TYPE.eq("name"))
+                    .and(COUNTERPARTY_ALIAS.IDENTITY_VALUE.eq(normForCheck)));
         Long existedBefore =
             db.select(COUNTERPARTIES.ID)
                 .from(COUNTERPARTIES)
@@ -166,7 +182,7 @@ public class TransactionSplitService {
                 .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normForCheck))
                 .fetchOne(COUNTERPARTIES.ID);
         long ensured = ensureCounterpartyByDisplayName(a.displayName());
-        if (existedBefore == null) {
+        if (existedBefore == null && !aliasedBefore) {
           createdCpIds.add(ensured);
         }
         cpId = ensured;
@@ -240,6 +256,20 @@ public class TransactionSplitService {
         displayName.equalsIgnoreCase(BARGELD_DISPLAY_NAME)
             ? BARGELD_DISPLAY_NAME
             : trimNormalize(displayName);
+
+    // Alias routing (sub-project A/P1 counterparty merge, Task 4): a name identity that has been
+    // folded onto a canonical counterparty resolves there directly, instead of the folded source
+    // row (or a brand-new counterparty if the source row never physically existed).
+    Long aliased =
+        db.select(COUNTERPARTY_ALIAS.CANONICAL_COUNTERPARTY_ID)
+            .from(COUNTERPARTY_ALIAS)
+            .where(COUNTERPARTY_ALIAS.IDENTITY_TYPE.eq("name"))
+            .and(COUNTERPARTY_ALIAS.IDENTITY_VALUE.eq(normValue))
+            .fetchOne(COUNTERPARTY_ALIAS.CANONICAL_COUNTERPARTY_ID);
+    if (aliased != null) {
+      ensureBargeldNatureIfNeeded(aliased, displayName);
+      return aliased;
+    }
 
     Long existing =
         db.select(COUNTERPARTIES.ID)

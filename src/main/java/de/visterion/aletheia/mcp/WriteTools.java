@@ -570,16 +570,30 @@ public class WriteTools {
     return contractId;
   }
 
+  /**
+   * Confirms {@code counterpartyId} exists and is not folded (spec §Task 4, alias merge): a
+   * counterparty with {@code merged_into IS NOT NULL} is a soft-deleted source that reads already
+   * hide, so no write may target it either -- callers must resolve to the canonical id first.
+   */
   private String requireExistingCounterparty(long counterpartyId) {
-    String status =
-        db.select(COUNTERPARTIES.STATUS)
+    var row =
+        db.select(COUNTERPARTIES.STATUS, COUNTERPARTIES.MERGED_INTO)
             .from(COUNTERPARTIES)
             .where(COUNTERPARTIES.ID.eq(counterpartyId))
-            .fetchOne(COUNTERPARTIES.STATUS);
-    if (status == null) {
+            .fetchOne();
+    if (row == null) {
       throw new IllegalArgumentException("no such counterparty: " + counterpartyId);
     }
-    return status;
+    Long mergedInto = row.get(COUNTERPARTIES.MERGED_INTO);
+    if (mergedInto != null) {
+      throw new IllegalArgumentException(
+          "counterparty "
+              + counterpartyId
+              + " has been merged into "
+              + mergedInto
+              + "; use the canonical id");
+    }
+    return row.get(COUNTERPARTIES.STATUS);
   }
 
   private void insertHistory(
