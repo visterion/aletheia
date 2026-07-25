@@ -8,6 +8,7 @@ import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import java.util.List;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -16,6 +17,9 @@ class TaxonomyIT extends AbstractPostgresIT {
   @Autowired DSLContext db;
   @Autowired ReadTools readTools;
 
+  // Truncated before as well as after: the empty-database test asserts global emptiness, so it is
+  // the most pollution-sensitive test in the suite -- all ITs share one container and context.
+  @BeforeEach
   @AfterEach
   void cleanUp() {
     db.execute("TRUNCATE TABLE counterparty_tags, counterparties RESTART IDENTITY CASCADE");
