@@ -86,6 +86,12 @@ class SqlNormalizationGoldenTest {
    * {@code upper(} token, which no amount of whitespace normalization can hide. The space inside
    * the {@code '\s+', ' ', 'g'} literal arguments is untouched because it sits between quote
    * characters, never adjacent to {@code (}, {@code )} or {@code ,}.
+   *
+   * <p>Residual blind spot, stated honestly: the punctuation pass runs over the whole constant,
+   * not just the two historically wrapped fragments. A future string literal whose own content
+   * has whitespace abutting a paren or comma -- {@code 'a, b'} edited to {@code 'a,b'} -- would
+   * compare equal here. No such literal exists in the seven constants today (audited: none
+   * contains a paren or comma), so this is a caveat for whoever adds one, not a live gap.
    */
   private static String normalizeWhitespace(String sql) {
     String collapsed = sql.replaceAll("\\s+", " ").trim();
