@@ -169,7 +169,7 @@ class AliasReadLayerIT extends AbstractPostgresIT {
     long a = ids[0];
     long b = ids[1];
 
-    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null);
+    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null, null, null);
 
     assertThat(summaries).extracting(CounterpartySummary::id).doesNotContain(b);
 

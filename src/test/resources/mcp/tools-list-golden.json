@@ -55,7 +55,7 @@
   },
   {
     "name": "list_counterparties",
-    "description": "List counterparties with their evidence aggregates, current tags, recurring series and contract-link status. Evidence is computed over the logical view of transactions (split parents excluded via NOT EXISTS on split_parent_*; only children and unsplit originals contribute to counts/spend).",
+    "description": "List counterparties with their evidence aggregates, current tags, recurring series and contract-link status. Evidence is computed over the logical view of transactions (split parents excluded via NOT EXISTS on split_parent_*; only children and unsplit originals contribute to counts/spend). Optional namePattern filters case-insensitively on the effective display name (LIKE-style -- % and _ act as wildcards); optional limit caps the number of counterparties returned.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -77,6 +77,14 @@
             "spend_desc",
             "recent"
           ]
+        },
+        "namePattern": {
+          "type": "string",
+          "description": "case-insensitive substring match on the effective display name; % and _ are LIKE wildcards"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "max counterparties to return (default: all); must be > 0"
         }
       }
     }

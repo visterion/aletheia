@@ -87,7 +87,7 @@ class ReadToolsIT extends AbstractPostgresIT {
 
     resolver.run(null);
 
-    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null);
+    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null, null, null);
 
     assertThat(summaries).hasSize(2);
     assertThat(summaries.get(0).displayName()).isEqualTo("Big Spender");
@@ -107,7 +107,7 @@ class ReadToolsIT extends AbstractPostgresIT {
     resolver.run(null);
 
     List<CounterpartySummary> summaries =
-        readTools.listCounterparties(null, CounterpartySort.spend_desc);
+        readTools.listCounterparties(null, CounterpartySort.spend_desc, null, null);
 
     assertThat(summaries).hasSize(2);
     assertThat(summaries.get(0).displayName()).isEqualTo("Streaming Co");
@@ -130,7 +130,7 @@ class ReadToolsIT extends AbstractPostgresIT {
         .execute();
 
     List<CounterpartySummary> filtered =
-        readTools.listCounterparties(CounterpartyFilter.has_recurring, null);
+        readTools.listCounterparties(CounterpartyFilter.has_recurring, null, null, null);
 
     assertThat(filtered).hasSize(1);
     assertThat(filtered.get(0).displayName()).isEqualTo("Recurring Co");
@@ -516,7 +516,7 @@ class ReadToolsIT extends AbstractPostgresIT {
 
     resolver.run(null);
 
-    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null);
+    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null, null, null);
     // Both the original merchant (now via child) and Bargeld must appear (CP pre-seeded).
     assertThat(summaries).extracting(CounterpartySummary::displayName)
         .contains("Split Merchant", "Bargeld");

@@ -102,7 +102,7 @@ class RecurringFanOutRegressionIT extends AbstractPostgresIT {
   void listCounterpartiesReturnsTheSplitCounterpartyExactlyOnce() {
     seedSplitCounterparty();
 
-    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null);
+    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null, null, null);
 
     assertThat(summaries).hasSize(1);
     assertThat(summaries.get(0).displayName()).isEqualTo("Split Co");
@@ -181,5 +181,42 @@ class RecurringFanOutRegressionIT extends AbstractPostgresIT {
     UnmatchedRecurringEntry elvEntry =
         unmatched.stream().filter(e -> e.displayName().equals("ELV Co")).findFirst().orElseThrow();
     assertThat(elvEntry.contractId()).isNull();
+  }
+
+  /**
+   * The tripwire for the SQL-LIMIT trap: a `limit` translated into SQL would spend both slots on
+   * the two fanned rows of the split counterparty and drop the second counterparty entirely.
+   * A limit=1 case cannot catch this -- it passes under both implementations.
+   */
+  @Test
+  void limitCountsCounterpartiesNotFannedRows() {
+    seedSplitCounterparty();
+
+    long imp = importId();
+    insertMandateTxn(imp, "hash-solo-a", LocalDate.now().minusMonths(1), "1.00", "CDTR-SOLO", "M9");
+    insertMandateTxn(imp, "hash-solo-b", LocalDate.now().minusMonths(2), "1.00", "CDTR-SOLO", "M9");
+    counterpartyResolver.run(null);
+    contractResolver.run(null);
+
+    List<CounterpartySummary> unlimited = readTools.listCounterparties(null, null, null, null);
+    assertThat(unlimited).hasSize(2);
+
+    List<CounterpartySummary> limited = readTools.listCounterparties(null, null, null, 2);
+
+    assertThat(limited)
+        .extracting(CounterpartySummary::id)
+        .containsExactlyElementsOf(unlimited.stream().map(CounterpartySummary::id).toList());
+  }
+
+  @Test
+  void limitOneStillReturnsOneCompleteEntryForTheSplitCounterparty() {
+    seedSplitCounterparty();
+
+    List<CounterpartySummary> limited = readTools.listCounterparties(null, null, null, 1);
+
+    assertThat(limited).hasSize(1);
+    assertThat(limited.get(0).contractCount()).isEqualTo(2);
+    assertThat(readTools.listCounterparties(null, null, null, null).get(0).id())
+        .isEqualTo(limited.get(0).id());
   }
 }

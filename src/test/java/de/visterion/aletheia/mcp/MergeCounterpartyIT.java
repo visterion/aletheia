@@ -174,7 +174,7 @@ class MergeCounterpartyIT extends AbstractPostgresIT {
     List<TransactionView> drilldown = readTools.counterpartyTransactions(target, null, null, null);
     assertThat(drilldown).hasSize(3);
 
-    List<CounterpartySummary> listed = readTools.listCounterparties(null, null);
+    List<CounterpartySummary> listed = readTools.listCounterparties(null, null, null, null);
     assertThat(listed.stream().map(CounterpartySummary::id))
         .contains(target)
         .doesNotContain(ibanSource, nameSource);

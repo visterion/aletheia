@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.jooq.Condition;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.Record;
@@ -411,7 +412,13 @@ public class ReadTools {
 
   public List<CounterpartySummary> listCounterparties(
       CounterpartyFilter filter,
-      CounterpartySort sort) {
+      CounterpartySort sort,
+      String namePattern,
+      Integer limit) {
+    if (limit != null && limit <= 0) {
+      throw new IllegalArgumentException("limit must be greater than 0");
+    }
+    String effectivePattern = namePattern == null || namePattern.isBlank() ? null : namePattern;
     CounterpartyFilter effectiveFilter = filter == null ? CounterpartyFilter.all : filter;
     CounterpartySort effectiveSort = sort == null ? CounterpartySort.spend_desc : sort;
 
@@ -466,23 +473,31 @@ public class ReadTools {
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID));
 
-    var conditionalQuery =
+    Condition filterCondition =
         switch (effectiveFilter) {
           case untagged ->
-              query.where(
-                  DSL.notExists(
+              DSL.notExists(
                       DSL.selectOne()
                           .from(COUNTERPARTY_TAGS)
                           .where(COUNTERPARTY_TAGS.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID)))
-                      .and(COUNTERPARTIES.MERGED_INTO.isNull()));
+                  .and(COUNTERPARTIES.MERGED_INTO.isNull());
           case unreviewed ->
-              query.where(
-                  COUNTERPARTIES.REVIEWED.eq(false).and(COUNTERPARTIES.MERGED_INTO.isNull()));
-          case has_recurring ->
-              query.where(
-                  RECURRING.ID.isNotNull().and(COUNTERPARTIES.MERGED_INTO.isNull()));
-          case all -> query.where(COUNTERPARTIES.MERGED_INTO.isNull());
+              COUNTERPARTIES.REVIEWED.eq(false).and(COUNTERPARTIES.MERGED_INTO.isNull());
+          case has_recurring -> RECURRING.ID.isNotNull().and(COUNTERPARTIES.MERGED_INTO.isNull());
+          case all -> COUNTERPARTIES.MERGED_INTO.isNull();
         };
+
+    if (effectivePattern != null) {
+      // A fresh, UN-ALIASED coalesce -- DISPLAY_NAME_EFFECTIVE carries .as("display_name") and
+      // would render as the bare alias here, which Postgres resolves to the base column, silently
+      // ignoring the override. Same construction as CounterpartySelectorResolver.
+      filterCondition =
+          filterCondition.and(
+              DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME)
+                  .likeIgnoreCase("%" + effectivePattern + "%"));
+    }
+
+    var conditionalQuery = query.where(filterCondition);
 
     var sortedQuery =
         switch (effectiveSort) {
@@ -526,7 +541,10 @@ public class ReadTools {
               contractCount == null ? 0 : contractCount,
               aliasesByCounterparty.getOrDefault(id, List.of())));
     }
-    return result;
+    // The cap is applied here, NOT as a SQL LIMIT: leftJoin(RECURRING) fans a multi-contract
+    // counterparty into several rows, so a SQL LIMIT would spend slots on duplicates of the same
+    // counterparty and silently drop later ones.
+    return limit != null && result.size() > limit ? List.copyOf(result.subList(0, limit)) : result;
   }
 
   public List<ReviewQueueEntry> getReviewQueue(

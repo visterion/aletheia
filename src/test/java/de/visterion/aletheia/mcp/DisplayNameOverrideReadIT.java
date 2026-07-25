@@ -146,7 +146,7 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
   void listCounterpartiesReturnsTheOverrideAsDisplayName() {
     long x = seedDbitCounterparty();
 
-    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null);
+    List<CounterpartySummary> summaries = readTools.listCounterparties(null, null, null, null);
 
     CounterpartySummary summary =
         summaries.stream().filter(s -> s.id() == x).findFirst().orElseThrow();
@@ -233,7 +233,7 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
   @Test
   void settingOverrideBackToNullRevertsToTheDerivedDisplayName() {
     long x = seedDbitCounterparty();
-    assertThat(readTools.listCounterparties(null, null).stream()
+    assertThat(readTools.listCounterparties(null, null, null, null).stream()
             .filter(s -> s.id() == x)
             .findFirst()
             .orElseThrow()
@@ -243,7 +243,7 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
     setOverride(x, null);
 
     CounterpartySummary summary =
-        readTools.listCounterparties(null, null).stream()
+        readTools.listCounterparties(null, null, null, null).stream()
             .filter(s -> s.id() == x)
             .findFirst()
             .orElseThrow();
