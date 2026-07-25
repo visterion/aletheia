@@ -544,7 +544,9 @@ public class ReadTools {
     // The cap is applied here, NOT as a SQL LIMIT: leftJoin(RECURRING) fans a multi-contract
     // counterparty into several rows, so a SQL LIMIT would spend slots on duplicates of the same
     // counterparty and silently drop later ones.
-    return limit != null && result.size() > limit ? List.copyOf(result.subList(0, limit)) : result;
+    return limit != null && result.size() > limit
+        ? List.copyOf(result.subList(0, limit))
+        : List.copyOf(result);
   }
 
   public List<ReviewQueueEntry> getReviewQueue(

@@ -38,12 +38,12 @@ class ListCounterpartiesFilterIT extends AbstractPostgresIT {
    */
   @Test
   void namePatternMatchesTheOverrideAndNotTheRawDisplayName() {
-    long overridden = insertCounterparty("CDTR-RAW-1", "AMZN Mktp DE X7", "Amazon");
+    long overridden = insertCounterparty("CDTR-RAW-1", "ZQP Mktp DE X7", "Acme");
 
-    List<CounterpartySummary> byOverride = readTools.listCounterparties(null, null, "amazon", null);
+    List<CounterpartySummary> byOverride = readTools.listCounterparties(null, null, "acme", null);
     assertThat(byOverride).extracting(CounterpartySummary::id).containsExactly(overridden);
 
-    List<CounterpartySummary> byRawName = readTools.listCounterparties(null, null, "amzn", null);
+    List<CounterpartySummary> byRawName = readTools.listCounterparties(null, null, "zqp", null);
     assertThat(byRawName).isEmpty();
   }
 
