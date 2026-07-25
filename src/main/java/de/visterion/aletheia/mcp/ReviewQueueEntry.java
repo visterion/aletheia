@@ -27,8 +27,9 @@ import java.time.LocalDate;
  * @param identityType {@code creditor_id} | {@code iban} | {@code name}
  * @param contractId the {@code contracts.id} this row documents, {@code null} for the legacy
  *     no-contract-layer path
- * @param evidence the {@code v_counterparty_evidence} aggregates; {@code null} in compact mode.
- *     Counterparty-scoped even for a contract row: for a split counterparty, this row's own
+ * @param evidence the {@code v_counterparty_evidence} aggregates; {@code null} in compact mode or
+ *     when no evidence row exists yet (a counterparty with no matched transactions deliberately
+ *     stays in the queue). Counterparty-scoped even for a contract row: for a split counterparty, this row's own
  *     {@code annualCostEstimate} is per-contract, but {@code evidence} is always the shared
  *     counterparty-wide aggregate, not scoped down to this contract
  * @param recurring the current {@code recurring} series, {@code null} if none is recorded or in
