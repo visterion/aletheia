@@ -10,6 +10,7 @@ import de.visterion.aletheia.auth.AuthFilter;
 import de.visterion.aletheia.auth.AuthPrincipal;
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
+import de.visterion.aletheia.substrate.NameNormalization;
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
 import de.visterion.aletheia.tagrules.RuleAction;
@@ -250,12 +251,16 @@ public class WriteTools {
   @Transactional
   public WriteAck setDisplayName(long counterpartyId, String name) {
     requireExistingCounterparty(counterpartyId); // rejects missing + merged_into IS NOT NULL
-    String normalized =
-        (name == null || name.isBlank())
-            ? null
-            : java.text.Normalizer.normalize(name, java.text.Normalizer.Form.NFC)
-                .trim()
-                .replaceAll("\\s+", " ");
+    // Normalize in the database, not in Java: the two disagree on what the shared formula means
+    // (see NameNormalization#evaluate). The raw blankness pre-check only saves the roundtrip in
+    // the common clear-the-override case; the isEmpty() re-check afterwards is NOT redundant --
+    // Java's isBlank() is false for e.g. U+0085 (NEL), which PostgreSQL normalizes away entirely.
+    // Without it we would store '' and the counterparty would render nameless at read time.
+    String normalized = null;
+    if (name != null && !name.isBlank()) {
+      var n = NameNormalization.evaluate(db, name);
+      normalized = n.isEmpty() ? null : n.display();
+    }
     String old =
         db.select(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE)
             .from(COUNTERPARTIES)

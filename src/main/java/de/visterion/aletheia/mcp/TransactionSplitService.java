@@ -5,15 +5,14 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_ALIAS;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 
+import de.visterion.aletheia.substrate.NameNormalization;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Locale;
 import org.jooq.DSLContext;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
@@ -155,20 +154,33 @@ public class TransactionSplitService {
           // name (pseudo) or other identity: name-based attribution
           boolean bargeld =
               displayName != null && displayName.equalsIgnoreCase(BARGELD_DISPLAY_NAME);
-          cpName =
-              bargeld
-                  ? BARGELD_DISPLAY_NAME
-                  : (displayName != null ? trimNormalize(displayName) : idValue);
+          // No normalization roundtrip here: displayName comes from the COUNTERPARTIES row, which
+          // is already a fixpoint of the shared formula, so evaluating it would be a no-op -- and
+          // an empty stored display_name is legal, so the empty-guard below would raise an error
+          // about an "allocation displayName" the caller never supplied.
+          cpName = bargeld ? BARGELD_DISPLAY_NAME : (displayName != null ? displayName : idValue);
           credId = null;
           iban = null;
           mndt = a.mandateId();
         }
       } else if (a.displayName() != null && !a.displayName().isBlank()) {
+        // Normalize once per allocation, up front: everything below (the pre-existence identity
+        // check, the counterparty ensure, the Bargeld decision and the child's name) consumes this
+        // single value, and the empty check runs before this allocation's inserts rather than
+        // relying on the rollback to undo an ('name', '') row. (The rollback is still load-bearing
+        // for the child-delete above and for earlier iterations' inserts.)
+        String dn = a.displayName();
+        var norm = NameNormalization.evaluate(db, dn);
+        if (norm.isEmpty()) {
+          throw new IllegalArgumentException(
+              "allocation displayName normalizes to empty: " + codePoints(dn));
+        }
+
         // check pre-existence BEFORE ensure (for createdCpIds ack) -- an alias mapping this
         // identity onto a canonical counterparty counts as "already existing" too, since it
         // resolves to that canonical row rather than inserting a new one (see
         // ensureCounterpartyByDisplayName).
-        String normForCheck = upperNormalize(a.displayName());
+        String normForCheck = norm.identity();
         boolean aliasedBefore =
             db.fetchExists(
                 db.selectOne()
@@ -181,15 +193,14 @@ public class TransactionSplitService {
                 .where(COUNTERPARTIES.IDENTITY_TYPE.eq("name"))
                 .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normForCheck))
                 .fetchOne(COUNTERPARTIES.ID);
-        long ensured = ensureCounterpartyByDisplayName(a.displayName());
+        long ensured = ensureCounterpartyByDisplayName(norm);
         if (existedBefore == null && !aliasedBefore) {
           createdCpIds.add(ensured);
         }
         cpId = ensured;
 
-        String dn = a.displayName();
-        boolean bargeld = dn.equalsIgnoreCase(BARGELD_DISPLAY_NAME);
-        cpName = bargeld ? BARGELD_DISPLAY_NAME : trimNormalize(dn);
+        boolean bargeld = norm.display().equalsIgnoreCase(BARGELD_DISPLAY_NAME);
+        cpName = bargeld ? BARGELD_DISPLAY_NAME : norm.display();
         credId = null;
         iban = null;
         // name-based: only explicit allocation mandate; never inherit parent mandate
@@ -250,12 +261,41 @@ public class TransactionSplitService {
     }
   }
 
-  private long ensureCounterpartyByDisplayName(String displayName) {
-    String normValue = upperNormalize(displayName);
+  /**
+   * Renders {@code s} as a space-separated list of code points.
+   *
+   * <p>Only ever called on a name that normalized to empty, which means it consists solely of
+   * whitespace/format characters -- anything visible would have survived. Echoing such a value back
+   * verbatim would produce a blank error message and leak raw control characters (NEL, line
+   * separators) into the MCP error payload and the logs.
+   */
+  private static String codePoints(String s) {
+    StringBuilder sb = new StringBuilder();
+    s.codePoints()
+        .forEach(
+            cp -> {
+              if (!sb.isEmpty()) {
+                sb.append(' ');
+              }
+              sb.append(String.format("U+%04X", cp));
+            });
+    return sb.toString();
+  }
+
+  /**
+   * Resolves a name-based counterparty, creating it if neither an alias nor a row exists yet.
+   *
+   * @param norm the caller's already-normalized allocation name. Taking the normal forms instead
+   *     of the raw string keeps this method to a single normalization roundtrip per allocation --
+   *     the caller needs {@code identity()} for its own pre-existence check anyway -- and makes it
+   *     structurally impossible to compare a raw name against {@link #BARGELD_DISPLAY_NAME} here.
+   */
+  private long ensureCounterpartyByDisplayName(NameNormalization.Normalized norm) {
+    String normValue = norm.identity();
     String dispName =
-        displayName.equalsIgnoreCase(BARGELD_DISPLAY_NAME)
+        norm.display().equalsIgnoreCase(BARGELD_DISPLAY_NAME)
             ? BARGELD_DISPLAY_NAME
-            : trimNormalize(displayName);
+            : norm.display();
 
     // Alias routing (sub-project A/P1 counterparty merge, Task 4): a name identity that has been
     // folded onto a canonical counterparty resolves there directly, instead of the folded source
@@ -267,7 +307,7 @@ public class TransactionSplitService {
             .and(COUNTERPARTY_ALIAS.IDENTITY_VALUE.eq(normValue))
             .fetchOne(COUNTERPARTY_ALIAS.CANONICAL_COUNTERPARTY_ID);
     if (aliased != null) {
-      ensureBargeldNatureIfNeeded(aliased, displayName);
+      ensureBargeldNatureIfNeeded(aliased, norm.display());
       return aliased;
     }
 
@@ -278,7 +318,7 @@ public class TransactionSplitService {
             .and(COUNTERPARTIES.IDENTITY_VALUE.eq(normValue))
             .fetchOne(COUNTERPARTIES.ID);
     if (existing != null) {
-      ensureBargeldNatureIfNeeded(existing, displayName);
+      ensureBargeldNatureIfNeeded(existing, norm.display());
       return existing;
     }
 
@@ -292,7 +332,7 @@ public class TransactionSplitService {
               .returning(COUNTERPARTIES.ID)
               .fetchOne()
               .get(COUNTERPARTIES.ID);
-      ensureBargeldNatureIfNeeded(id, displayName);
+      ensureBargeldNatureIfNeeded(id, norm.display());
       return id;
     } catch (DataAccessException ex) {
       // concurrent insert won the race — re-select
@@ -305,13 +345,22 @@ public class TransactionSplitService {
       if (raced == null) {
         throw ex;
       }
-      ensureBargeldNatureIfNeeded(raced, displayName);
+      ensureBargeldNatureIfNeeded(raced, norm.display());
       return raced;
     }
   }
 
-  private void ensureBargeldNatureIfNeeded(long cpId, String displayName) {
-    if (!displayName.equalsIgnoreCase(BARGELD_DISPLAY_NAME)) {
+  /**
+   * Tags a Bargeld counterparty with {@code nature=umbuchung}.
+   *
+   * @param normalizedDisplay the already-normalized display name (a fixpoint of {@link
+   *     NameNormalization}). Comparing the raw caller input here would miss names that only
+   *     normalize onto the canonical {@code Bargeld} identity (e.g. one carrying an em space), so
+   *     the counterparty would be created without the tag that drives the obligations register and
+   *     the cashflow role mapping.
+   */
+  private void ensureBargeldNatureIfNeeded(long cpId, String normalizedDisplay) {
+    if (!normalizedDisplay.equalsIgnoreCase(BARGELD_DISPLAY_NAME)) {
       return;
     }
     // PK (counterparty_id, dimension, value) makes onConflictDoNothing safe
@@ -322,16 +371,5 @@ public class TransactionSplitService {
         .set(COUNTERPARTY_TAGS.SOURCE, "auto")
         .onConflictDoNothing()
         .execute();
-  }
-
-  private static String upperNormalize(String s) {
-    if (s == null) return "";
-    String n = Normalizer.normalize(s, Normalizer.Form.NFC).trim().replaceAll("\\s+", " ");
-    return n.toUpperCase(Locale.ROOT);
-  }
-
-  private static String trimNormalize(String s) {
-    if (s == null) return "";
-    return Normalizer.normalize(s, Normalizer.Form.NFC).trim().replaceAll("\\s+", " ");
   }
 }

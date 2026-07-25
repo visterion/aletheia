@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.AfterEach;
@@ -34,7 +35,11 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
   private long seedCp(String name) {
     return db.insertInto(COUNTERPARTIES)
         .set(COUNTERPARTIES.IDENTITY_TYPE, "name")
-        .set(COUNTERPARTIES.IDENTITY_VALUE, name + "-" + UUID.randomUUID())
+        // Upper-cased: V18's counterparties_name_identity_normalized pins 'name' identities to
+        // the identity normal form, and a raw UUID is lower-case hex.
+        .set(
+            COUNTERPARTIES.IDENTITY_VALUE,
+            (name + "-" + UUID.randomUUID()).toUpperCase(Locale.ROOT))
         .set(COUNTERPARTIES.DISPLAY_NAME, name)
         .returning(COUNTERPARTIES.ID)
         .fetchOne(COUNTERPARTIES.ID);

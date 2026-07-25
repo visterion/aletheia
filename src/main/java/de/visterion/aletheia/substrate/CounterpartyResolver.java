@@ -73,16 +73,14 @@ public class CounterpartyResolver implements ApplicationRunner {
                   counterparty_iban,
                   counterparty_name,
                   attributed_name,
-                  trim(regexp_replace(
-                      normalize(counterparty_name, NFC), '\\s+', ' ', 'g'
-                  )) AS normalized_name,
-                  trim(regexp_replace(
-                      normalize(attributed_name, NFC), '\\s+', ' ', 'g'
-                  )) AS normalized_attributed,
-                  trim(regexp_replace(
-                      normalize(COALESCE(attributed_name, counterparty_name), NFC),
-                      '\\s+', ' ', 'g'
-                  )) AS normalized_display,
+          """
+          + NameNormalization.displaySql("counterparty_name")
+          + " AS normalized_name,\n"
+          + NameNormalization.displaySql("attributed_name")
+          + " AS normalized_attributed,\n"
+          + NameNormalization.displaySql("COALESCE(attributed_name, counterparty_name)")
+          + " AS normalized_display,\n"
+          + """
                   booking_date,
                   content_hash,
                   occurrence_index
@@ -143,16 +141,14 @@ public class CounterpartyResolver implements ApplicationRunner {
                           creditor_id,
                           counterparty_iban,
                           attributed_name,
-                          trim(regexp_replace(
-                              normalize(counterparty_name, NFC), '\\s+', ' ', 'g'
-                          )) AS normalized_name,
-                          trim(regexp_replace(
-                              normalize(attributed_name, NFC), '\\s+', ' ', 'g'
-                          )) AS normalized_attributed,
-                          trim(regexp_replace(
-                              normalize(COALESCE(attributed_name, counterparty_name), NFC),
-                              '\\s+', ' ', 'g'
-                          )) AS normalized_display,
+                  """
+          + NameNormalization.displaySql("counterparty_name")
+          + " AS normalized_name,\n"
+          + NameNormalization.displaySql("attributed_name")
+          + " AS normalized_attributed,\n"
+          + NameNormalization.displaySql("COALESCE(attributed_name, counterparty_name)")
+          + " AS normalized_display,\n"
+          + """
                           booking_date
                       FROM transactions
                   """
