@@ -14,8 +14,9 @@ import org.assertj.core.api.SoftAssertions;
 import org.junit.jupiter.api.Test;
 
 /**
- * Freezes the seven composed SQL constants that still hand-copy the counterparty-name
- * normalization rule inline, before a later task substitutes them onto {@link NameNormalization}.
+ * Pins the composed SQL of the seven call sites that build the counterparty-name normalization
+ * rule through {@link NameNormalization}, so a future edit cannot silently change the composed
+ * SQL beyond whitespace.
  *
  * <p>This test exists to catch exactly one failure mode: swapping {@link
  * NameNormalization#displaySql(String)} for {@link NameNormalization#identitySql(String)} (or
@@ -70,8 +71,25 @@ class SqlNormalizationGoldenTest {
     }
   }
 
+  /**
+   * Collapses whitespace runs to a single space and trims, then strips whitespace adjacent to
+   * {@code (}, {@code )} and {@code ,}. The punctuation pass compensates for the pre-refactor
+   * source formatting: two of the seven constants used to break {@code
+   * trim(regexp_replace(...))} across lines with the opening/closing parens on their own line
+   * (e.g. {@code regexp_replace(\n  normalize(...)...\n)}), which left a literal separator space
+   * next to those parens once collapsed. {@link NameNormalization#displaySql(String)} composes
+   * the same formula as one unbroken line with no such separator. Both forms are the same SQL --
+   * whitespace next to punctuation carries no meaning to the parser -- so the comparison must
+   * treat them as equal without touching the goldens, which are only evidentiary if they still
+   * reflect the pre-substitution source. This does not weaken the one failure mode the test
+   * exists to catch: swapping {@code displaySql} for {@code identitySql} adds or removes an
+   * {@code upper(} token, which no amount of whitespace normalization can hide. The space inside
+   * the {@code '\s+', ' ', 'g'} literal arguments is untouched because it sits between quote
+   * characters, never adjacent to {@code (}, {@code )} or {@code ,}.
+   */
   private static String normalizeWhitespace(String sql) {
-    return sql.replaceAll("\\s+", " ").trim();
+    String collapsed = sql.replaceAll("\\s+", " ").trim();
+    return collapsed.replaceAll("\\s*([(),])\\s*", "$1");
   }
 
   private static String readGolden(ConstantRef ref) {

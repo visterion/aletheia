@@ -59,7 +59,10 @@ public class ContractResolver implements ApplicationRunner {
                  END
              AND al.identity_value = CASE
                      WHEN t.attributed_name IS NOT NULL THEN
-                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.attributed_name")
+          + """
+
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
           LEFT JOIN counterparties own
@@ -69,7 +72,10 @@ public class ContractResolver implements ApplicationRunner {
                  END
              AND own.identity_value = CASE
                      WHEN t.attributed_name IS NOT NULL THEN
-                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.attributed_name")
+          + """
+
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
           WHERE t."""
@@ -123,7 +129,10 @@ public class ContractResolver implements ApplicationRunner {
                  END
              AND al.identity_value = CASE
                      WHEN t.attributed_name IS NOT NULL THEN
-                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.attributed_name")
+          + """
+
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
           LEFT JOIN counterparties own
@@ -133,7 +142,10 @@ public class ContractResolver implements ApplicationRunner {
                  END
              AND own.identity_value = CASE
                      WHEN t.attributed_name IS NOT NULL THEN
-                         upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.attributed_name")
+          + """
+
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
           WHERE t."""

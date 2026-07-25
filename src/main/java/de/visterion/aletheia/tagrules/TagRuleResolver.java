@@ -2,6 +2,7 @@ package de.visterion.aletheia.tagrules;
 
 import static de.visterion.aletheia.jooq.Tables.TAG_RULES;
 
+import de.visterion.aletheia.substrate.NameNormalization;
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
 import java.util.ArrayList;
@@ -72,8 +73,12 @@ public class TagRuleResolver implements ApplicationRunner {
             SELECT
                 creditor_id, counterparty_iban, counterparty_name, attributed_name,
                 remittance_info, direction,
-                trim(regexp_replace(normalize(counterparty_name, NFC), '\\s+', ' ', 'g')) AS normalized_name,
-                trim(regexp_replace(normalize(attributed_name, NFC), '\\s+', ' ', 'g')) AS normalized_attributed
+          """
+          + NameNormalization.displaySql("counterparty_name")
+          + " AS normalized_name,\n"
+          + NameNormalization.displaySql("attributed_name")
+          + " AS normalized_attributed\n"
+          + """
             FROM transactions
             WHERE \s"""
           + TransactionLayerSql.RAW_ROOT_PREDICATE

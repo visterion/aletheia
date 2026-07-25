@@ -9,6 +9,7 @@ import static de.visterion.aletheia.jooq.Tables.V_CONTRACT_EVIDENCE;
 import static de.visterion.aletheia.jooq.Tables.V_COUNTERPARTY_EVIDENCE;
 
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
+import de.visterion.aletheia.substrate.NameNormalization;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
 import de.visterion.aletheia.tagrules.TagRuleResolver;
 import java.math.BigDecimal;
@@ -136,11 +137,17 @@ public class ReadTools {
               END AS identity_type,
               CASE
                   WHEN t.attributed_name IS NOT NULL THEN
-                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.attributed_name")
+          + """
+
                   WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                   WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
                   WHEN t.counterparty_name IS NOT NULL THEN
-                      upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.counterparty_name")
+          + """
+
               END AS identity_value
           FROM transactions t
           """
@@ -182,11 +189,17 @@ public class ReadTools {
           END AS identity_type,
               CASE
                   WHEN t.attributed_name IS NOT NULL THEN
-                      upper(trim(regexp_replace(normalize(t.attributed_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.attributed_name")
+          + """
+
                   WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                   WHEN t.counterparty_iban IS NOT NULL THEN t.counterparty_iban
                   WHEN t.counterparty_name IS NOT NULL THEN
-                      upper(trim(regexp_replace(normalize(t.counterparty_name, NFC), '\\s+', ' ', 'g')))
+          """
+          + NameNormalization.identitySql("t.counterparty_name")
+          + """
+
               END AS identity_value
           FROM transactions t
           """
