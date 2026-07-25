@@ -47,7 +47,9 @@ public class GetReviewQueueToolHandler implements ToolHandler {
         + " ({id, contractId, displayName, identityType, cadence, annualCostEstimate,"
         + " txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob."
         + " All evidence/spend numbers use the logical transaction view (parents with"
-        + " split children are excluded via NOT EXISTS on split_parent_*).";
+        + " split children are excluded via NOT EXISTS on split_parent_*)."
+        + " Null-valued fields are omitted from the JSON entirely in both shapes -- an absent"
+        + " key means not applicable / not recorded.";
   }
 
   @Override

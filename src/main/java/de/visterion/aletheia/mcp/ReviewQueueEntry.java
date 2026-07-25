@@ -1,5 +1,6 @@
 package de.visterion.aletheia.mcp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import de.visterion.aletheia.substrate.CounterpartyEvidence;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -18,13 +19,17 @@ import java.time.LocalDate;
  * evidence/recurring blob. Verbose ({@code verbose=true}): {@code evidence} and {@code recurring}
  * are fully populated as before.
  *
+ * <p>Null-valued fields are omitted from the serialized JSON entirely, in both the compact and the
+ * verbose shape: an absent key means "not applicable / not recorded".
+ *
  * @param id the {@code counterparties.id}
  * @param displayName a representative counterparty name
  * @param identityType {@code creditor_id} | {@code iban} | {@code name}
  * @param contractId the {@code contracts.id} this row documents, {@code null} for the legacy
  *     no-contract-layer path
- * @param evidence the {@code v_counterparty_evidence} aggregates; {@code null} in compact mode.
- *     Counterparty-scoped even for a contract row: for a split counterparty, this row's own
+ * @param evidence the {@code v_counterparty_evidence} aggregates; {@code null} in compact mode or
+ *     when no evidence row exists yet (a counterparty with no matched transactions deliberately
+ *     stays in the queue). Counterparty-scoped even for a contract row: for a split counterparty, this row's own
  *     {@code annualCostEstimate} is per-contract, but {@code evidence} is always the shared
  *     counterparty-wide aggregate, not scoped down to this contract
  * @param recurring the current {@code recurring} series, {@code null} if none is recorded or in
@@ -37,6 +42,7 @@ import java.time.LocalDate;
  * @param txnCount transaction count from the evidence view, {@code null} if no evidence row
  * @param lastSeen latest booking date from the evidence view, {@code null} if no evidence row
  */
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record ReviewQueueEntry(
     long id,
     String displayName,

@@ -47,7 +47,8 @@ public class ClassifyCounterpartyToolHandler implements ToolHandler {
         + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
         + " (largest single booking in absolute EUR, credits included, within these bounds;"
         + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
-        + " (last booking date, inclusive).";
+        + " (last booking date, inclusive)."
+        + " Use the canonical values from taxonomy.seed instead of inventing new ones.";
   }
 
   @Override

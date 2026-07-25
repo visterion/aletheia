@@ -90,7 +90,7 @@ class SetDisplayNameIT extends AbstractPostgresIT {
     assertThat(ack.counterpartyId()).isEqualTo(cpId);
 
     var summary =
-        readTools.listCounterparties(CounterpartyFilter.all, null).stream()
+        readTools.listCounterparties(CounterpartyFilter.all, null, null, null).stream()
             .filter(s -> s.id() == cpId)
             .findFirst()
             .orElseThrow();
@@ -121,7 +121,7 @@ class SetDisplayNameIT extends AbstractPostgresIT {
     assertThat(override).isNull();
 
     var summary =
-        readTools.listCounterparties(CounterpartyFilter.all, null).stream()
+        readTools.listCounterparties(CounterpartyFilter.all, null, null, null).stream()
             .filter(s -> s.id() == cpId)
             .findFirst()
             .orElseThrow();
