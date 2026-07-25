@@ -68,6 +68,10 @@ management:
       # so /actuator/health is unauthenticated. It must expose nothing beyond {"status":"UP"} -
       # no datasource/component details an attacker could fingerprint.
       show-details: never
+      # The aggregate status covers ping, disk space and the db contributor. That db contributor is
+      # pinned to the PRIMARY (app) datasource by DataSourceConfig#dbHealthIndicator: the read-only
+      # sql_query datasource is deliberately not probed, so it can neither be opened on every probe
+      # nor mark the container DOWN by itself.
 
 logging:
   level:
