@@ -915,9 +915,16 @@ public class ReadTools {
                   row.get(COUNTERPARTY_TAGS.VALUE), row.get("value_count", Integer.class)));
     }
 
+    // Exactly the seed dimensions, in a fixed order: `counterparty_tags.dimension` is
+    // CHECK-constrained to these three (V3__register.sql), so no other dimension can exist.
+    // A dimension with no tags yet is still reported, with its seed and an empty value list.
     List<TaxonomyDimension> dimensions = new ArrayList<>();
-    for (var entry : valuesByDimension.entrySet()) {
-      dimensions.add(new TaxonomyDimension(entry.getKey(), entry.getValue()));
+    for (String dimension : SeedVocabulary.dimensions()) {
+      dimensions.add(
+          new TaxonomyDimension(
+              dimension,
+              SeedVocabulary.valuesFor(dimension),
+              valuesByDimension.getOrDefault(dimension, List.of())));
     }
     return dimensions;
   }

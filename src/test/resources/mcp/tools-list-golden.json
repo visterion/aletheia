@@ -10,7 +10,7 @@
   },
   {
     "name": "taxonomy",
-    "description": "The emergent tag vocabulary already in use, per dimension (domain|nature|necessity), with counts -- reuse these values instead of inventing synonyms.",
+    "description": "The tag vocabulary per dimension (domain|nature|necessity). `seed` is the canonical start vocabulary -- try those values first. `values` is what is actually in use, with counts. Introduce a new value only when nothing in seed fits; never invent a synonym for a value that already exists.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -321,7 +321,7 @@
   },
   {
     "name": "classify_counterparty",
-    "description": "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit ids or a where-selector). Never sets counterparties.reviewed or status -- only confirm/dismiss do that. Batches of 200+ require confirm=true; batches over 1000 are always rejected. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive).",
+    "description": "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit ids or a where-selector). Never sets counterparties.reviewed or status -- only confirm/dismiss do that. Batches of 200+ require confirm=true; batches over 1000 are always rejected. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive). Use the canonical values from taxonomy.seed instead of inventing new ones.",
     "inputSchema": {
       "type": "object",
       "properties": {

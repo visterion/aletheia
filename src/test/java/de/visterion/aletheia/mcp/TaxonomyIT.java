@@ -75,4 +75,51 @@ class TaxonomyIT extends AbstractPostgresIT {
     long nonEmptyGroups = taxonomy.stream().filter(d -> !d.values().isEmpty()).count();
     assertThat(nonEmptyGroups).isEqualTo(2);
   }
+
+  @Test
+  void returnsTheThreeSeedDimensionsInFixedOrderOnAnEmptyDatabase() {
+    List<TaxonomyDimension> taxonomy = readTools.taxonomy();
+
+    assertThat(taxonomy)
+        .extracting(TaxonomyDimension::dimension)
+        .containsExactly("domain", "nature", "necessity");
+    assertThat(taxonomy).allSatisfy(d -> assertThat(d.values()).isEmpty());
+
+    TaxonomyDimension domain = taxonomy.get(0);
+    assertThat(domain.seed())
+        .containsExactly(
+            "versicherung",
+            "energie",
+            "wohnen",
+            "telekommunikation",
+            "mobilitaet",
+            "lebensmittel",
+            "bildung",
+            "finanzen",
+            "freizeit",
+            "einkommen",
+            "transfer-privat");
+    assertThat(taxonomy.get(1).seed())
+        .containsExactly("fixkosten", "variabel", "zahlungsdienst", "umbuchung", "investment");
+    assertThat(taxonomy.get(2).seed()).containsExactly("pflicht", "wichtig", "optional");
+  }
+
+  @Test
+  void keepsUnusedDimensionsPresentWithEmptyValues() {
+    long insurer = insertCounterparty("CDTR-INS-9", "Insurer Nine");
+    insertTag(insurer, "domain", "versicherung");
+
+    List<TaxonomyDimension> taxonomy = readTools.taxonomy();
+
+    assertThat(taxonomy).hasSize(3);
+
+    TaxonomyDimension domain =
+        taxonomy.stream().filter(d -> d.dimension().equals("domain")).findFirst().orElseThrow();
+    assertThat(domain.values()).extracting(TaxonomyValue::value).containsExactly("versicherung");
+
+    TaxonomyDimension nature =
+        taxonomy.stream().filter(d -> d.dimension().equals("nature")).findFirst().orElseThrow();
+    assertThat(nature.values()).isEmpty();
+    assertThat(nature.seed()).contains("investment");
+  }
 }
