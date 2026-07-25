@@ -55,6 +55,14 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Liveness over HTTP: /actuator/health backs the Docker HEALTHCHECK and the documented
+             prod health probe. Only the health endpoint is exposed, without details
+             (see application.yml) - it is unauthenticated. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
         <!-- Token/OAuth-principal caches in the ported HiveMem auth package (AuthFilter,
              CachedTokenService, LoginRateLimiter, RateLimiter). Version managed by the
              Spring Boot 4.1 BOM. -->

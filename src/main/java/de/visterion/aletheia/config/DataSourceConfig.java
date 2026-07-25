@@ -12,6 +12,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
+import org.springframework.boot.jdbc.health.DataSourceHealthIndicator;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -79,6 +80,23 @@ public class DataSourceConfig {
   @Bean("roDsl")
   public DSLContext roDsl(@Qualifier("roDataSource") DataSource roDataSource) {
     return buildDslContext(roDataSource);
+  }
+
+  /**
+   * Pins the actuator {@code db} health contributor to the {@code @Primary} app datasource.
+   *
+   * <p>Boot's {@code DataSourceHealthContributorAutoConfiguration} would otherwise probe
+   * <em>every</em> {@link DataSource} bean and fold the results into one composite, so {@code
+   * roDataSource} — used only by the SELECT-only {@code sql_query} tool — would be opened on every
+   * health check and could, on its own, mark the whole container DOWN while the MCP server and all
+   * other tools still work. That auto-configuration carries {@code @ConditionalOnMissingBean(name =
+   * {"dbHealthIndicator", "dbHealthContributor"})} (verified against spring-boot-jdbc 4.1.0), so
+   * declaring this bean under exactly that name makes it back off.
+   */
+  @Bean
+  public DataSourceHealthIndicator dbHealthIndicator(
+      @Qualifier("dataSource") DataSource dataSource) {
+    return new DataSourceHealthIndicator(dataSource);
   }
 
   private static DataSource buildDataSource(
