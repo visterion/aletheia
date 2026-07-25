@@ -110,7 +110,10 @@ class OperatingGuideIT extends AbstractPostgresIT {
     return (long)
         db.fetchValue(
             "INSERT INTO counterparties (identity_type, identity_value, display_name, reviewed, status) "
-                + "VALUES ('name', 'cp-' || gen_random_uuid(), 'cp', ?, 'open') RETURNING id",
+                // Upper-cased: V18's counterparties_name_identity_normalized pins 'name'
+                // identities to the identity normal form, and gen_random_uuid() is lower-case hex.
+                + "VALUES ('name', upper('cp-' || gen_random_uuid()), 'cp', ?, 'open') "
+                + "RETURNING id",
             reviewed);
   }
 }

@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.AfterEach;
@@ -32,7 +33,11 @@ class ClassifyBatchIT extends AbstractPostgresIT {
   private long seedUntaggedCounterparty(String namePrefix) {
     return db.insertInto(COUNTERPARTIES)
         .set(COUNTERPARTIES.IDENTITY_TYPE, "name")
-        .set(COUNTERPARTIES.IDENTITY_VALUE, namePrefix + "-" + UUID.randomUUID())
+        // Upper-cased: V18's counterparties_name_identity_normalized pins 'name' identities to
+        // the identity normal form, and a raw UUID is lower-case hex.
+        .set(
+            COUNTERPARTIES.IDENTITY_VALUE,
+            (namePrefix + "-" + UUID.randomUUID()).toUpperCase(Locale.ROOT))
         .set(COUNTERPARTIES.DISPLAY_NAME, namePrefix)
         .returning(COUNTERPARTIES.ID)
         .fetchOne(COUNTERPARTIES.ID);
