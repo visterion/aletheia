@@ -56,6 +56,19 @@ aletheia:
 server:
   port: ${ALETHEIA_PORT:8431}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # Health only - no env/beans/configprops/metrics. See show-details below.
+        include: health
+  endpoint:
+    health:
+      # The app is publicly reachable via Cloudflare and AuthFilter guards only /mcp and /ingest,
+      # so /actuator/health is unauthenticated. It must expose nothing beyond {"status":"UP"} -
+      # no datasource/component details an attacker could fingerprint.
+      show-details: never
+
 logging:
   level:
     de.visterion.aletheia: INFO
