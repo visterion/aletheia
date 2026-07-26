@@ -1,7 +1,7 @@
 [
   {
     "name": "wake_up",
-    "description": "Answers: what needs my attention right now, and what have I told Aletheia about how I work? Call this FIRST, before any other action. Returns a live snapshot of the current state (open reviews, opaque payment passthroughs, obligations) and this customer's recorded preferences -- the operating guide itself lives in read_me. Follow any recorded preferences. Record durable preferences with update_preferences.\n\nKeywords: Verpflichtung, Einkommen, Konto",
+    "description": "Answers: what needs my attention right now, and what have I told Aletheia about how I work? Call this FIRST, before any other action. Returns a live snapshot of the current state (open reviews, opaque payment passthroughs, obligations) and this customer's recorded preferences -- the operating guide itself lives in read_me. Follow any recorded preferences. Record durable preferences with update_preferences.\n\nKeywords: Verpflichtung, Einkommen",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -10,7 +10,7 @@
   },
   {
     "name": "taxonomy",
-    "description": "Answers: what tag values exist for domain/nature/necessity, and which are actually in use? The tag vocabulary per dimension (domain|nature|necessity). `seed` is the canonical start vocabulary -- try those values first. `values` is what is actually in use, with counts. Introduce a new value only when nothing in seed fits; never invent a synonym for a value that already exists.\n\nKeywords: Versicherung, Vertrag, Ausgaben",
+    "description": "Answers: what tag values exist for domain/nature/necessity, and which are actually in use? `seed` is the canonical start vocabulary -- try those values first. `values` is what is actually in use, with counts. Introduce a new value only when nothing in seed fits; never invent a synonym for a value that already exists.\n\nKeywords: Versicherung, Vertrag, Ausgaben",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -19,7 +19,7 @@
   },
   {
     "name": "obligations_register",
-    "description": "Answers: what recurring obligations (insurance, subscriptions, contracts) do I have documented, and what do they cost per year? The documented obligations register: confirmed contracts (TP1 contract grain -- one row per confirmed contracts row, so a counterparty with two confirmed contracts, e.g. two insurance policies, produces two rows) with annual cost, tags and contract-link status, ordered by annual cost descending (contractId ascending as tie-breaker), plus the total. Each row's annual cost is scoped to its OWN contract -- never the counterparty's combined debit. totalAnnualCost is the sum over ALL matching contracts, computed after minAmount but before limit/offset -- it does NOT match the sum of the returned page once either paging parameter is set. All debit/annual cost figures are derived from the logical transaction view (NOT EXISTS on split_parent_* excludes superseded parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags do not exclude.\n\nKeywords: Versicherung, Vertrag, Beitrag, Verpflichtung, Abo, Miete, Strom",
+    "description": "Answers: what recurring obligations (insurance, subscriptions, contracts) do I have documented, and what do they cost per year? The documented obligations register: confirmed contracts (TP1 contract grain -- one row per confirmed contracts row, so a counterparty with two confirmed contracts, e.g. two insurance policies, produces two rows) with annual cost, tags and contract-link status, ordered by annual cost descending (contractId ascending as tie-breaker), plus the total. Each row's annual cost is scoped to its OWN contract -- never the counterparty's combined debit. totalAnnualCost is the sum over ALL matching contracts, computed after minAmount but before limit/offset -- it does NOT match the sum of the returned page once either paging parameter is set. All debit/annual cost figures are derived from the logical transaction view (NOT EXISTS on split_parent_* excludes superseded parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags do not exclude.\n\nKeywords: Versicherung, Versicherungen, Vertrag, Verträge, Beitrag, Verpflichtung, Verpflichtungen, Abo, Miete, Strom, Haushalt, Finanzen, household finances",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -45,7 +45,7 @@
   },
   {
     "name": "list_income",
-    "description": "Answers: where does my money come from -- salary, transfers, other income? Incoming payments (CRDT): counterparties whose predominant direction is credit (salary, transfers received) -- kept out of the obligations queue but available here, ordered by total received. Returns {rows, meta} rather than a bare array; meta reports the unpaged total so a compact 25-row default page never hides truncation.\n\nKeywords: Gehalt, Einkommen, Netto",
+    "description": "Answers: where does my money come from -- salary, transfers, other income? Incoming payments (CRDT): counterparties whose predominant direction is credit (salary, transfers received) -- kept out of the obligations queue but available here, ordered by total received. Returns {rows, meta} rather than a bare array; meta reports the unpaged total so a compact 25-row default page never hides truncation.\n\nKeywords: Gehalt, Einkommen, Netto, Überweisung",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -71,7 +71,7 @@
   },
   {
     "name": "describe_schema",
-    "description": "Answers: what tables and columns exist, so I can write my own SQL against this register without guessing? Structure of the register/evidence schema (tables, columns, types, keys) so sql_query can be written without guessing, plus three runnable example queries. No data rows. Optional tables filters the column list to an exact, lowercase subset of the allowed names; an unknown name fails with the allowed list rather than returning nothing.\n\nKeywords: Konto",
+    "description": "Answers: what tables and columns exist, so I can write my own SQL against this register without guessing? Structure of the register/evidence schema (tables, columns, types, keys), plus three runnable example queries. No data rows. Optional tables filters the column list to an exact, lowercase subset of the allowed names; an unknown name fails with the allowed list rather than returning nothing.\n\nKeywords: SQL, Tabellen, Spalten, Schema, Datenbank",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -88,7 +88,7 @@
   },
   {
     "name": "list_tag_rules",
-    "description": "Answers: which auto-tagging rules are active or paused right now? List all auto-tagging rules (enabled and paused), oldest first.\n\nKeywords: Ausgaben, Abbuchung",
+    "description": "Answers: which auto-tagging rules are active or paused right now? Oldest first.\n\nKeywords: Regel, Regeln, automatisch, Kategorie",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -97,7 +97,7 @@
   },
   {
     "name": "list_counterparties",
-    "description": "Answers: who have I paid or received money from, and what do I know about them (tags, recurring series, contract link)? List counterparties with their evidence aggregates, current tags, recurring series and contract-link status. Evidence is computed over the logical view of transactions (split parents excluded via NOT EXISTS on split_parent_*; only children and unsplit originals contribute to counts/spend). Optional namePattern filters case-insensitively on the effective display name (LIKE-style -- % and _ act as wildcards); optional limit caps the number of counterparties returned.\n\nKeywords: Konto, Abbuchung, Ausgaben, Rechnung",
+    "description": "Answers: who have I paid or received money from, and what do I know about them (tags, recurring series, contract link)? List counterparties with their evidence aggregates, current tags, recurring series and contract-link status. Evidence is computed over the logical view of transactions (split parents excluded via NOT EXISTS on split_parent_*; only children and unsplit originals contribute to counts/spend). Optional namePattern filters case-insensitively on the effective display name (LIKE-style -- % and _ act as wildcards); optional limit caps the number of counterparties returned.\n\nKeywords: Abbuchung, Ausgaben, Rechnung",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -133,7 +133,7 @@
   },
   {
     "name": "get_review_queue",
-    "description": "Answers: which obligations still need a human decision, ranked by what they cost per year? Ordered descending by estimated annual cost. Two shapes: an OPEN contract (contracts.status='open') -- the primary decision unit for any counterparty that has a contract layer at all, confirm/dismiss it via confirm_counterparty/dismiss_counterparty(contractId); or, for a counterparty with no contract row whatsoever (e.g. an ELV obligation that never carried a mandate_id), the whole open counterparty (contractId null) -- confirm/dismiss it without a contractId. Annual cost is recurring.typical_amount * periods/year, or the DBIT-only spend of the last 365 days if no recurring series is recorded yet, scoped to the contract when one exists (never the counterparty's combined debit). Excludes CRDT-predominant counterparties (salary, incoming transfers -- see list_income); a counterparty with no evidence row yet (unknown direction) stays in the queue, since nothing should skip human review. Compact by default ({id, contractId, displayName, identityType, cadence, annualCostEstimate, txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob. All evidence/spend numbers use the logical transaction view (parents with split children are excluded via NOT EXISTS on split_parent_*). Null-valued fields are omitted from the JSON entirely in both shapes -- an absent key means not applicable / not recorded.\n\nKeywords: Verpflichtung, Vertrag, Beitrag, Kündigung",
+    "description": "Answers: which obligations still need a human decision, ordered descending by estimated annual cost? Two shapes: an OPEN contract (contracts.status='open') -- the primary decision unit for any counterparty that has a contract layer at all, confirm/dismiss it via confirm_counterparty/dismiss_counterparty(contractId); or, for a counterparty with no contract row whatsoever (e.g. an ELV obligation that never carried a mandate_id), the whole open counterparty (contractId null) -- confirm/dismiss it without a contractId. Annual cost is recurring.typical_amount * periods/year, or the DBIT-only spend of the last 365 days if no recurring series is recorded yet, scoped to the contract when one exists (never the counterparty's combined debit). Excludes CRDT-predominant counterparties (salary, incoming transfers -- see list_income); a counterparty with no evidence row yet (unknown direction) stays in the queue, since nothing should skip human review. Compact by default ({id, contractId, displayName, identityType, cadence, annualCostEstimate, txnCount, lastSeen}); pass verbose=true for the full evidence/recurring blob. All evidence/spend numbers use the logical transaction view (parents with split children are excluded via NOT EXISTS on split_parent_*). Null-valued fields are omitted from the JSON entirely in both shapes -- an absent key means not applicable / not recorded.\n\nKeywords: Verpflichtung, Verpflichtungen, Vertrag, Verträge, Beitrag, Kündigung",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -151,7 +151,7 @@
   },
   {
     "name": "list_unmatched_recurring",
-    "description": "Answers: which recurring debits don't have a documented contract behind them yet? Recurring debits without a documented contract (TP1 contract grain, spec §5 M3): UNION of (1) an unlinked mandate contract -- a contracts row whose hivemem_cell_id is not yet set, with its recurring series, and (2) a mandate-less auto series -- a recurring row with no contract_id at all (never carried a mandate_id). contractId distinguishes the two shapes (set for (1), null for (2)).\n\nKeywords: Vertrag, Verpflichtung, Abbuchung, Beitrag, Abo",
+    "description": "Answers: which recurring debits don't have a documented contract behind them yet? Recurring debits without a documented contract (TP1 contract grain, spec §5 M3): UNION of (1) an unlinked mandate contract -- a contracts row whose hivemem_cell_id is not yet set, with its recurring series, and (2) a mandate-less auto series -- a recurring row with no contract_id at all (never carried a mandate_id). contractId distinguishes the two shapes (set for (1), null for (2)).\n\nKeywords: Vertrag, Verträge, Verpflichtung, Verpflichtungen, Abbuchung, Lastschrift, Beitrag, Abo",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -172,7 +172,7 @@
   },
   {
     "name": "sql_query",
-    "description": "Answers: any question over the data that the other tools don't already cover. Read-only escape hatch: run an arbitrary SELECT (CTEs supported, WITH ... SELECT) against the register/evidence schema. Every statement runs read-only end to end; any write is rejected, whether at input validation or at execution.\n\nKeywords: Konto, Ausgaben, Beleg",
+    "description": "Answers: a one-off question none of the purpose-built tools cover -- try those first. Read-only escape hatch: run an arbitrary SELECT (CTEs supported, WITH ... SELECT) against the register/evidence schema. Every statement runs read-only end to end; any write is rejected, whether at input validation or at execution.\n\nKeywords: SQL, Datenbank, Beleg",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -189,7 +189,7 @@
   },
   {
     "name": "counterparty_transactions",
-    "description": "Answers: what are the individual bookings behind one counterparty's totals? The underlying bookings for one counterparty (evidence detail), optionally limited to the last N days via period, or to an inclusive [dateFrom, dateTo] absolute range on booking_date. When dateFrom and dateTo are both given, the absolute range wins over period (period is ignored). Returns only current logical positions: split parents are hidden (NOT EXISTS filter on split_parent_*); children and unsplit originals are shown (javadoc references logical view). Identity priority: attributed_name > creditor_id > iban > normalized name.\n\nKeywords: Abbuchung, Konto, Beleg, Rechnung",
+    "description": "Answers: what are the individual bookings behind one counterparty's totals? The underlying bookings for one counterparty (evidence detail), optionally limited to the last N days via period, or to an inclusive [dateFrom, dateTo] absolute range on booking_date. When dateFrom and dateTo are both given, the absolute range wins over period (period is ignored). Returns only current logical positions: split parents are hidden (NOT EXISTS filter on split_parent_*); children and unsplit originals are shown (javadoc references logical view). Identity priority: attributed_name > creditor_id > iban > normalized name.\n\nKeywords: Abbuchung, Lastschrift, Beleg, Rechnung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -218,7 +218,7 @@
   },
   {
     "name": "aggregate",
-    "description": "Answers: how much did I spend or receive per month/quarter/year, and on what? Aggregates transactions over an inclusive [dateFrom, dateTo] date range -- replaces in-head arithmetic. Value expression: for a single direction (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to that direction; for direction=BOTH there is no direction filter and the amount is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) = credit total minus debit total (can be negative). COUNT is always count(*), unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and where are omitted AND byCounterparty=false, the aggregate runs directly over transactions with no counterparty-identity join, so unresolved bookings (cash withdrawals/fees with no creditor_id, iban, or name) are still counted. Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins through the identity-CASE resolution (attributed_name > creditor_id > iban > normalized name) and therefore excludes unresolved bookings. When byCounterparty=true, buckets are keyed on counterparties.id (never displayName -- two distinct identities, e.g. a creditor_id and an iban, can share one display name). Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only current leaf positions (children and unsplit originals) are aggregated. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive). groupBy also accepts DOMAIN and NATURE: buckets are the counterparty's domain/nature tag values (resolved through the identity CASE; a counterparty maps to a single value per dimension -- confirmed over auto, then highest confidence, then alphabetical; untagged or unresolved -> \"(untagged)\"). For a spend-by-category breakdown in ONE call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this.\n\nKeywords: Ausgaben, Einkommen, Gehalt, Netto, Konto",
+    "description": "Answers: how much did I spend or receive per month/quarter/year, per category or counterparty -- as plain numbers, not a flow diagram? Aggregates transactions over an inclusive [dateFrom, dateTo] date range -- replaces in-head arithmetic. Value expression: for a single direction (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to that direction; for direction=BOTH there is no direction filter and the amount is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) = credit total minus debit total (can be negative). COUNT is always count(*), unaffected by signing. Join-scope rule (M-1): when both counterpartyIds and where are omitted AND byCounterparty=false, the aggregate runs directly over transactions with no counterparty-identity join, so unresolved bookings (cash withdrawals/fees with no creditor_id, iban, or name) are still counted. Scoping via counterpartyIds/where, or grouping byCounterparty=true, joins through the identity-CASE resolution (attributed_name > creditor_id > iban > normalized name) and therefore excludes unresolved bookings. When byCounterparty=true, buckets are keyed on counterparties.id (never displayName -- two distinct identities, e.g. a creditor_id and an iban, can share one display name). Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only current leaf positions (children and unsplit originals) are aggregated. where accepts the same selector fields as classify_counterparty. groupBy also accepts DOMAIN and NATURE: buckets are the counterparty's domain/nature tag values (resolved through the identity CASE; a counterparty maps to a single value per dimension -- confirmed over auto, then highest confidence, then alphabetical; untagged or unresolved -> \"(untagged)\"). For a spend-by-category breakdown in ONE call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this.\n\nKeywords: Ausgaben, Einkommen, Gehalt, Netto, Überweisung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -354,7 +354,7 @@
   },
   {
     "name": "update_preferences",
-    "description": "Answers: how do I tell Aletheia to remember something durable about how I want it to work? Record durable customer preferences (markdown). Replaces the preferences section only -- the operating guide is protected. wake_up first, edit, write back the full preferences markdown.\n\nKeywords: Verpflichtung",
+    "description": "Answers: how do I tell Aletheia to remember something durable about how I want it to work? Record durable customer preferences (markdown). Replaces the preferences section only -- the operating guide is protected. wake_up first, edit, write back the full preferences markdown.\n\nKeywords: Einstellungen, Vorlieben, merken",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -497,7 +497,7 @@
   },
   {
     "name": "mark_recurring",
-    "description": "Answers: how do I tell Aletheia the cadence and typical amount of a recurring payment? Record/replace the recurring series for a counterparty, keyed by (counterparty_id, contract_id) -- pass contractId (a contracts.id) to target that specific contract's series, or null for the counterparty's mandate-less series. An auto-source call can never overwrite an already-confirmed row. Never sets counterparties.reviewed or status. Note: on a MANDATE contract (a contractId whose contracts row has a mandate_id), measured values such as typical_amount are refreshed from transactions by ContractResolver on every startup, so a manual override here is not durable for mandate contracts -- mandate-less series (contractId=null) are not resolver-owned.\n\nKeywords: Vertrag, Beitrag, Abbuchung",
+    "description": "Answers: how do I tell Aletheia the cadence and typical amount of a recurring payment? Record/replace the recurring series for a counterparty, keyed by (counterparty_id, contract_id) -- pass contractId (a contracts.id) to target that specific contract's series, or null for the counterparty's mandate-less series. An auto-source call can never overwrite an already-confirmed row. Never sets counterparties.reviewed or status. Note: on a MANDATE contract (a contractId whose contracts row has a mandate_id), measured values such as typical_amount are refreshed from transactions by ContractResolver on every startup, so a manual override here is not durable for mandate contracts -- mandate-less series (contractId=null) are not resolver-owned.\n\nKeywords: Vertrag, Beitrag, Abbuchung, Lastschrift",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -556,7 +556,7 @@
   },
   {
     "name": "confirm_counterparty",
-    "description": "Answers: how do I confirm that a counterparty or contract really is a recurring obligation? The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that contract). BATCH: counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is confirmed at counterparty level (contractId=null): a mandate-less recurring series is materialized+confirmed (appears in the obligations register); otherwise auto tags/status flip to confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single confirm(id, contractId) for those. Batches of 200+ require confirm=true. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive). SINGLE-item mode also accepts an optional cadence (with typicalAmount and optional amountMin/amountMax): when supplied, this fuses series-creation + contract-materialize + confirm into one call, e.g. confirming a newly-seen quarterly insurance debit as recurring at EUR 45.00 in a single step.\n\nKeywords: Vertrag, Beitrag, Verpflichtung, Abo, Versicherung",
+    "description": "Answers: how do I confirm that a counterparty or contract really is an obligation (a recurring series is materialized where one exists)? The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that contract). BATCH: counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is confirmed at counterparty level (contractId=null): a mandate-less recurring series is materialized+confirmed (appears in the obligations register); otherwise auto tags/status flip to confirmed. An OPEN mandate contract is NOT confirmed by batch -- use single confirm(id, contractId) for those. Batches of 200+ require confirm=true. where accepts the same selector fields as classify_counterparty. SINGLE-item mode also accepts an optional cadence (with typicalAmount and optional amountMin/amountMax): when supplied, this fuses series-creation + contract-materialize + confirm into one call, e.g. confirming a newly-seen quarterly insurance debit as recurring at EUR 45.00 in a single step.\n\nKeywords: Vertrag, Beitrag, Verpflichtung, Abo, Versicherung",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -677,7 +677,7 @@
   },
   {
     "name": "link_contract",
-    "description": "Answers: how do I connect a contract row here to its documentation in HiveMem? Link a contract to a HiveMem contract cell. contractId is a contracts.id -- get it from list_unmatched_recurring/get_review_queue (for a mandate-less obligation, confirm_counterparty/dismiss_counterparty without a contractId first to materialize its contract row). Find the cell id via HiveMem:search with where.realm=contracts (or the topic documenting the contract).\n\nKeywords: Vertrag, Beleg, Rechnung",
+    "description": "Answers: how do I connect a contract row here to its documentation in HiveMem? Link a contract to a HiveMem contract cell. contractId is a contracts.id -- get it from list_unmatched_recurring/get_review_queue (for a mandate-less obligation, confirm_counterparty/dismiss_counterparty without a contractId first to materialize its contract row). Find the cell id via HiveMem:search with where.realm=contracts (or the topic documenting the contract).\n\nKeywords: Vertrag, Verträge, Beleg, Rechnung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -703,7 +703,7 @@
   },
   {
     "name": "dismiss_counterparty",
-    "description": "Answers: how do I tell Aletheia that a counterparty or contract is NOT an obligation to track? Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally contractId to dismiss just that contract). BATCH: pass counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is dismissed at counterparty level (its mandate-less recurring series is materialized+dismissed; a non-recurring counterparty gets status='dismissed'). A no-contractId dismiss also sets reviewed=true. Batches of 200+ require confirm=true; over 1000 rejected. reason is required. The where selector also supports: txnCountMax (logical booking count <= N; a counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude counterparties carrying any of these nature/domain tags), amountMin/amountMax (largest single booking in absolute EUR, credits included, within these bounds; counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter (last booking date, inclusive).\n\nKeywords: Verpflichtung, Vertrag, Kündigung",
+    "description": "Answers: how do I tell Aletheia that a counterparty or contract is NOT an obligation to track? Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally contractId to dismiss just that contract). BATCH: pass counterpartyIds OR a where-selector (never both, never with contractId/counterpartyId) -- each id is dismissed at counterparty level (its mandate-less recurring series is materialized+dismissed; a non-recurring counterparty gets status='dismissed'). A no-contractId dismiss also sets reviewed=true. Batches of 200+ require confirm=true; over 1000 rejected. reason is required. where accepts the same selector fields as classify_counterparty.\n\nKeywords: Verpflichtung, Vertrag, Kündigung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -808,7 +808,7 @@
   },
   {
     "name": "reattribute_transaction",
-    "description": "Answers: how do I stamp the real merchant name onto a passthrough booking (PayPal/Adyen/LogPay/Klarna) that Aletheia couldn't parse on its own? Stamp the real merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the deterministic PayPal resolver cannot parse it). Pass the exact transactions as refs (get contentHash/occurrenceIndex from counterparty_transactions) and the real merchant as attributedName; pass attributedName=null to clear the attribution. Sets attribution_source='manual', which wins permanently over the PayPal resolver. Attribute a whole recurring series consistently (all its refs). Clearing a PayPal-creditor row is transient (the deterministic resolver re-stamps it) -- to correct a wrong PayPal parse, set a manual name instead. Teardown of a no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId).\n\nKeywords: Abbuchung, Konto, Beleg",
+    "description": "Answers: how do I stamp the real merchant name onto a passthrough booking (Adyen/LogPay/Klarna) that Aletheia couldn't parse on its own? Stamp the real merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the deterministic PayPal resolver cannot parse it). Pass the exact transactions as refs (get contentHash/occurrenceIndex from counterparty_transactions) and the real merchant as attributedName; pass attributedName=null to clear the attribution. Sets attribution_source='manual', which wins permanently over the PayPal resolver. Attribute a whole recurring series consistently (all its refs). Clearing a PayPal-creditor row is transient (the deterministic resolver re-stamps it) -- to correct a wrong PayPal parse, set a manual name instead. Teardown of a no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId).\n\nKeywords: Abbuchung, Beleg, Überweisung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -845,7 +845,7 @@
   },
   {
     "name": "split_transaction",
-    "description": "Answers: how do I break one raw booking into several logical parts, e.g. a mixed purchase or cash spent on several things? Split an existing raw transaction into logical child positions (replace semantics). If allocations is null/empty or unsplit=true, deletes all children (unsplit). Otherwise validates that sum(allocations.amount) equals the original transaction amount exactly and that each allocation.amount is strictly positive, deletes any prior children for this parent, creates name-based counterparties on demand (Bargeld auto gets nature=umbuchung), inserts deterministic synthetic child rows with split_parent_* backrefs, import_id=null, occurrence_index=0, and attribution driven from counterpartyId identity (creditor_id/iban/name) or displayName for correct resolution on purchase vs pseudo parts. Idempotent replace. All inside one transaction.\n\nKeywords: Abbuchung, Beleg, Konto, Rechnung",
+    "description": "Answers: how do I break one raw booking into several logical parts, e.g. a mixed purchase or cash spent on several things? Split an existing raw transaction into logical child positions (replace semantics). If allocations is null/empty or unsplit=true, deletes all children (unsplit). Otherwise validates that sum(allocations.amount) equals the original transaction amount exactly and that each allocation.amount is strictly positive, deletes any prior children for this parent, creates name-based counterparties on demand (Bargeld auto gets nature=umbuchung), inserts deterministic synthetic child rows with split_parent_* backrefs, import_id=null, occurrence_index=0, and attribution driven from counterpartyId identity (creditor_id/iban/name) or displayName for correct resolution on purchase vs pseudo parts. Idempotent replace. All inside one transaction.\n\nKeywords: Abbuchung, Beleg, Rechnung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -911,7 +911,7 @@
   },
   {
     "name": "create_tag_rule",
-    "description": "Answers: how do I make Aletheia auto-tag future bookings from a merchant, instead of tagging them by hand every time? Create a persistent auto-tagging rule (Outlook-style). conditions are AND-ed; actions set tags (source=confirmed) on matching counterparties, overwriting 'auto' tags and skipping dimensions already 'confirmed'. dryRun=true writes nothing and returns the match preview -- always dry-run first. dryRun=false persists (enabled) and, if backfill=true, tags existing counterparties now; the rule also runs on every future ingest. A match set of 200+ needs confirm=true.\n\nKeywords: Ausgaben, Abbuchung, Konto",
+    "description": "Answers: how do I make Aletheia auto-tag future bookings from a merchant, instead of tagging them by hand every time? Create a persistent auto-tagging rule (Outlook-style). conditions are AND-ed; actions set tags (source=confirmed) on matching counterparties, overwriting 'auto' tags and skipping dimensions already 'confirmed'. dryRun=true writes nothing and returns the match preview -- always dry-run first. dryRun=false persists (enabled) and, if backfill=true, tags existing counterparties now; the rule also runs on every future ingest. A match set of 200+ needs confirm=true.\n\nKeywords: Regel, Regeln, automatisch, Kategorie, Abbuchung",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -998,7 +998,7 @@
   },
   {
     "name": "set_tag_rule_enabled",
-    "description": "Answers: how do I pause or resume an auto-tagging rule without deleting it? Pause or resume a tag rule without deleting it.\n\nKeywords: Ausgaben, Abbuchung",
+    "description": "Answers: how do I pause or resume an auto-tagging rule without deleting it?\n\nKeywords: Regel, Regeln, pausieren, aktivieren",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1020,7 +1020,7 @@
   },
   {
     "name": "delete_tag_rule",
-    "description": "Answers: how do I remove an auto-tagging rule I no longer want? Delete a tag rule. Does NOT roll back tags it already applied (those are confirmed decisions; adjust them with classify_counterparty).\n\nKeywords: Ausgaben, Abbuchung",
+    "description": "Answers: how do I remove an auto-tagging rule I no longer want? Delete a tag rule. Does NOT roll back tags it already applied (those are confirmed decisions; adjust them with classify_counterparty).\n\nKeywords: Regel, Regeln, löschen",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1067,7 +1067,7 @@
   },
   {
     "name": "set_display_name",
-    "description": "Answers: how do I change the name shown for a counterparty without touching how its bookings are identified? Set or clear a counterparty's manual display-name override. The override is a label only -- it wins over the auto-derived name at read time but never changes identity resolution or how splits route. Pass name=null (or omit) to clear it and revert to the automatic most-frequent name. Rejects a folded (merged) counterparty -- set the label on the canonical one. Example: set_display_name(counterpartyId=42, name=\"Corner Bakery\").\n\nKeywords: Konto",
+    "description": "Answers: how do I change the name shown for a counterparty without touching how its bookings are identified? Set or clear a counterparty's manual display-name override. The override is a label only -- it wins over the auto-derived name at read time but never changes identity resolution or how splits route. Pass name=null (or omit) to clear it and revert to the automatic most-frequent name. Rejects a folded (merged) counterparty -- set the label on the canonical one. Example: set_display_name(counterpartyId=42, name=\"Corner Bakery\").\n\nKeywords: Name, umbenennen, Anzeigename",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1088,7 +1088,7 @@
   },
   {
     "name": "end_contract",
-    "description": "Answers: how do I record that a contract has ended, e.g. because I cancelled it? Mark an active (confirmed) contract as ended: it leaves the obligations register and the unmatched-recurring list, but its history is preserved. Pass endDate (YYYY-MM-DD) or omit for today, and an optional reason. Only a confirmed contract can be ended. To reactivate a mandate-less contract later, confirm the counterparty again -- it reopens the ended row. Example: end_contract(contractId=17, endDate=\"2026-06-30\", reason=\"cancelled\").\n\nKeywords: Vertrag, Kündigung, Versicherung, Abo",
+    "description": "Answers: how do I record that a contract has ended, e.g. because I cancelled it? Mark an active (confirmed) contract as ended: it leaves the obligations register and the unmatched-recurring list, but its history is preserved. Pass endDate (YYYY-MM-DD) or omit for today, and an optional reason. Only a confirmed contract can be ended. To reactivate a mandate-less contract later, confirm the counterparty again -- it reopens the ended row. Example: end_contract(contractId=17, endDate=\"2026-06-30\", reason=\"cancelled\").\n\nKeywords: Vertrag, Verträge, Kündigung, Versicherung, Abo",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1113,7 +1113,7 @@
   },
   {
     "name": "cashflow",
-    "description": "Answers: where does my money come from and where does it go each month? Build a **Sankey-ready** money-flow for a period. USE THIS whenever the user wants a monthly overview, budget flow, \"wohin fließt mein Geld\", or a finanzfluss-style diagram — instead of hand-writing SQL. Income sources → budget → categories (→ top counterparties); saving and internal-transfer handling are applied **server-side** (do NOT re-classify or re-net in the client).\n\nReturns `{nodes:[{id,label,value,kind}], links:[{source,target,value}], meta:{income,outflow,saving,saldo,excluded}}`. `kind ∈ income|budget|saving|expense|transfer|balance`. Result is **balanced** (Σ inputs = Σ outputs at every interior node; income sources, leaf counterparties, and the balance/saving/transfer nodes are terminal by design): if outflow > real income, an `\"aus Rücklagen\"` **balance** node is added as input for the difference — this is a real finding, never hide it.\n\n**Default recipe (one month):** `cashflow(dateFrom=\"<first day of month>\", dateTo=\"<last day of month>\")`, e.g. `cashflow(\"2026-06-01\",\"2026-06-30\")` — use the month's real last day (dates are strict ISO; `\"2026-06-31\"` is rejected). Defaults: internal transfers netted, passthroughs resolved/removed, depot buys counted as saving (`investmentMode=\"as_saving\"`), depot dividends excluded from income, `topN=6` (rest per level → \"Sonstiges\"). Params: `levels` (default `[\"income_source\",\"domain\",\"counterparty\"]`), `excludeInternalTransfers=true`, `excludePassthroughs=true`, `investmentMode`, `topN`, `minShare`. EUR, logical view only (split parents excluded), **read-only** (never mutates).\n\n**Consume the result:** render directly as a Plotly sankey — `node.label ← nodes[].label`, `link.{source,target,value} ← links[]` (ids are stable; map id→index). `meta` gives the KPI headline (income / outflow / saldo). Example: `cashflow(\"2026-06-01\",\"2026-06-30\")`.\n\nKeywords: Einkommen, Ausgaben, Sparen, Umbuchung, Konto",
+    "description": "Answers: how does my money flow from income sources through categories to merchants -- as one balanced Sankey diagram for a period? USE THIS whenever the user wants a monthly overview, budget flow, \"wohin fließt mein Geld\", or a finanzfluss-style diagram — instead of hand-writing SQL. Income sources → budget → categories (→ top counterparties); saving and internal-transfer handling are applied **server-side** (do NOT re-classify or re-net in the client).\n\nReturns `{nodes:[{id,label,value,kind}], links:[{source,target,value}], meta:{income,outflow,saving,saldo,excluded}}`. `kind ∈ income|budget|saving|expense|transfer|balance`. Result is **balanced** (Σ inputs = Σ outputs at every interior node; income sources, leaf counterparties, and the balance/saving/transfer nodes are terminal by design): if outflow > real income, an `\"aus Rücklagen\"` **balance** node is added as input for the difference — this is a real finding, never hide it.\n\n**Default recipe (one month):** `cashflow(dateFrom=\"<first day of month>\", dateTo=\"<last day of month>\")`, e.g. `cashflow(\"2026-06-01\",\"2026-06-30\")` — use the month's real last day (dates are strict ISO; `\"2026-06-31\"` is rejected). Defaults: internal transfers netted, passthroughs resolved/removed, depot buys counted as saving (`investmentMode=\"as_saving\"`), depot dividends excluded from income, `topN=6` (rest per level → \"Sonstiges\"). Params: `levels` (default `[\"income_source\",\"domain\",\"counterparty\"]`), `excludeInternalTransfers=true`, `excludePassthroughs=true`, `investmentMode`, `topN`, `minShare`. EUR, logical view only (split parents excluded), **read-only** (never mutates).\n\n**Consume the result:** render directly as a Plotly sankey — `node.label ← nodes[].label`, `link.{source,target,value} ← links[]` (ids are stable; map id→index). `meta` gives the KPI headline (income / outflow / saldo). Example: `cashflow(\"2026-06-01\",\"2026-06-30\")`.\n\nKeywords: Einkommen, Ausgaben, Sparen, Umbuchung, Überweisung",
     "inputSchema": {
       "type": "object",
       "properties": {

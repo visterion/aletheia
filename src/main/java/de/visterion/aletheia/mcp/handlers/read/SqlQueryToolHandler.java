@@ -28,11 +28,11 @@ public class SqlQueryToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Answers: any question over the data that the other tools don't already cover."
+    return "Answers: a one-off question none of the purpose-built tools cover -- try those first."
         + " Read-only escape hatch: run an arbitrary SELECT (CTEs supported, WITH ... SELECT)"
         + " against the register/evidence schema. Every statement runs read-only end to end;"
         + " any write is rejected, whether at input validation or at execution."
-        + "\n\nKeywords: Konto, Ausgaben, Beleg";
+        + "\n\nKeywords: SQL, Datenbank, Beleg";
   }
 
   @Override

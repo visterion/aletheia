@@ -34,7 +34,7 @@ public class DeleteTagRuleToolHandler implements ToolHandler {
     return "Answers: how do I remove an auto-tagging rule I no longer want? Delete a tag rule."
         + " Does NOT roll back tags it already applied (those are confirmed"
         + " decisions; adjust them with classify_counterparty)."
-        + "\n\nKeywords: Ausgaben, Abbuchung";
+        + "\n\nKeywords: Regel, Regeln, löschen";
   }
 
   @Override

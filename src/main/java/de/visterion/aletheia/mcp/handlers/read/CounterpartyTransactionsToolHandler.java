@@ -40,7 +40,7 @@ public class CounterpartyTransactionsToolHandler implements ToolHandler {
         + " positions: split parents are hidden (NOT EXISTS filter on split_parent_*);"
         + " children and unsplit originals are shown (javadoc references logical view)."
         + " Identity priority: attributed_name > creditor_id > iban > normalized name."
-        + "\n\nKeywords: Abbuchung, Konto, Beleg, Rechnung";
+        + "\n\nKeywords: Abbuchung, Lastschrift, Beleg, Rechnung";
   }
 
   @Override

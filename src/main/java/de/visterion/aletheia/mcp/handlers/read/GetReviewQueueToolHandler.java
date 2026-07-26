@@ -31,9 +31,8 @@ public class GetReviewQueueToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Answers: which obligations still need a human decision, ranked by what they cost per"
-        + " year? Ordered descending by estimated"
-        + " annual cost. Two shapes: an OPEN contract (contracts.status='open') -- the"
+    return "Answers: which obligations still need a human decision, ordered descending by"
+        + " estimated annual cost? Two shapes: an OPEN contract (contracts.status='open') -- the"
         + " primary decision unit for any counterparty that has a contract layer at all,"
         + " confirm/dismiss it via confirm_counterparty/dismiss_counterparty(contractId);"
         + " or, for a counterparty with no contract row whatsoever (e.g. an ELV obligation"
@@ -51,7 +50,7 @@ public class GetReviewQueueToolHandler implements ToolHandler {
         + " split children are excluded via NOT EXISTS on split_parent_*)."
         + " Null-valued fields are omitted from the JSON entirely in both shapes -- an absent"
         + " key means not applicable / not recorded."
-        + "\n\nKeywords: Verpflichtung, Vertrag, Beitrag, Kündigung";
+        + "\n\nKeywords: Verpflichtung, Verpflichtungen, Vertrag, Verträge, Beitrag, Kündigung";
   }
 
   @Override

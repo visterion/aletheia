@@ -31,9 +31,8 @@ public class SetTagRuleEnabledToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Answers: how do I pause or resume an auto-tagging rule without deleting it? Pause or"
-        + " resume a tag rule without deleting it."
-        + "\n\nKeywords: Ausgaben, Abbuchung";
+    return "Answers: how do I pause or resume an auto-tagging rule without deleting it?"
+        + "\n\nKeywords: Regel, Regeln, pausieren, aktivieren";
   }
 
   @Override

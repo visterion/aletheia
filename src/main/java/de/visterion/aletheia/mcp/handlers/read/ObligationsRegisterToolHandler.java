@@ -46,7 +46,8 @@ public class ObligationsRegisterToolHandler implements ToolHandler {
         + " logical transaction view (NOT EXISTS on split_parent_* excludes superseded"
         + " parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst;"
         + " auto tags do not exclude."
-        + "\n\nKeywords: Versicherung, Vertrag, Beitrag, Verpflichtung, Abo, Miete, Strom";
+        + "\n\nKeywords: Versicherung, Versicherungen, Vertrag, Verträge, Beitrag, Verpflichtung,"
+        + " Verpflichtungen, Abo, Miete, Strom, Haushalt, Finanzen, household finances";
   }
 
   @Override

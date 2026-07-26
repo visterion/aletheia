@@ -37,7 +37,7 @@ public class LinkContractToolHandler implements ToolHandler {
         + " confirm_counterparty/dismiss_counterparty without a contractId first to"
         + " materialize its contract row). Find the cell id via HiveMem:search with"
         + " where.realm=contracts (or the topic documenting the contract)."
-        + "\n\nKeywords: Vertrag, Beleg, Rechnung";
+        + "\n\nKeywords: Vertrag, Verträge, Beleg, Rechnung";
   }
 
   @Override

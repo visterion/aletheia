@@ -26,8 +26,7 @@ public class TaxonomyToolHandler implements ToolHandler {
   @Override
   public String description() {
     return "Answers: what tag values exist for domain/nature/necessity, and which are actually in"
-        + " use? The tag vocabulary per dimension (domain|nature|necessity). `seed` is the"
-        + " canonical"
+        + " use? `seed` is the canonical"
         + " start vocabulary -- try those values first. `values` is what is actually in use,"
         + " with counts. Introduce a new value only when nothing in seed fits; never invent a"
         + " synonym for a value that already exists."

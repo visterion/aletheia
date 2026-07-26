@@ -39,7 +39,8 @@ public class ListUnmatchedRecurringToolHandler implements ToolHandler {
         + " mandate-less auto series -- a recurring row with no contract_id at all (never"
         + " carried a mandate_id). contractId distinguishes the two shapes (set for (1),"
         + " null for (2))."
-        + "\n\nKeywords: Vertrag, Verpflichtung, Abbuchung, Beitrag, Abo";
+        + "\n\nKeywords: Vertrag, Verträge, Verpflichtung, Verpflichtungen, Abbuchung, Lastschrift,"
+        + " Beitrag, Abo";
   }
 
   @Override

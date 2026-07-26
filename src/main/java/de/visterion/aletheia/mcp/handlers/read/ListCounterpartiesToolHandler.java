@@ -42,7 +42,7 @@ public class ListCounterpartiesToolHandler implements ToolHandler {
         + " Optional namePattern filters case-insensitively on the effective display name"
         + " (LIKE-style -- % and _ act as wildcards); optional limit caps the number of"
         + " counterparties returned."
-        + "\n\nKeywords: Konto, Abbuchung, Ausgaben, Rechnung";
+        + "\n\nKeywords: Abbuchung, Ausgaben, Rechnung";
   }
 
   @Override

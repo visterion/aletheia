@@ -34,7 +34,7 @@ public class EndContractToolHandler implements ToolHandler {
         + " for today, and an optional reason. Only a confirmed contract can be ended. To reactivate a"
         + " mandate-less contract later, confirm the counterparty again -- it reopens the ended row."
         + " Example: end_contract(contractId=17, endDate=\"2026-06-30\", reason=\"cancelled\")."
-        + "\n\nKeywords: Vertrag, Kündigung, Versicherung, Abo";
+        + "\n\nKeywords: Vertrag, Verträge, Kündigung, Versicherung, Abo";
   }
 
   @Override

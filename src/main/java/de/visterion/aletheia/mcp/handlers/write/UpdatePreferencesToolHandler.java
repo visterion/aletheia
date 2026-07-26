@@ -36,7 +36,7 @@ public class UpdatePreferencesToolHandler implements ToolHandler {
         + " section only"
         + " -- the operating guide is protected. wake_up first, edit, write back the full"
         + " preferences markdown."
-        + "\n\nKeywords: Verpflichtung";
+        + "\n\nKeywords: Einstellungen, Vorlieben, merken";
   }
 
   @Override

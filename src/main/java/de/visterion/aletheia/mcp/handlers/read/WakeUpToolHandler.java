@@ -31,7 +31,7 @@ public class WakeUpToolHandler implements ToolHandler {
         + " customer's recorded preferences -- the operating guide itself lives in read_me."
         + " Follow any recorded preferences."
         + " Record durable preferences with update_preferences."
-        + "\n\nKeywords: Verpflichtung, Einkommen, Konto";
+        + "\n\nKeywords: Verpflichtung, Einkommen";
   }
 
   @Override

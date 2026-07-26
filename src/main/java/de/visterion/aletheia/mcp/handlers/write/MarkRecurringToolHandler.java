@@ -45,7 +45,7 @@ public class MarkRecurringToolHandler implements ToolHandler {
         + " are refreshed from transactions by ContractResolver on every startup, so a"
         + " manual override here is not durable for mandate contracts -- mandate-less"
         + " series (contractId=null) are not resolver-owned."
-        + "\n\nKeywords: Vertrag, Beitrag, Abbuchung";
+        + "\n\nKeywords: Vertrag, Beitrag, Abbuchung, Lastschrift";
   }
 
   @Override

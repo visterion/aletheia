@@ -39,8 +39,9 @@ public class AggregateToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Answers: how much did I spend or receive per month/quarter/year, and on what?"
-        + " Aggregates transactions over an inclusive [dateFrom, dateTo] date range -- replaces"
+    return "Answers: how much did I spend or receive per month/quarter/year, per category or"
+        + " counterparty -- as plain numbers, not a flow diagram? Aggregates transactions over an"
+        + " inclusive [dateFrom, dateTo] date range -- replaces"
         + " in-head arithmetic. Value expression: for a single direction"
         + " (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to"
         + " that direction; for direction=BOTH there is no direction filter and the amount"
@@ -58,18 +59,13 @@ public class AggregateToolHandler implements ToolHandler {
         + " e.g. a creditor_id and an iban, can share one display name)."
         + " Logical view: split parents are excluded (NOT EXISTS on split_parent_*); only"
         + " current leaf positions (children and unsplit originals) are aggregated."
-        + " The where selector also supports: txnCountMax (logical booking count <= N; a"
-        + " counterparty with no bookings counts as 0), natureNotIn/domainNotIn (exclude"
-        + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
-        + " (largest single booking in absolute EUR, credits included, within these bounds;"
-        + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
-        + " (last booking date, inclusive)."
+        + " where accepts the same selector fields as classify_counterparty."
         + " groupBy also accepts DOMAIN and NATURE: buckets are the counterparty's domain/nature"
         + " tag values (resolved through the identity CASE; a counterparty maps to a single value"
         + " per dimension -- confirmed over auto, then highest confidence, then alphabetical;"
         + " untagged or unresolved -> \"(untagged)\"). For a spend-by-category breakdown in ONE"
         + " call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this."
-        + "\n\nKeywords: Ausgaben, Einkommen, Gehalt, Netto, Konto";
+        + "\n\nKeywords: Ausgaben, Einkommen, Gehalt, Netto, Überweisung";
   }
 
   @Override

@@ -38,7 +38,7 @@ public class ListIncomeToolHandler implements ToolHandler {
         + " here, ordered by total received. Returns {rows, meta} rather than a bare array;"
         + " meta reports the unpaged total so a compact 25-row default page never hides"
         + " truncation."
-        + "\n\nKeywords: Gehalt, Einkommen, Netto";
+        + "\n\nKeywords: Gehalt, Einkommen, Netto, Überweisung";
   }
 
   @Override

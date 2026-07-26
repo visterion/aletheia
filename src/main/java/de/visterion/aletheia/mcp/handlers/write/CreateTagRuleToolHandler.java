@@ -44,7 +44,7 @@ public class CreateTagRuleToolHandler implements ToolHandler {
         + " match preview -- always dry-run first. dryRun=false persists (enabled) and, if"
         + " backfill=true, tags existing counterparties now; the rule also runs on every future"
         + " ingest. A match set of 200+ needs confirm=true."
-        + "\n\nKeywords: Ausgaben, Abbuchung, Konto";
+        + "\n\nKeywords: Regel, Regeln, automatisch, Kategorie, Abbuchung";
   }
 
   @Override

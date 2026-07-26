@@ -34,7 +34,7 @@ public class SetDisplayNameToolHandler implements ToolHandler {
         + " resolution or how splits route. Pass name=null (or omit) to clear it and revert to the"
         + " automatic most-frequent name. Rejects a folded (merged) counterparty -- set the label"
         + " on the canonical one. Example: set_display_name(counterpartyId=42, name=\"Corner Bakery\")."
-        + "\n\nKeywords: Konto";
+        + "\n\nKeywords: Name, umbenennen, Anzeigename";
   }
 
   @Override

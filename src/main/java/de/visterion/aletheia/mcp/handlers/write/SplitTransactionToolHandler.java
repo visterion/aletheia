@@ -46,7 +46,7 @@ public class SplitTransactionToolHandler implements ToolHandler {
         + " driven from counterpartyId identity (creditor_id/iban/name) or displayName for"
         + " correct resolution on purchase vs pseudo parts. Idempotent replace. All inside"
         + " one transaction."
-        + "\n\nKeywords: Abbuchung, Beleg, Konto, Rechnung";
+        + "\n\nKeywords: Abbuchung, Beleg, Rechnung";
   }
 
   @Override
