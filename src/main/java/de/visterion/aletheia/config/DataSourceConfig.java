@@ -22,7 +22,7 @@ import org.springframework.util.StringUtils;
 
 /**
  * Wires the two datasources from spec §6/§7: a {@code @Primary} app connection and a named {@code
- * roDsl} connection used exclusively by the SELECT-only {@code sql_query} tool.
+ * roDsl} connection used exclusively by the read-only {@code sql_query} tool.
  *
  * <p>In prod the app/ro credentials bind to two distinct, differently-privileged Postgres roles
  * ({@code aletheia_app} / {@code aletheia_ro}, provisioned out-of-band by a Postgres init script,
@@ -90,7 +90,7 @@ public class DataSourceConfig {
    *
    * <p>Boot's {@code DataSourceHealthContributorAutoConfiguration} would otherwise probe
    * <em>every</em> {@link DataSource} bean and fold the results into one composite, so {@code
-   * roDataSource} — used only by the SELECT-only {@code sql_query} tool — would be opened on every
+   * roDataSource} — used only by the read-only {@code sql_query} tool — would be opened on every
    * health check and could, on its own, mark the whole container DOWN while the MCP server and all
    * other tools still work. That auto-configuration carries {@code @ConditionalOnMissingBean(name =
    * {"dbHealthIndicator", "dbHealthContributor"})} (verified against spring-boot-jdbc 4.1.0), so

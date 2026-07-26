@@ -13,9 +13,12 @@ import org.springframework.beans.factory.annotation.Qualifier;
  * Verifies the two-datasource wiring from spec §6/§7: a {@code @Primary} app {@link DSLContext}
  * and a named {@code roDsl} {@link DSLContext} both exist and can run a SELECT.
  *
- * <p>Grant enforcement (the read-only role actually being unable to write) is a prod-only,
- * DB-role concern (spec §7) and is not exercised here; tests run single-role, so both beans
- * point at the same Testcontainers instance (see {@link AbstractPostgresIT}).
+ * <p>Grant enforcement (the read-only role actually being unable to write) is not exercised
+ * <em>here</em>: tests run single-role, so both beans point at the same Testcontainers instance
+ * (see {@link AbstractPostgresIT}). It is covered elsewhere — {@code SqlQueryIT} provisions a
+ * genuine SELECT-only role inside the container, and {@code SqlQueryReadOnlySessionIT} pins the
+ * actual write boundary, the per-call {@code SET TRANSACTION READ ONLY} transaction in {@code
+ * ReadTools#sqlQuery}, which holds regardless of role.
  */
 class ReadOnlyDataSourceIT extends AbstractPostgresIT {
 
