@@ -75,13 +75,20 @@ public class OperatingGuideService {
    * Drops a leading {@code # Customer preferences} line from the customer-owned text, because the
    * server emits that heading itself and would otherwise render it twice.
    *
-   * <p>Deliberately matches that exact heading and nothing else: a blanket "strip any leading H1"
-   * rule would also swallow a customer's own opening heading and silently keep only its body.
+   * <p>Deliberately matches that exact heading (case-insensitive, surrounding whitespace ignored)
+   * and nothing else: a blanket "strip any leading H1" rule would also swallow a customer's own
+   * opening heading and silently keep only its body. Leading blank lines are skipped before the
+   * comparison, so a preferences text that merely starts with an empty line still has its
+   * duplicate heading recognized and removed.
    */
   private static String stripDuplicateHeading(String preferences) {
-    String[] lines = preferences.split("\n", 2);
-    if (lines[0].strip().equalsIgnoreCase(PREFERENCES_HEADING)) {
-      return lines.length > 1 ? lines[1] : "";
+    String[] lines = preferences.split("\n", -1);
+    int i = 0;
+    while (i < lines.length && lines[i].isBlank()) {
+      i++;
+    }
+    if (i < lines.length && lines[i].strip().equalsIgnoreCase(PREFERENCES_HEADING)) {
+      return String.join("\n", java.util.Arrays.copyOfRange(lines, i + 1, lines.length));
     }
     return preferences;
   }

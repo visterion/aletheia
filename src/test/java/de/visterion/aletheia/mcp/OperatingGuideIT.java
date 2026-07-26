@@ -117,7 +117,11 @@ class OperatingGuideIT extends AbstractPostgresIT {
 
   @Test
   void readMeReturnsTheSeededGuideVerbatim() {
-    assertThat(service.operatingGuide()).contains("How to work with Aletheia");
+    assertThat(service.operatingGuide())
+        .isEqualTo(
+            (String)
+                db.fetchValue(
+                    "SELECT workflow_md FROM operating_guide WHERE scope='default'"));
   }
 
   @Test
@@ -128,6 +132,24 @@ class OperatingGuideIT extends AbstractPostgresIT {
 
     assertThat(md.split("# Customer preferences", -1)).hasSize(2); // exactly one occurrence
     assertThat(md).contains("## Household");
+  }
+
+  @Test
+  void aDuplicatedHeadingAfterALeadingBlankLineIsStrippedToo() {
+    // An LLM writing preferences with a leading newline is plausible; the strip must look past
+    // blank lines to find the heading, not just at literal line zero.
+    service.updatePreferences("\n# Customer preferences\n- body", "test");
+
+    String md = service.wakeUp();
+
+    assertThat(md.split("# Customer preferences", -1)).hasSize(2); // exactly one occurrence
+    assertThat(md).contains("- body");
+  }
+
+  @Test
+  void wakeUpStaysUnderTheLineBudget() {
+    String md = service.wakeUp(); // empty preferences (reset by @BeforeEach)
+    assertThat(md.lines().count()).isLessThanOrEqualTo(20);
   }
 
   @Test
