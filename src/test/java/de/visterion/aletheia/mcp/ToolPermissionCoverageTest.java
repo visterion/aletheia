@@ -14,6 +14,7 @@ import de.visterion.aletheia.mcp.handlers.read.ListIncomeToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ListTagRulesToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ListUnmatchedRecurringToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ObligationsRegisterToolHandler;
+import de.visterion.aletheia.mcp.handlers.read.ReadMeToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.SqlQueryToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.TaxonomyToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.WakeUpToolHandler;
@@ -41,7 +42,7 @@ import org.junit.jupiter.api.Test;
  * classes, registered in {@link ToolRegistry}) and {@link ToolPermissionService}'s
  * role-to-tool-name allow-list. A registered handler whose name is missing from the WRITER union
  * would be silently denied at runtime (fails closed) -- this test would catch that regression, and
- * an accidentally dropped or duplicated tool registration (guarded by the exact count of 27).
+ * an accidentally dropped or duplicated tool registration (guarded by the exact count of 28).
  *
  * <p>Rewritten for Task 10 (Spring AI removal): the previous version reflected on
  * {@code @Tool}-annotated methods on {@link ReadTools}/{@link WriteTools}; those classes no longer
@@ -82,13 +83,14 @@ class ToolPermissionCoverageTest {
         new MergeCounterpartyToolHandler(null),
         new SetDisplayNameToolHandler(null),
         new EndContractToolHandler(null),
-        new CashflowToolHandler(null));
+        new CashflowToolHandler(null),
+        new ReadMeToolHandler(null));
   }
 
   @Test
-  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentySix() {
+  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentyEight() {
     List<ToolHandler> handlers = allHandlers();
-    assertThat(handlers).as("exactly 27 MCP tool handlers are registered").hasSize(27);
+    assertThat(handlers).as("exactly 28 MCP tool handlers are registered").hasSize(28);
 
     Set<String> allToolNames = new HashSet<>();
     for (ToolHandler handler : handlers) {
@@ -102,10 +104,10 @@ class ToolPermissionCoverageTest {
     assertThat(allowedForWriter)
         .as("every registered tool handler name must be present in the WRITER permission union")
         .containsAll(allToolNames);
-    assertThat(allowedForWriter).as("exactly 27 tools are visible to WRITER").hasSize(27);
+    assertThat(allowedForWriter).as("exactly 28 tools are visible to WRITER").hasSize(28);
 
     Set<String> allowedForReader = new ToolPermissionService().allowedTools(AuthRole.READER);
-    assertThat(allowedForReader).as("exactly 13 tools are visible to READER").hasSize(13);
+    assertThat(allowedForReader).as("exactly 14 tools are visible to READER").hasSize(14);
   }
 
   @Test

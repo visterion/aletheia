@@ -1168,5 +1168,14 @@
         "dateTo"
       ]
     }
+  },
+  {
+    "name": "read_me",
+    "description": "The Aletheia operating guide: how to work with this register, what counts as a proposal versus a decision, and how to keep merchant identity distinct. Read it once per session when you need the rules; wake_up returns the live state and the customer's preferences.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    }
   }
 ]

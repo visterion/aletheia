@@ -50,8 +50,8 @@ public class McpController {
    * (spec §5 of the wakeup/operating-guide design).
    */
   private static final String INSTRUCTIONS =
-      "Before your first action, call the wake_up tool to load this customer's operating guide,"
-          + " their preferences, and the current state. Follow the operating guide. When you"
+      "Before your first action, call the wake_up tool for this customer's live state and"
+          + " recorded preferences. Call read_me for the operating guide and follow it. When you"
           + " learn a durable customer preference, record it with update_preferences.";
 
   /** SSE emitter lifetime; bounds how long a dead client connection can linger. */
