@@ -103,9 +103,22 @@ class ListIncomeIT extends AbstractPostgresIT {
   }
 
   @Test
-  void limitAndOffsetPageDeterministicallyAcrossTiedRows() {
-    // Three CRDT counterparties with identical credit_total: without the id tie-breaker Postgres
-    // may order them differently per query, so a row could appear on two pages and another on none.
+  void limitAndOffsetPagesWithoutLossOrDuplication() {
+    // Smoke test only -- it does NOT by itself prove the COUNTERPARTIES.ID tie-breaker in
+    // ReadTools.listIncome matters. Three CRDT counterparties share the same credit_total, so
+    // ties need *some* deterministic order across the three offset-1 queries below or a row
+    // could appear on two pages while another appears on none.
+    //
+    // An attempt was made to make this test fail when the tie-breaker is removed: rewriting one
+    // row (UPDATE ... SET reviewed = true) does change its physical position (verified via
+    // ctid: the row moves to a new heap slot after a HOT update). But the query still came back
+    // in ascending-id order after that perturbation, with or without the explicit
+    // COUNTERPARTIES.ID.asc() tie-breaker -- because for a table this small, Postgres's planner
+    // drives the join through an index scan on the counterparties primary key, which returns
+    // rows in id order independent of physical heap layout. There is no known reliable,
+    // non-flaky way to force a different tie order from black-box SQL at this scale, so this
+    // test cannot catch a missing tie-breaker; it only guards the coarser regression of a
+    // duplicated or dropped row across a paged walk.
     seedCreditCounterparty("TIE A", "100.00");
     seedCreditCounterparty("TIE B", "100.00");
     seedCreditCounterparty("TIE C", "100.00");
@@ -127,9 +140,11 @@ class ListIncomeIT extends AbstractPostgresIT {
 
     ListPage<IncomeRow> page = readTools.listIncome(new ListParams(2, 0, null, true));
 
+    // @AfterEach truncates counterparties after every test, so the table is empty when this test
+    // starts and rowsTotal is exactly the 3 seeded here -- not merely ">= 3".
     assertThat(page.rows()).hasSize(2);
     assertThat(page.meta().rowsReturned()).isEqualTo(2);
-    assertThat(page.meta().rowsTotal()).isGreaterThanOrEqualTo(3);
+    assertThat(page.meta().rowsTotal()).isEqualTo(3);
     assertThat(page.meta().rowsTotal()).isGreaterThan(page.meta().rowsReturned());
     assertThat(page.meta().limit()).isEqualTo(2);
     assertThat(page.meta().offset()).isZero();
@@ -159,11 +174,11 @@ class ListIncomeIT extends AbstractPostgresIT {
 
     assertThat(page.rows()).isEmpty();
     assertThat(page.meta().rowsReturned()).isZero();
-    assertThat(page.meta().rowsTotal()).isGreaterThanOrEqualTo(1);
+    assertThat(page.meta().rowsTotal()).isEqualTo(1);
   }
 
   @Test
-  void compactModeOmitsIdentityTypeAndFirstSeenFromTheSerializedJson() throws Exception {
+  void compactModeOmitsIdentityTypeAndFirstSeenFromTheSerializedJson() {
     seedCreditCounterparty("COMPACT", "77.00");
 
     ListPage<IncomeRow> compact =

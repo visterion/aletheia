@@ -34,7 +34,9 @@ public class ListIncomeToolHandler implements ToolHandler {
   public String description() {
     return "Incoming payments (CRDT): counterparties whose predominant direction is credit"
         + " (salary, transfers received) -- kept out of the obligations queue but available"
-        + " here, ordered by total received.";
+        + " here, ordered by total received. Returns {rows, meta} rather than a bare array;"
+        + " meta reports the unpaged total so a compact 25-row default page never hides"
+        + " truncation.";
   }
 
   @Override
