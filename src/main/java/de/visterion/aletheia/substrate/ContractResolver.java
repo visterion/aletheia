@@ -9,7 +9,8 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /**
- * On startup (after {@link CounterpartyResolver}, spec TP1 §Detection), derives the contract
+ * On startup (after {@link CounterpartyResolver} and {@link ProductSplitResolver}, spec TP1
+ * §Detection), derives the contract
  * layer from {@code transactions}: a {@code mandate_id} booked in >= 2 distinct calendar
  * months under a {@code creditor_id}-identity counterparty is a contract.
  *
@@ -33,7 +34,7 @@ import org.springframework.stereotype.Component;
  * by a human confirm/link.
  */
 @Component
-@Order(4)
+@Order(5)
 public class ContractResolver implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(ContractResolver.class);

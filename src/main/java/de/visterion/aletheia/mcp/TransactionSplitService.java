@@ -8,11 +8,7 @@ import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 import de.visterion.aletheia.substrate.NameNormalization;
 import de.visterion.aletheia.substrate.SplitChildWriter;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import org.jooq.DSLContext;
 import org.springframework.dao.DataAccessException;
@@ -104,7 +100,7 @@ public class TransactionSplitService {
     int created = 0;
     for (int i = 0; i < allocations.size(); i++) {
       Allocation a = allocations.get(i);
-      String childHash = syntheticSplitHash(tx.contentHash(), i);
+      String childHash = SplitChildWriter.syntheticSplitHash(tx.contentHash(), i);
 
       Long cpId = a.counterpartyId();
       String cpName;
@@ -227,17 +223,6 @@ public class TransactionSplitService {
 
     return new SplitTransactionAck(
         false, created, createdCpIds, "created " + created + " child allocation(s)");
-  }
-
-  private String syntheticSplitHash(String parentHash, int partIndex) {
-    String input = parentHash + "|" + partIndex + "|split-part";
-    try {
-      byte[] digest =
-          MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(digest);
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException("SHA-256 unavailable", e);
-    }
   }
 
   /**

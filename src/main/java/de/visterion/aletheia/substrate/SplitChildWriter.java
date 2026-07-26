@@ -3,6 +3,10 @@ package de.visterion.aletheia.substrate;
 import static de.visterion.aletheia.jooq.Tables.TRANSACTIONS;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.springframework.stereotype.Component;
@@ -46,6 +50,29 @@ public class SplitChildWriter {
       String mandateId,
       String product,
       String productPolicyNo) {}
+
+  /**
+   * The child's {@code content_hash}: a deterministic function of the parent hash and the child's
+   * index within the allocation list.
+   *
+   * <p>It lives here, next to the insert, for the same reason the insert does: both callers must
+   * derive the identical key or they would write two rows for one logical child. It is also why
+   * {@code split_transaction} runs under {@link SubstrateLock} -- with the same key on both sides, a
+   * concurrent tool call and resolver pass would otherwise collide on {@code
+   * uq_transactions_natural_key}.
+   *
+   * <p>Because the key is index-derived, every caller must order its allocations deterministically.
+   */
+  public static String syntheticSplitHash(String parentHash, int partIndex) {
+    String input = parentHash + "|" + partIndex + "|split-part";
+    try {
+      byte[] digest =
+          MessageDigest.getInstance("SHA-256").digest(input.getBytes(StandardCharsets.UTF_8));
+      return HexFormat.of().formatHex(digest);
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
+    }
+  }
 
   /**
    * Inserts one child row under {@code parent}.

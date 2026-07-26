@@ -18,7 +18,8 @@ import org.springframework.stereotype.Component;
  * <p>{@code @Order(1)} guarantees this runs before {@link
  * de.visterion.aletheia.substrate.PayPalAttributionResolver} ({@code @Order(2)}), {@link
  * de.visterion.aletheia.substrate.CounterpartyResolver} ({@code @Order(3)}), and {@link
- * de.visterion.aletheia.substrate.ContractResolver} ({@code @Order(4)}) — Spring does not order
+ * de.visterion.aletheia.substrate.ProductSplitResolver} ({@code @Order(4)}) and {@link
+ * de.visterion.aletheia.substrate.ContractResolver} ({@code @Order(5)}) — Spring does not order
  * {@link ApplicationRunner} beans without explicit {@code @Order} (spec §3, adversarial review
  * M5).
  */
