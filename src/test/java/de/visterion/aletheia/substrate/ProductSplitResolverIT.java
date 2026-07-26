@@ -24,17 +24,26 @@ import org.springframework.beans.factory.annotation.Autowired;
  *
  * <p>This suite must be an IT, not a plain unit test: product identity is the SQL normal form, and
  * Java cannot reproduce it (see {@link NameNormalization}). {@link
- * #capitalisationVariantsFoldToOneProduct} is the engine-parity tripwire — it only means anything
- * when the folding runs against the same PostgreSQL/libc pair production uses.
+ * #productNamesAreNormalizedByPostgresNotByJava} is the engine-parity tripwire — it only means
+ * anything when the folding runs against the same PostgreSQL/libc pair production uses. {@link
+ * #capitalisationVariantsFoldToOneProduct} covers the creditor's mid-history capitalisation change
+ * but is <em>not</em> a tripwire on its own: its fixtures are pure ASCII, and {@code Health}/{@code
+ * HEALTH} fold identically under Java's {@code toUpperCase} too.
  *
  * <p>All fixtures are hand-invented: {@code CDTR-INSURER}, {@code SYNTHETIC INSURER}, {@code
- * POLICY-1}, products {@code Health}/{@code Legal}/{@code Travel}. No production creditor id,
- * mandate reference or remittance string exists in this repository.
+ * POLICY-1}, products {@code Health}/{@code Legal}/{@code Travel}/{@code Straße}. No production
+ * creditor id, mandate reference or remittance string exists in this repository.
  */
 class ProductSplitResolverIT extends AbstractPostgresIT {
 
   private static final String CREDITOR = "CDTR-INSURER";
   private static final String MANDATE = "POLICY-1";
+
+  /**
+   * U+2003, spelled as an escape rather than inlined: it is invisible in an editor, and the whole
+   * point of {@link #productNamesAreNormalizedByPostgresNotByJava} is that it is there.
+   */
+  private static final String EM_SPACE = String.valueOf((char) 0x2003);
 
   /**
    * The rule pattern of the spec's synthetic illustration. The policy class must admit letters and
@@ -54,6 +63,33 @@ class ProductSplitResolverIT extends AbstractPostgresIT {
   /** Matches nothing in these fixtures: drives the "rule edited to zero positions" lifecycle. */
   private static final String PATTERN_NO_MATCH =
       "(?<product>ZZZZZ)\\s+(?<amount>[0-9]+,[0-9]{2})";
+
+  /**
+   * Admits an EM SPACE (U+2003) <em>inside</em> the product name. Java's {@code \s} does not match
+   * it, so it has to be spelled into the product class explicitly; PostgreSQL's {@code \s} collapses
+   * it, which is precisely the divergence {@link #productNamesAreNormalizedByPostgresNotByJava}
+   * exists to pin.
+   */
+  private static final String PATTERN_UNICODE =
+      "(?<product>[\\p{L}\\x{2003}]+)\\s+(?:(?<policy>[A-Z0-9.-]+)\\s+)?"
+          + "(?<amount>[0-9.]*[0-9],[0-9]{2})";
+
+  /** The N side of the N&harr;1 lifecycle fixture: matches {@code Legal} + {@code Travel}. */
+  private static final String PATTERN_TWO_POSITIONS =
+      "(?<product>Legal|Travel)\\s+(?:(?<policy>[A-Z0-9.-]+)\\s+)?"
+          + "(?<amount>[0-9.]*[0-9],[0-9]{2})";
+
+  /** The 1 side of the same fixture: matches {@code Health} alone, for the full booking amount. */
+  private static final String PATTERN_ONE_POSITION =
+      "(?<product>Health)\\s+(?<amount>[0-9.]*[0-9],[0-9]{2})";
+
+  /**
+   * One remittance that parses to either one or two positions depending on the rule, each summing
+   * exactly to the booking amount of {@code 150.00}. That is what makes both lifecycle transitions
+   * testable on the same booking, each starting from the state the other ends in.
+   */
+  private static final String LIFECYCLE_REMITTANCE =
+      "POLICY-1 Health 150,00 Legal 100,00 Travel 50,00";
 
   @Autowired DSLContext db;
   @Autowired ProductSplitResolver resolver;
@@ -131,6 +167,25 @@ class ProductSplitResolverIT extends AbstractPostgresIT {
     assertThat(counter("roots_mismatched")).isEqualTo(1);
   }
 
+  /**
+   * The no-epsilon guard at cent level: {@code 99,99 + 50,00 = 149,99} against a booking of {@code
+   * 150,00}. The other mismatch fixtures are off by 10.00 and 849.00, which a &plusmn;0.01 tolerance
+   * or a "round the remainder into the largest position" fix would still reject — so they do not
+   * discriminate. Spec §5: no tolerance, no epsilon, no rounding of a remainder.
+   */
+  @Test
+  void centLevelNearMissIsAMismatchNotARounding() {
+    seedRule(PATTERN);
+    String parent = seedBooking("nearmiss", "150.00", "POLICY-1 Health 99,99 Legal 50,00");
+
+    resolver.resolve();
+
+    assertThat(children(parent)).isEmpty();
+    assertThat(product(parent)).isNull();
+    assertThat(counter("roots_mismatched")).isEqualTo(1);
+    assertThat(counter("roots_split")).isZero();
+  }
+
   @Test
   void sameProductTwiceFoldsIntoOneChild() {
     seedRule(PATTERN);
@@ -175,23 +230,143 @@ class ProductSplitResolverIT extends AbstractPostgresIT {
     assertThat(distinct).containsExactly("HEALTH", "LEGAL");
   }
 
+  /**
+   * The engine-parity tripwire proper: it fails the moment product normalization moves into Java.
+   *
+   * <p>Both fixtures are chosen because the two engines genuinely disagree about them, which pure
+   * ASCII never does:
+   *
+   * <ul>
+   *   <li>{@code Straße} — PostgreSQL's {@code upper()} delegates to libc, and this project pins
+   *       {@code postgres:16-alpine} (musl), where {@code upper('straße')} is {@code STRAẞE}. Java's
+   *       {@code toUpperCase(Locale.ROOT)} has no {@code ß -> ẞ} mapping and yields {@code STRASSE}
+   *       — which is itself a fixpoint of the V19 CHECK, so a Java normal form would pass the
+   *       constraint and quietly mint a <em>second</em> product for the same thing. That is the V18
+   *       failure mode one level down, and no constraint would catch it.
+   *   <li>{@code Travel}+U+2003+{@code Plus} — PostgreSQL's {@code \s} collapses the EM SPACE to a
+   *       single {@code U+0020}; Java's {@code \s} and {@code String.trim()} do not touch it. A
+   *       Java-normalized value would not be a fixpoint and would violate the V19 CHECK outright.
+   * </ul>
+   *
+   * <p>Environment dependency, stated honestly: the {@code STRAẞE} expectation encodes <b>musl</b>
+   * behaviour. A glibc-based Postgres yields {@code STRAßE}. Like {@code
+   * NameNormalizationSqlIT#engineTripwireUpperOfEszettIsCapitalEszettUnderMusl}, this asserts the
+   * production engine, so a red here means the image pin moved — fix the pin, do not adjust the
+   * expectation.
+   */
+  @Test
+  void productNamesAreNormalizedByPostgresNotByJava() {
+    seedRule(PATTERN_UNICODE);
+    String parent =
+        seedBooking(
+            "engine", "150.00", "POLICY-1 Straße 100,00 Travel" + EM_SPACE + "Plus 50,00");
+    String eszett = seedBooking("eszett", "100.00", "POLICY-1 Straße 100,00");
+
+    resolver.resolve();
+
+    // The eszett case on its own root, because it is the insidious one: STRASSE is itself a
+    // fixpoint of the V19 CHECK, so a Java normal form would be accepted here and would mint a
+    // second product for the same thing. No constraint catches that -- only this assertion does.
+    assertThat(product(eszett))
+        .withFailMessage(
+            "product was '%s', not 'STRAẞE'. PostgreSQL on musl maps ß to capital eszett; Java's"
+                + " toUpperCase yields STRASSE, which passes the V19 CHECK and would silently"
+                + " become a second product for the same cover.",
+            product(eszett))
+        .isEqualTo("STRAẞE");
+
+    Result<Record> children = children(parent);
+    assertThat(children).hasSize(2);
+    assertThat(sumOf(children)).isEqualByComparingTo("150.00");
+    assertThat(children.map(r -> r.get("product", String.class)))
+        .withFailMessage(
+            "Products must carry the PostgreSQL normal form. Java's toUpperCase would produce"
+                + " STRASSE (no ss -> capital eszett mapping) and would leave the EM SPACE in"
+                + " TRAVEL PLUS uncollapsed. Getting anything but [STRAẞE, TRAVEL PLUS] here means"
+                + " either normalization moved into Java, or the postgres:16-alpine image is no"
+                + " longer musl-based.")
+        .containsExactlyInAnyOrder("STRAẞE", "TRAVEL PLUS");
+    // The values reached the column, so they satisfy V19's fixpoint CHECK by construction; the
+    // Java forms would not (EM SPACE) or would collide later (STRASSE).
+  }
+
   // -----------------------------------------------------------------------------------------
   // idempotency and rule lifecycle
   // -----------------------------------------------------------------------------------------
 
+  /**
+   * Re-running must write <em>nothing</em>, not merely end in the same shape.
+   *
+   * <p>Row counts and child hashes alone do not prove that: a delete-and-recreate reproduces both
+   * exactly, because the child key is derived from the parent hash and the index. The identity
+   * column is the only value that changes under a recreate, so it is what pins the "re-delete and
+   * recreate on every resolve, forever" failure mode.
+   */
   @Test
   void rerunCreatesNothing() {
     seedRule(PATTERN);
     String parent = seedBooking("rerun", "150.00", "POLICY-1 Health 100,00 Legal SUB-2 50,00");
 
     resolver.resolve();
-    List<String> first = childHashes(parent);
+    List<String> firstHashes = childHashes(parent);
+    List<Long> firstIds = childIds(parent);
     resolver.resolve();
-    List<String> second = childHashes(parent);
 
-    assertThat(first).hasSize(2);
-    assertThat(second).isEqualTo(first);
+    assertThat(firstHashes).hasSize(2);
+    assertThat(childHashes(parent)).isEqualTo(firstHashes);
+    assertThat(childIds(parent))
+        .withFailMessage(
+            "child ids changed from %s to %s: the children were deleted and recreated, which is a"
+                + " write on every resolve even though the result looks identical",
+            firstIds, childIds(parent))
+        .isEqualTo(firstIds);
     assertThat(db.fetchCount(DSL.table("transactions"))).isEqualTo(3);
+  }
+
+  /**
+   * N&rarr;1: a rule edit that turns a split booking into a single position must delete the product
+   * children <b>and</b> stamp the root. Leaving the children behind would double-count at the
+   * contract grain — orphan children summing to the full amount plus a stamped parent.
+   */
+  @Test
+  void ruleEditFromSplitToSinglePositionDeletesChildrenAndStampsRoot() {
+    seedRule(PATTERN_TWO_POSITIONS);
+    String parent = seedBooking("n-to-1", "150.00", LIFECYCLE_REMITTANCE);
+    resolver.resolve();
+    assertThat(children(parent)).hasSize(2);
+    assertThat(product(parent)).isNull();
+
+    setRulePattern(PATTERN_ONE_POSITION);
+    resolver.resolve();
+
+    assertThat(children(parent)).isEmpty();
+    assertThat(product(parent)).isEqualTo("HEALTH");
+    assertThat(db.fetchCount(DSL.table("transactions"))).isEqualTo(1);
+  }
+
+  /**
+   * 1&rarr;N: the mirror image. Children are written and the root's stamp is cleared — starting
+   * from a root that really was stamped, so the {@code product IS NULL} assertion is not trivially
+   * true the way it is on a parent that never carried one.
+   */
+  @Test
+  void ruleEditFromSinglePositionToSplitClearsRootStamp() {
+    seedRule(PATTERN_ONE_POSITION);
+    String parent = seedBooking("1-to-n", "150.00", LIFECYCLE_REMITTANCE);
+    resolver.resolve();
+    assertThat(product(parent)).isEqualTo("HEALTH");
+    assertThat(children(parent)).isEmpty();
+
+    setRulePattern(PATTERN_TWO_POSITIONS);
+    resolver.resolve();
+
+    Result<Record> children = children(parent);
+    assertThat(children).hasSize(2);
+    assertThat(children.map(r -> r.get("product", String.class)))
+        .containsExactly("LEGAL", "TRAVEL");
+    assertThat(sumOf(children)).isEqualByComparingTo("150.00");
+    assertThat(product(parent)).isNull();
+    assertThat(policyNo(parent)).isNull();
   }
 
   @Test
@@ -325,6 +500,37 @@ class ProductSplitResolverIT extends AbstractPostgresIT {
     assertThat(db.fetchOne("SELECT last_resolved_at FROM product_rules").get(0)).isNotNull();
   }
 
+  /**
+   * Per-root error isolation. One root that throws must not abort the creditor's remaining history,
+   * and must not cost the counter surface its update — otherwise {@code list_product_rules} and the
+   * {@code wake_up} warning line would keep showing the previous pass's numbers exactly when
+   * something is wrong.
+   *
+   * <p>The failure is provoked the way production can produce it: another row already occupies the
+   * natural key {@code (content_hash, occurrence_index)} that the poisoned root's first child would
+   * claim — the collision a concurrent {@code split_transaction} can cause. The blocker belongs to
+   * a different creditor, so it is never itself a root of this rule.
+   */
+  @Test
+  void failingRootDoesNotAbortTheRestOrTheCounterWrite() {
+    seedRule(PATTERN);
+    // Roots are processed ordered by content_hash, so "root-a-..." is visited before "root-b-...":
+    // the healthy root really comes after the poisoned one.
+    String poisoned = seedBooking("a-poison", "150.00", "POLICY-1 Health 100,00 Legal SUB-2 50,00");
+    String healthy = seedBooking("b-healthy", "150.00", "POLICY-1 Health 100,00 Legal SUB-2 50,00");
+    seedNaturalKeyBlocker(SplitChildWriter.syntheticSplitHash(poisoned, 0));
+
+    resolver.resolve();
+
+    assertThat(children(poisoned)).isEmpty();
+    assertThat(product(poisoned)).isNull();
+    assertThat(children(healthy)).hasSize(2);
+    assertThat(sumOf(children(healthy))).isEqualByComparingTo("150.00");
+    assertThat(counter("roots_visited")).isEqualTo(2);
+    assertThat(counter("roots_split")).isEqualTo(1);
+    assertThat(db.fetchOne("SELECT last_resolved_at FROM product_rules").get(0)).isNotNull();
+  }
+
   /** A creditor without a rule is never visited: the change is scoped, not global. */
   @Test
   void creditorWithoutARuleIsUntouched() {
@@ -400,6 +606,23 @@ class ProductSplitResolverIT extends AbstractPostgresIT {
     return hash;
   }
 
+  /**
+   * An unrelated raw booking occupying {@code contentHash} at {@code occurrence_index = 0}, so the
+   * child insert that wants that key fails on {@code uq_transactions_natural_key}. It carries
+   * another creditor id and therefore never becomes a root of the rule under test.
+   */
+  private void seedNaturalKeyBlocker(String contentHash) {
+    db.execute(
+        "INSERT INTO transactions (content_hash, occurrence_index, import_id, booking_date,"
+            + " amount, currency, direction, booking_status, remittance_info, counterparty_name,"
+            + " creditor_id, raw)"
+            + " VALUES (?, 0, ?, ?, '1.00', 'EUR', 'DBIT', 'BOOK', 'blocker', 'SYNTHETIC OTHER',"
+            + " 'CDTR-OTHER', '{}'::jsonb)",
+        contentHash,
+        importId,
+        LocalDate.of(2026, 1, 15));
+  }
+
   private Result<Record> children(String parentHash) {
     return db.fetch(
         "SELECT * FROM transactions WHERE split_parent_content_hash = ?"
@@ -409,6 +632,11 @@ class ProductSplitResolverIT extends AbstractPostgresIT {
 
   private List<String> childHashes(String parentHash) {
     return children(parentHash).map(r -> r.get("content_hash", String.class));
+  }
+
+  /** The identity column: unchanged means "not written", where a hash only means "same shape". */
+  private List<Long> childIds(String parentHash) {
+    return children(parentHash).map(r -> r.get("id", Long.class));
   }
 
   private List<String> policyNumbers(String parentHash) {

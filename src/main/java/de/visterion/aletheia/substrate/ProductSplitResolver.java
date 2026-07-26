@@ -131,8 +131,14 @@ public class ProductSplitResolver implements ApplicationRunner {
   }
 
   /**
-   * Applies every enabled rule. One bad rule (an uncompilable pattern, a failing root) is logged
-   * and skipped; the rest still run.
+   * Applies every enabled rule.
+   *
+   * <p>Resilience is two-layered and both layers are real: a bad rule (an uncompilable pattern, a
+   * pattern missing a required capture group) is logged and skipped so the remaining rules still
+   * run, and <em>within</em> a rule a single failing root is logged at WARN with its identity,
+   * counted and stepped over so the creditor's remaining history is still processed. The counter
+   * write happens in a {@code finally}, so a failure can never leave {@code list_product_rules} and
+   * the {@code wake_up} warning line showing the previous pass's numbers.
    */
   public void resolve() {
     substrateLock.lock();
@@ -173,22 +179,42 @@ public class ProductSplitResolver implements ApplicationRunner {
             .fetch();
 
     Counters counters = new Counters();
-    for (Record root : roots) {
-      counters.visited++;
-      Outcome outcome = tx.execute(status -> resolveRoot(rule, root));
-      counters.record(outcome);
+    try {
+      for (Record root : roots) {
+        counters.visited++;
+        // Per-root isolation. One root that throws -- a CHECK violation, or a natural-key
+        // collision with a concurrent writer -- must not abort the creditor's remaining history,
+        // and must not cost the counter surface its update: the residue numbers matter most
+        // exactly when something is going wrong.
+        try {
+          Outcome outcome = tx.execute(status -> resolveRoot(rule, root));
+          counters.record(outcome);
+        } catch (RuntimeException e) {
+          counters.failed++;
+          log.warn(
+              "Product rule {} ({}): root {}/{} failed and was skipped: {}",
+              rule.id(),
+              rule.creditorId(),
+              root.get(TRANSACTIONS.CONTENT_HASH),
+              root.get(TRANSACTIONS.OCCURRENCE_INDEX),
+              e.toString());
+        }
+      }
+    } finally {
+      writeCounters(rule, counters);
     }
-    writeCounters(rule, counters);
 
     log.info(
-        "Product rule {} ({}): visited {} root(s), split {}, stamped {}, mismatched {}, skipped {}",
+        "Product rule {} ({}): visited {} root(s), split {}, stamped {}, mismatched {}, skipped {},"
+            + " failed {}",
         rule.id(),
         rule.creditorId(),
         counters.visited,
         counters.split,
         counters.stamped,
         counters.mismatched,
-        counters.skipped);
+        counters.skipped,
+        counters.failed);
   }
 
   // -----------------------------------------------------------------------------------------
@@ -449,6 +475,14 @@ public class ProductSplitResolver implements ApplicationRunner {
     private int stamped;
     private int mismatched;
     private int skipped;
+
+    /**
+     * Roots whose unit threw. In-memory and log-only: {@code product_rules} has no column for it
+     * (V19, spec §3), and adding one is a migration, not part of this fix. {@code roots_visited}
+     * still counts them, so a persistent failure shows up as visited &gt; split + stamped +
+     * mismatched on the residue surface.
+     */
+    private int failed;
 
     void record(Outcome outcome) {
       switch (outcome) {
