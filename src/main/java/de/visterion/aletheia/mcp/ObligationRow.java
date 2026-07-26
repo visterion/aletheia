@@ -7,7 +7,8 @@ import java.util.List;
 /**
  * One row of {@link ReadTools#obligationsRegister} (spec §5, TP1 contract grain): a confirmed
  * {@code contracts} row with its documented annual cost and contract-link status. One row per
- * confirmed contract -- a counterparty with two confirmed contracts (e.g. two Debeka policies)
+ * confirmed contract -- a counterparty with two confirmed contracts (e.g. two policies with the
+ * same insurer)
  * produces two rows, each carrying its OWN annual cost (spec review M1: never the counterparty's
  * combined debit).
  *

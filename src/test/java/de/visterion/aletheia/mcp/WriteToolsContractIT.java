@@ -226,8 +226,8 @@ class WriteToolsContractIT extends AbstractPostgresIT {
 
   @Test
   void confirmWithNoContractIdDoesNotFlipMandateLinkedRecurringWhenNoMandatelessRowExists() {
-    // The Debeka case (final-review Fix #1): a split counterparty whose recurring rows are ALL
-    // mandate-linked (no contract_id IS NULL row) must NOT fall into the legacy
+    // The two-policy insurer case (final-review Fix #1): a split counterparty whose recurring rows
+    // are ALL mandate-linked (no contract_id IS NULL row) must NOT fall into the legacy
     // tag/recurring-wide confirm -- only the per-contract path may confirm mandate contracts.
     long id = counterpartyWithOneTransaction("CDTR-SPLIT-MANDATE", "Split Mandate Co");
     long contractA = seedContract(id, "MANDATE-A");

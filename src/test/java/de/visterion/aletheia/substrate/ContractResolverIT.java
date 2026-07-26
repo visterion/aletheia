@@ -85,15 +85,15 @@ class ContractResolverIT extends AbstractPostgresIT {
 
   @Test
   void two_recurring_mandates_split_into_two_contracts_with_recurring() {
-    long cp = seedCounterparty("CR-DEBEKA");
-    booking("CR-DEBEKA", "MND-A", "2025-01-01", "811.75");
-    booking("CR-DEBEKA", "MND-A", "2025-02-01", "811.75");
-    booking("CR-DEBEKA", "MND-B", "2025-01-01", "395.72");
-    booking("CR-DEBEKA", "MND-B", "2025-02-01", "395.72");
+    long cp = seedCounterparty("CR-INSURER");
+    booking("CR-INSURER", "MND-A", "2025-01-01", "100.00");
+    booking("CR-INSURER", "MND-A", "2025-02-01", "100.00");
+    booking("CR-INSURER", "MND-B", "2025-01-01", "200.00");
+    booking("CR-INSURER", "MND-B", "2025-02-01", "200.00");
 
     new ContractResolver(db).run(null);
 
-    assertThat(contractCount("CR-DEBEKA")).isEqualTo(2);
+    assertThat(contractCount("CR-INSURER")).isEqualTo(2);
     assertThat(recurringCountForContractsOf(cp)).isEqualTo(2);
   }
 
