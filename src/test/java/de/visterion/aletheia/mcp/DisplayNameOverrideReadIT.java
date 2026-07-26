@@ -169,7 +169,8 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
   void obligationsRegisterReturnsTheOverrideAsDisplayName() {
     long x = seedDbitCounterparty();
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     ObligationRow row =
         register.rows().stream().filter(r -> r.counterpartyId() == x).findFirst().orElseThrow();

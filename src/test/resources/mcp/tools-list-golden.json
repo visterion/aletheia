@@ -19,11 +19,28 @@
   },
   {
     "name": "obligations_register",
-    "description": "The documented obligations register: confirmed contracts (TP1 contract grain -- one row per confirmed contracts row, so a counterparty with two confirmed contracts, e.g. two insurance policies, produces two rows) with annual cost, tags and contract-link status, ordered by annual cost, plus the total. Each row's annual cost is scoped to its OWN contract -- never the counterparty's combined debit. All debit/annual cost figures are derived from the logical transaction view (NOT EXISTS on split_parent_* excludes superseded parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags do not exclude.",
+    "description": "The documented obligations register: confirmed contracts (TP1 contract grain -- one row per confirmed contracts row, so a counterparty with two confirmed contracts, e.g. two insurance policies, produces two rows) with annual cost, tags and contract-link status, ordered by annual cost descending (contractId ascending as tie-breaker), plus the total. Each row's annual cost is scoped to its OWN contract -- never the counterparty's combined debit. totalAnnualCost is the sum over ALL matching contracts, computed after minAmount but before limit/offset -- it does NOT match the sum of the returned page once either paging parameter is set. All debit/annual cost figures are derived from the logical transaction view (NOT EXISTS on split_parent_* excludes superseded parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst; auto tags do not exclude.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {}
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "max rows to return (default 25); must be > 0"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "rows to skip for paging (default 0); must be >= 0"
+        },
+        "minAmount": {
+          "type": "number",
+          "description": "only contracts whose estimated annual cost is >= this value (default: no filter)"
+        },
+        "verbose": {
+          "type": "boolean",
+          "description": "false (default): {contractId, counterpartyId, displayName, cadence, annualCost}; true: adds mandateId, identityType, tags, hasContract, hivememCellId"
+        }
+      }
     }
   },
   {

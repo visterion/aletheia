@@ -320,7 +320,8 @@ class MergeCounterpartyIT extends AbstractPostgresIT {
     assertThat(recurringRow.getCadence()).isEqualTo("monthly");
     assertThat(recurringRow.getTypicalAmount()).isEqualByComparingTo("19.99");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
     assertThat(register.rows().stream().anyMatch(c -> c.contractId() == contractRow.getId()))
         .isTrue();
   }

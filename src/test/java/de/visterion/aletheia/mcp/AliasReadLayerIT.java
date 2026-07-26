@@ -195,7 +195,8 @@ class AliasReadLayerIT extends AbstractPostgresIT {
     long[] ids = seedMergedPair();
     long b = ids[1];
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).extracting(ObligationRow::counterpartyId).doesNotContain(b);
   }

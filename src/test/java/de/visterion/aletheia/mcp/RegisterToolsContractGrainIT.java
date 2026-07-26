@@ -118,7 +118,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
     writeTools.confirmCounterparty(debekaId, contractB, null, null, null, null, null, null, null);
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).hasSize(2);
     assertThat(register.rows())
@@ -141,7 +142,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
     writeTools.confirmCounterparty(debekaId, contractB, null, null, null, null, null, null, null);
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     ObligationRow rowA =
         register.rows().stream().filter(r -> r.contractId() == contractA).findFirst().orElseThrow();
@@ -171,7 +173,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
                 .fetchOne(COUNTERPARTIES.STATUS))
         .isEqualTo("open");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).hasSize(1);
     assertThat(register.rows().get(0).contractId()).isEqualTo(contractA);
@@ -197,7 +200,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     Long materializedContractId = contractIdFor(id, null);
     assertThat(materializedContractId).isNotNull();
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, true));
 
     assertThat(register.rows()).hasSize(1);
     ObligationRow row = register.rows().get(0);
@@ -228,7 +232,8 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
     Long materializedContractId = contractIdFor(id, null);
     assertThat(materializedContractId).isNotNull();
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).hasSize(1);
     ObligationRow row = register.rows().get(0);

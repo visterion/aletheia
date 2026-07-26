@@ -962,7 +962,10 @@ public class ReadTools {
     return dimensions;
   }
 
-  public ObligationsRegister obligationsRegister() {
+  public ObligationsRegister obligationsRegister(ListParams params) {
+    ListParams effective = params == null ? new ListParams(null, null, null, null) : params;
+    boolean verbose = effective.effectiveVerbose();
+
     var rows =
         db.select(
                 CONTRACTS.ID,
@@ -1026,24 +1029,50 @@ public class ReadTools {
           new ObligationRow(
               counterpartyId,
               row.get(DISPLAY_NAME_EFFECTIVE),
-              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              verbose ? row.get(COUNTERPARTIES.IDENTITY_TYPE) : null,
               row.get(CONTRACTS.ID),
-              row.get(CONTRACTS.MANDATE_ID),
+              verbose ? row.get(CONTRACTS.MANDATE_ID) : null,
               recurring == null ? null : recurring.cadence(),
               AnnualCost.estimate(recurring, debitFallback),
-              tagsByCounterparty.getOrDefault(counterpartyId, List.of()),
-              true,
-              row.get(CONTRACTS.HIVEMEM_CELL_ID)));
+              verbose ? tagsByCounterparty.getOrDefault(counterpartyId, List.of()) : null,
+              verbose ? Boolean.TRUE : null,
+              verbose ? row.get(CONTRACTS.HIVEMEM_CELL_ID) : null));
     }
 
-    obligationRows.sort(Comparator.comparing(ObligationRow::annualCost).reversed());
+    if (effective.minAmount() != null) {
+      obligationRows.removeIf(r -> r.annualCost().compareTo(effective.minAmount()) < 0);
+    }
+
+    // annualCost alone is not a total order: several contracts share the BigDecimal.ZERO fallback
+    // from AnnualCost:49, and without a tie-breaker a tied row can appear on two pages at once.
+    obligationRows.sort(
+        Comparator.comparing(ObligationRow::annualCost)
+            .reversed()
+            // thenComparingLong, not thenComparing: contractId() returns a primitive long, and the
+            // generic overload does not accept that method reference.
+            .thenComparingLong(ObligationRow::contractId));
 
     BigDecimal total =
         obligationRows.stream()
             .map(ObligationRow::annualCost)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-    return new ObligationsRegister(obligationRows, total);
+    long rowsTotal = obligationRows.size();
+    // long arithmetic on purpose: from + limit overflows int for limit=Integer.MAX_VALUE, which a
+    // caller can set, and an overflowed negative "to" would throw from subList.
+    int from = (int) Math.min((long) effective.effectiveOffset(), obligationRows.size());
+    int to = (int) Math.min((long) from + effective.effectiveLimit(), obligationRows.size());
+    List<ObligationRow> page = List.copyOf(obligationRows.subList(from, to));
+
+    return new ObligationsRegister(
+        page,
+        total,
+        new ListPageMeta(
+            rowsTotal,
+            page.size(),
+            effective.effectiveLimit(),
+            effective.effectiveOffset(),
+            effective.minAmount()));
   }
 
   public ListPage<IncomeRow> listIncome(ListParams params) {

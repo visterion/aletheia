@@ -127,7 +127,8 @@ class EndContractIT extends AbstractPostgresIT {
     assertThat(history.get(COUNTERPARTY_HISTORY.OLD_VALUE)).isEqualTo("confirmed");
     assertThat(history.get(COUNTERPARTY_HISTORY.NEW_VALUE)).isEqualTo("ended");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
     assertThat(register.rows()).noneMatch(r -> r.contractId() == contractA);
     assertThat(register.totalAnnualCost()).isEqualByComparingTo(BigDecimal.ZERO);
 
@@ -314,7 +315,8 @@ class EndContractIT extends AbstractPostgresIT {
     Record row = contractRow(contractId);
     assertThat(row.get(CONTRACTS.STATUS)).isEqualTo("dismissed");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
     assertThat(register.rows()).noneMatch(r -> Long.valueOf(contractId).equals(r.contractId()));
   }
 
@@ -337,7 +339,8 @@ class EndContractIT extends AbstractPostgresIT {
     Record row = contractRow(contractId);
     assertThat(row.get(CONTRACTS.STATUS)).isEqualTo("dismissed");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
     assertThat(register.rows()).noneMatch(r -> Long.valueOf(contractId).equals(r.contractId()));
   }
 }

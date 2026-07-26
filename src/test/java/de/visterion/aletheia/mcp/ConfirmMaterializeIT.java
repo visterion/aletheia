@@ -148,7 +148,8 @@ class ConfirmMaterializeIT extends AbstractPostgresIT {
     assertThat(cp.get(COUNTERPARTIES.REVIEWED)).isTrue();
     assertThat(cp.get(COUNTERPARTIES.STATUS)).isEqualTo("confirmed");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
     assertThat(register.rows())
         .anyMatch(
             r ->
