@@ -29,10 +29,8 @@ public class SqlQueryToolHandler implements ToolHandler {
   @Override
   public String description() {
     return "Read-only escape hatch: run an arbitrary SELECT (CTEs supported, WITH ... SELECT)"
-        + " against the register/evidence schema. Stacked statements and SELECT INTO are"
-        + " rejected before execution, but a WITH-prefixed write (e.g. WITH x AS (DELETE ...)"
-        + " SELECT ...) is not caught by that check -- it is stopped by the connection itself,"
-        + " which runs read-only, so any write fails at the database, not at the input check.";
+        + " against the register/evidence schema. Every statement runs read-only end to end;"
+        + " any write is rejected, whether at input validation or at execution.";
   }
 
   @Override

@@ -124,9 +124,13 @@ public class DataSourceConfig {
     }
     // Every connection this pool hands out starts a read-only session (Postgres refuses DML with
     // SQLSTATE 25006), independent of what the underlying DB role is granted -- see
-    // ReadOnlyConnectionGuard. Forcing HikariDataSource (already on the classpath transitively;
-    // it is Boot's default pool) rather than relying on DataSourceBuilder's auto-detected type so
-    // connectionInitSql can be set without a runtime cast.
+    // ReadOnlyConnectionGuard. Defense in depth only: default_transaction_read_only is USERSET, so
+    // a caller can flip it back off on the pooled connection (connectionInitSql runs once, at
+    // connection creation, not per query); the actual boundary is the per-call SET TRANSACTION
+    // READ ONLY transaction in ReadTools.sqlQuery. Forcing HikariDataSource (already on the
+    // classpath transitively; it is Boot's default pool) rather than relying on
+    // DataSourceBuilder's auto-detected type so connectionInitSql can be set without a runtime
+    // cast.
     HikariDataSource dataSource =
         DataSourceBuilder.create()
             .type(HikariDataSource.class)

@@ -22,11 +22,17 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
  * Pins the {@code sql_query} statement gate after it was widened to accept a leading {@code WITH}.
  *
  * <p>The widened regex admits statements that write -- both a write inside a CTE and a top-level
- * write with a CTE prefix -- so the SELECT-only database role is the only thing standing between
- * the LLM and a mutation. {@code AbstractPostgresIT} points BOTH datasources at the same
- * full-privilege container user ("tests run single-role"), so a naive version of the write test
- * would not fail -- it would execute the DELETE and report green. This class therefore provisions
- * its own restricted role and drives {@link ReadTools} through it.
+ * write with a CTE prefix -- so something downstream of the regex has to stop them. The actual
+ * boundary is the per-call {@code SET TRANSACTION READ ONLY} transaction in {@link
+ * ReadTools#sqlQuery} (see {@code SqlQueryReadOnlySessionIT}); the SELECT-only database role
+ * exercised here is an independent, additional defense-in-depth layer, not the only thing
+ * standing between the LLM and a mutation. {@code AbstractPostgresIT} points BOTH datasources at
+ * the same full-privilege container user ("tests run single-role"), so a naive version of the
+ * write test would not fail on the role alone -- it would need the role AND the transaction-level
+ * guard both missing to execute the DELETE and report green. This class provisions its own
+ * restricted role: one test drives it directly (bypassing {@link ReadTools#sqlQuery}) to prove
+ * the role layer holds in isolation, and two drive it through {@link ReadTools#sqlQuery}, where
+ * the transaction-level guard fires first and dominates the observed error.
  */
 class SqlQueryIT extends AbstractPostgresIT {
 
@@ -37,6 +43,7 @@ class SqlQueryIT extends AbstractPostgresIT {
   @Autowired private ReadTools readTools;
 
   private ReadTools restrictedReadTools;
+  private DSLContext restrictedRo;
 
   @BeforeEach
   void provisionReadOnlyRole() {
@@ -59,7 +66,7 @@ class SqlQueryIT extends AbstractPostgresIT {
     ds.setUrl(containerJdbcUrl());
     ds.setUsername(RO_USER);
     ds.setPassword(RO_PASSWORD);
-    DSLContext restrictedRo = DSL.using((DataSource) ds, SQLDialect.POSTGRES);
+    restrictedRo = DSL.using((DataSource) ds, SQLDialect.POSTGRES);
 
     // Constructed by hand, NOT taken from the context: the Spring-managed roDsl bean points at the
     // superuser. Running the SQL directly on restrictedRo would skip requireSelectOnly and prove
@@ -73,11 +80,17 @@ class SqlQueryIT extends AbstractPostgresIT {
   }
 
   @AfterAll
-  static void dropReadOnlyRole() throws java.sql.SQLException {
-    // A hand-built connection, not the autowired (instance-scoped) db: @AfterAll is static.
+  static void dropReadOnlyRoleAndSeedRow() throws java.sql.SQLException {
+    // A hand-built connection, not the autowired (instance-scoped) db: @AfterAll is static. Also
+    // removes the @BeforeEach backstop row -- AbstractPostgresIT's container is a shared singleton
+    // across the whole test JVM run, so an un-cleaned seed row would leak into every other test
+    // class that scans the counterparties table after this one runs.
     try (Connection connection =
             DriverManager.getConnection(containerJdbcUrl(), containerUsername(), containerPassword());
         var statement = connection.createStatement()) {
+      statement.execute(
+          "DELETE FROM counterparties WHERE identity_type = 'creditor_id'"
+              + " AND identity_value = 'SQLQUERY-IT-BACKSTOP'");
       var rows =
           statement.executeQuery(
               "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + RO_USER + "')");
@@ -115,18 +128,21 @@ class SqlQueryIT extends AbstractPostgresIT {
   }
 
   @Test
-  void aWriteInsideACteIsStoppedByTheRoleAndChangesNothing() {
+  void theRestrictedRoleAloneRejectsAWriteIndependentlyOfTheTool() {
     long before = (Long) db.fetchValue("SELECT count(*) FROM counterparties");
     // A vacuous backstop (0 == 0) would pass even if the DELETE executed; the @BeforeEach seed
     // guarantees there is at least one row for the DELETE to actually remove.
     assertThat(before).isGreaterThan(0L);
 
-    // isInstanceOf + hasMessageContaining, not just "not an IllegalArgumentException": a typo'd
-    // table, a missing grant on an unrelated object, or a dropped connection would also satisfy
-    // the weaker check without proving the role actually blocked the write.
+    // Bypasses ReadTools.sqlQuery entirely (raw fetch on restrictedRo, no requireSelectOnly, no
+    // SET TRANSACTION READ ONLY wrapper): sqlQuery's own per-call transaction now rejects any
+    // write before Postgres even reaches a grant check, so driving this specific SQL through the
+    // tool could no longer isolate the role layer -- see the two tests below for that combined
+    // behavior. This test exists to prove the role-level defense-in-depth layer still holds on
+    // its own, independent of the tool.
     assertThatThrownBy(
             () ->
-                restrictedReadTools.sqlQuery(
+                restrictedRo.fetch(
                     "WITH x AS (DELETE FROM counterparties RETURNING *) SELECT count(*) FROM x"))
         .isInstanceOf(DataAccessException.class)
         .hasMessageContaining("permission denied");
@@ -136,7 +152,28 @@ class SqlQueryIT extends AbstractPostgresIT {
   }
 
   @Test
-  void aTopLevelWriteWithACtePrefixIsStoppedByTheRoleAndChangesNothing() {
+  void aWriteInsideACteIsStoppedGoingThroughTheToolAndChangesNothing() {
+    long before = (Long) db.fetchValue("SELECT count(*) FROM counterparties");
+    assertThat(before).isGreaterThan(0L);
+
+    // Through restrictedReadTools.sqlQuery, both defense-in-depth layers are stacked: the
+    // per-call SET TRANSACTION READ ONLY transaction (ReadTools#sqlQuery) rejects the write
+    // before Postgres reaches the role's grants, so the observed error is the transaction-level
+    // one (SQLSTATE 25006), not "permission denied" -- see
+    // theRestrictedRoleAloneRejectsAWriteIndependentlyOfTheTool for the role layer in isolation.
+    assertThatThrownBy(
+            () ->
+                restrictedReadTools.sqlQuery(
+                    "WITH x AS (DELETE FROM counterparties RETURNING *) SELECT count(*) FROM x"))
+        .isInstanceOf(DataAccessException.class)
+        .hasMessageContaining("read-only transaction");
+
+    // An exception alone would not prove nothing was written.
+    assertThat((Long) db.fetchValue("SELECT count(*) FROM counterparties")).isEqualTo(before);
+  }
+
+  @Test
+  void aTopLevelWriteWithACtePrefixIsStoppedGoingThroughTheToolAndChangesNothing() {
     // The widened regex admits this shape too: it starts with WITH, has no semicolon, and carries
     // no INTO token for the SELECT_INTO guard to catch.
     long before = (Long) db.fetchValue("SELECT count(*) FROM counterparties");
@@ -146,7 +183,7 @@ class SqlQueryIT extends AbstractPostgresIT {
             () ->
                 restrictedReadTools.sqlQuery("WITH x AS (SELECT 1) DELETE FROM counterparties"))
         .isInstanceOf(DataAccessException.class)
-        .hasMessageContaining("permission denied");
+        .hasMessageContaining("read-only transaction");
 
     assertThat((Long) db.fetchValue("SELECT count(*) FROM counterparties")).isEqualTo(before);
   }

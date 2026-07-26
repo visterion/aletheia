@@ -11,24 +11,26 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /**
- * Fails startup closed if the {@code roDsl} connection backing {@code sql_query} could actually
- * perform a write.
+ * Fails startup closed if neither of {@code roDsl}'s two defense-in-depth layers -- the
+ * connection's session-level read-only default, or the DB role's grants -- is in effect.
  *
- * <p>The regex in {@code ReadTools#requireSelectOnly} now admits a leading {@code WITH}, so {@code
- * WITH x AS (SELECT 1) DELETE FROM t} passes the tool-layer guard; the only thing that can still
- * stop it is the connection itself. {@link DataSourceConfig#roDataSource} sets {@code
- * default_transaction_read_only = on} via {@code connectionInitSql} so Postgres refuses any DML
- * (SQLSTATE {@code 25006}) regardless of what the {@code aletheia_ro} role happens to be granted --
- * which, until the role split (Task 8, {@code application.yml} §"app:/ro:"), is the same
- * full-privilege role as the app datasource.
+ * <p><b>This is not the security boundary and does not certify that {@code sql_query} cannot
+ * write.</b> That property is enforced per call, inside {@code ReadTools#sqlQuery} itself, via an
+ * explicit {@code SET TRANSACTION READ ONLY} transaction -- see {@code
+ * SqlQueryReadOnlySessionIT}. This class only checks the two weaker, session/role-level defenses
+ * that sit underneath that: {@link DataSourceConfig#roDataSource} sets {@code
+ * default_transaction_read_only = on} via {@code connectionInitSql}, but that GUC is {@code
+ * USERSET} -- a caller-controlled statement (e.g. {@code SELECT
+ * set_config('default_transaction_read_only','off',false)}) can flip it back off on the pooled
+ * connection until Hikari retires it, which is exactly why the per-transaction enforcement in
+ * {@code sqlQuery} exists and does not rely on this setting holding.
  *
- * <p>This runner re-verifies that property is actually in effect at startup rather than trusting
- * the wiring blindly: either the session is read-only, or (a defense that predates the read-only
- * session and remains valid on its own) the role cannot write. Only when <em>neither</em> holds is
- * {@code sql_query} actually able to write, and only then does this throw. It deliberately does
- * NOT fail just because the role has write privileges -- that is true in prod today, and asserting
- * it would stop the container from booting on every future deploy for a condition the session-level
- * read-only setting already neutralizes.
+ * <p>This runner verifies at startup that at least one of the two defense-in-depth layers holds:
+ * either the session-level GUC is currently {@code on}, or (independently) the role cannot {@code
+ * INSERT} into {@code transactions}. Only when <em>neither</em> holds does this throw -- that
+ * indicates the wiring is weaker than intended, even though {@code sqlQuery}'s own per-call
+ * transaction still enforces the actual boundary regardless. It deliberately does NOT fail just
+ * because the role has write privileges -- that is true in prod today.
  *
  * <p>A connectivity failure while probing {@code roDsl} (unreachable host, bad credentials, ...)
  * is deliberately NOT treated as "unprotected": {@code ActuatorHealthIT} pins the invariant that
@@ -62,7 +64,10 @@ public class ReadOnlyConnectionGuard implements ApplicationRunner {
           e.getMessage());
       return;
     }
-    log.info("roDsl connection verified read-only (sql_query cannot write).");
+    log.info(
+        "roDsl connection-level defense-in-depth verified (session read-only or role"
+            + " restricted); sql_query's own per-call SET TRANSACTION READ ONLY is the actual"
+            + " write boundary.");
   }
 
   /**
@@ -85,8 +90,10 @@ public class ReadOnlyConnectionGuard implements ApplicationRunner {
         "roDsl is connected as '"
             + currentUser
             + "', which is neither session-read-only (default_transaction_read_only=on) nor"
-            + " restricted to SELECT (it can INSERT into transactions): sql_query would be able"
-            + " to write. Set aletheia.datasource.ro.* to a read-only role, or check the"
-            + " connectionInitSql wiring on the ro datasource.");
+            + " restricted to SELECT (it can INSERT into transactions): both connection-level"
+            + " defense-in-depth layers are absent. sql_query's own per-call SET TRANSACTION READ"
+            + " ONLY still blocks writes, but this wiring is weaker than intended -- set"
+            + " aletheia.datasource.ro.* to a read-only role, or check the connectionInitSql"
+            + " wiring on the ro datasource.");
   }
 }

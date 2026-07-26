@@ -45,11 +45,14 @@ import org.springframework.stereotype.Component;
  *
  * <p>All tools except {@link #sqlQuery} run on the app {@link DSLContext} ({@code db}, the
  * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): the
- * tool-layer check below now admits a leading {@code WITH} by design, so {@code WITH x AS
- * (SELECT 1) DELETE ...} passes it -- the real boundary is the {@code roDsl} connection itself,
- * which runs every statement in a session with {@code default_transaction_read_only = on}
- * (verified at startup by {@code ReadOnlyConnectionGuard}), independent of what the underlying
- * DB role is granted.
+ * tool-layer check below now admits a leading {@code WITH} by design, so a statement can both
+ * write inside a CTE and try to flip the session read-only default back off via {@code
+ * set_config}. The real boundary is per-call: {@link #sqlQuery} wraps every statement in its own
+ * transaction with {@code SET TRANSACTION READ ONLY}, which -- once that transaction has taken
+ * its snapshot -- rejects any attempt to change transaction-read-write mode, session-level or
+ * not. {@code default_transaction_read_only = on} on the connection ({@code
+ * DataSourceConfig.roDataSource}, checked at startup by {@code ReadOnlyConnectionGuard}) remains
+ * as defense in depth underneath that, independent of what the underlying DB role is granted.
  */
 @Component
 public class ReadTools {
@@ -168,8 +171,10 @@ public class ReadTools {
 
   /**
    * Accepts a statement that begins with SELECT or WITH. This is a malformed-input filter, NOT a
-   * read-only guarantee: {@code WITH x AS (SELECT 1) DELETE FROM t} passes it. The SELECT-only
-   * database role behind {@code roDsl} is the actual boundary -- see SqlQueryIT.
+   * read-only guarantee: {@code WITH x AS (SELECT 1) DELETE FROM t} passes it, and so does a
+   * {@code SELECT set_config(...)} call that tries to turn a session-level read-only GUC back
+   * off. The actual boundary is the per-call {@code SET TRANSACTION READ ONLY} that {@link
+   * #sqlQuery} wraps every statement in -- see {@code SqlQueryReadOnlySessionIT}.
    */
   private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*(WITH|SELECT)\\b.*");
 
@@ -1206,7 +1211,20 @@ public class ReadTools {
 
   public SqlQueryResult sqlQuery(String sql) {
     requireSelectOnly(sql);
-    Result<Record> result = roDsl.fetch(sql);
+    // Per-call, not per-session: default_transaction_read_only is USERSET, so a caller-controlled
+    // statement (e.g. SELECT set_config('default_transaction_read_only','off',false)) can flip it
+    // back off on the pooled connection for every later call until Hikari retires that physical
+    // connection. An explicit transaction with SET TRANSACTION READ ONLY closes that: once the
+    // transaction has taken its snapshot, both the session and transaction-local read-only GUCs
+    // are rejected with "transaction read-write mode must be set before any query" -- see
+    // SqlQueryReadOnlySessionIT. connectionInitSql (DataSourceConfig.roDataSource) stays as
+    // defense in depth underneath this.
+    Result<Record> result =
+        roDsl.transactionResult(
+            cfg -> {
+              cfg.dsl().execute("SET TRANSACTION READ ONLY");
+              return cfg.dsl().fetch(sql);
+            });
     List<String> columns = new ArrayList<>();
     for (Field<?> field : result.fields()) {
       columns.add(field.getName());
@@ -1304,15 +1322,17 @@ public class ReadTools {
    *
    * <p><b>This is defense-in-depth, not the security boundary.</b> Accepting a leading {@code
    * WITH} means {@code WITH x AS (DELETE FROM t RETURNING *) SELECT count(*) FROM x} passes this
-   * check by design -- see {@code SqlQueryIT}. The real boundary is the {@code roDsl} connection
-   * itself: {@code DataSourceConfig.roDataSource} puts every connection it hands out into a
-   * session with {@code default_transaction_read_only = on}, so Postgres refuses any DML
-   * (SQLSTATE {@code 25006}) independent of what the underlying DB role is granted; {@code
-   * ReadOnlyConnectionGuard} verifies that at startup and refuses to boot otherwise. This
-   * tool-layer guard catches the obvious shapes (non-SELECT/WITH, stacked statements, {@code
-   * SELECT INTO}) early with a clear error message, but it cannot catch a side-effecting function
-   * call hidden inside an otherwise syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)}
-   * or {@code SELECT lo_export(...)}) -- blocking those is the connection's job, not a regex's.
+   * check by design, and so does a statement that tries to turn a session-level read-only GUC
+   * back off -- see {@code SqlQueryReadOnlySessionIT}. The real boundary is per-call: {@link
+   * #sqlQuery} wraps every statement in its own transaction with {@code SET TRANSACTION READ
+   * ONLY}, which Postgres enforces (SQLSTATE {@code 25006}) regardless of the session default or
+   * the underlying DB role's grants. {@code default_transaction_read_only = on} on the connection
+   * ({@code DataSourceConfig.roDataSource}, checked at startup by {@code
+   * ReadOnlyConnectionGuard}) is defense in depth underneath that. This tool-layer guard catches
+   * the obvious shapes (non-SELECT/WITH, stacked statements, {@code SELECT INTO}) early with a
+   * clear error message, but it cannot catch a side-effecting function call hidden inside an
+   * otherwise syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)} or {@code SELECT
+   * lo_export(...)}) -- blocking those is the connection's job, not a regex's.
    */
   private static void requireSelectOnly(String sql) {
     if (sql == null || sql.isBlank()) {

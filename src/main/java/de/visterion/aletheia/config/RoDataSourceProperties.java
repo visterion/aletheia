@@ -3,9 +3,12 @@ package de.visterion.aletheia.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * Credentials for the SELECT-only connection ({@code aletheia_ro} in prod, spec §6). Used
- * exclusively by the {@code sql_query} MCP tool so a prompt-injected query cannot write, even if
- * the tool-layer SELECT-only check is somehow bypassed.
+ * Credentials for the read-only connection ({@code aletheia_ro} in prod, spec §6). Used
+ * exclusively by the {@code sql_query} MCP tool. Neither this role's grants nor the session-level
+ * {@code default_transaction_read_only} setting on this connection (both defense in depth) are
+ * the actual write boundary -- {@code ReadTools#sqlQuery} wraps every statement in its own {@code
+ * SET TRANSACTION READ ONLY} transaction, which Postgres enforces regardless of role or session
+ * state.
  */
 @ConfigurationProperties(prefix = "aletheia.datasource.ro")
 public class RoDataSourceProperties {
