@@ -446,12 +446,48 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     assertThat(paged.meta().rowsTotal()).isEqualTo(unpaged.rows().size());
     assertThat(paged.meta().rowsTotal()).isGreaterThan(paged.meta().rowsReturned());
 
+    // cutoff is the HIGHEST annualCost in the set (rows are sorted descending), so an inclusive
+    // boundary must return exactly that one row -- an exclusive comparison would return none,
+    // which "allSatisfy" on an empty list and "<=" on a lower total would both pass vacuously.
     BigDecimal cutoff = unpaged.rows().getFirst().annualCost();
     ObligationsRegister filtered =
         readTools.obligationsRegister(new ListParams(null, null, cutoff, true));
     assertThat(filtered.totalAnnualCost()).isLessThanOrEqualTo(unpaged.totalAnnualCost());
     assertThat(filtered.rows())
-        .allSatisfy(r -> assertThat(r.annualCost()).isGreaterThanOrEqualTo(cutoff));
+        .extracting(ObligationRow::contractId)
+        .containsExactly(highContract);
+    assertThat(filtered.meta().rowsTotal()).isEqualTo(1);
+  }
+
+  @Test
+  void offsetPastTheEndYieldsNoRowsButKeepsTheTotal() {
+    long id = counterparty("PAST-END", "Past End Co");
+    long contractId = confirmedContract(id);
+    insertRecurring(id, contractId, "monthly", "42.00");
+
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(10, 10_000, null, true));
+
+    assertThat(register.rows()).isEmpty();
+    assertThat(register.meta().rowsReturned()).isZero();
+    assertThat(register.meta().rowsTotal()).isEqualTo(1);
+  }
+
+  @Test
+  void maxIntLimitDoesNotOverflowTheOffsetPlusLimitClamp() {
+    // from + limit as int arithmetic overflows for limit = Integer.MAX_VALUE, which a caller can
+    // legally set (ListParams only rejects limit <= 0); an overflowed negative "to" would throw
+    // from subList rather than clamp to the actual row count.
+    long id = counterparty("MAX-LIMIT", "Max Limit Co");
+    long contractId = confirmedContract(id);
+    insertRecurring(id, contractId, "monthly", "7.00");
+
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(Integer.MAX_VALUE, 1, null, true));
+
+    assertThat(register.rows()).isEmpty();
+    assertThat(register.meta().rowsReturned()).isZero();
+    assertThat(register.meta().rowsTotal()).isEqualTo(1);
   }
 
   @Test

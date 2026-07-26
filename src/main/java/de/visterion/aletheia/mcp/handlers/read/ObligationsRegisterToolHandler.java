@@ -57,7 +57,8 @@ public class ObligationsRegisterToolHandler implements ToolHandler {
         .optionalBoolean(
             "verbose",
             "false (default): {contractId, counterpartyId, displayName, cadence, annualCost};"
-                + " true: adds mandateId, identityType, tags, hasContract, hivememCellId")
+                + " true: adds mandateId, identityType, tags, hasContract, hivememCellId;"
+                + " null-valued fields are omitted from the JSON entirely")
         .build();
   }
 

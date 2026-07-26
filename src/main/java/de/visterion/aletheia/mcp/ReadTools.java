@@ -1048,8 +1048,8 @@ public class ReadTools {
     obligationRows.sort(
         Comparator.comparing(ObligationRow::annualCost)
             .reversed()
-            // thenComparingLong, not thenComparing: contractId() returns a primitive long, and the
-            // generic overload does not accept that method reference.
+            // thenComparingLong avoids boxing contractId() (a primitive long) to Long on every
+            // comparison; thenComparing(ObligationRow::contractId) would compile too, just slower.
             .thenComparingLong(ObligationRow::contractId));
 
     BigDecimal total =
