@@ -1,5 +1,6 @@
 package de.visterion.aletheia.config;
 
+import com.zaxxer.hikari.HikariDataSource;
 import javax.sql.DataSource;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
@@ -21,7 +22,7 @@ import org.springframework.util.StringUtils;
 
 /**
  * Wires the two datasources from spec §6/§7: a {@code @Primary} app connection and a named {@code
- * roDsl} connection used exclusively by the SELECT-only {@code sql_query} tool.
+ * roDsl} connection used exclusively by the read-only {@code sql_query} tool.
  *
  * <p>In prod the app/ro credentials bind to two distinct, differently-privileged Postgres roles
  * ({@code aletheia_app} / {@code aletheia_ro}, provisioned out-of-band by a Postgres init script,
@@ -55,7 +56,8 @@ public class DataSourceConfig {
         appProperties.getUsername(),
         appProperties.getPassword(),
         connectionDetails.getIfAvailable(),
-        fallback);
+        fallback,
+        /* readOnlySession= */ false);
   }
 
   @Bean
@@ -68,7 +70,8 @@ public class DataSourceConfig {
         roProperties.getUsername(),
         roProperties.getPassword(),
         connectionDetails.getIfAvailable(),
-        fallback);
+        fallback,
+        /* readOnlySession= */ true);
   }
 
   @Primary
@@ -87,7 +90,7 @@ public class DataSourceConfig {
    *
    * <p>Boot's {@code DataSourceHealthContributorAutoConfiguration} would otherwise probe
    * <em>every</em> {@link DataSource} bean and fold the results into one composite, so {@code
-   * roDataSource} — used only by the SELECT-only {@code sql_query} tool — would be opened on every
+   * roDataSource} — used only by the read-only {@code sql_query} tool — would be opened on every
    * health check and could, on its own, mark the whole container DOWN while the MCP server and all
    * other tools still work. That auto-configuration carries {@code @ConditionalOnMissingBean(name =
    * {"dbHealthIndicator", "dbHealthContributor"})} (verified against spring-boot-jdbc 4.1.0), so
@@ -104,18 +107,39 @@ public class DataSourceConfig {
       String username,
       String password,
       JdbcConnectionDetails details,
-      DataSourceProperties fallback) {
+      DataSourceProperties fallback,
+      boolean readOnlySession) {
     String resolvedUrl =
         resolve(url, details != null ? details.getJdbcUrl() : null, fallback.getUrl());
     String resolvedUsername =
         resolve(username, details != null ? details.getUsername() : null, fallback.getUsername());
     String resolvedPassword =
         resolve(password, details != null ? details.getPassword() : null, fallback.getPassword());
-    return DataSourceBuilder.create()
-        .url(resolvedUrl)
-        .username(resolvedUsername)
-        .password(resolvedPassword)
-        .build();
+    if (!readOnlySession) {
+      return DataSourceBuilder.create()
+          .url(resolvedUrl)
+          .username(resolvedUsername)
+          .password(resolvedPassword)
+          .build();
+    }
+    // Every connection this pool hands out starts a read-only session (Postgres refuses DML with
+    // SQLSTATE 25006), independent of what the underlying DB role is granted -- see
+    // ReadOnlyConnectionGuard. Defense in depth only: default_transaction_read_only is USERSET, so
+    // a caller can flip it back off on the pooled connection (connectionInitSql runs once, at
+    // connection creation, not per query); the actual boundary is the per-call SET TRANSACTION
+    // READ ONLY transaction in ReadTools.sqlQuery. Forcing HikariDataSource (already on the
+    // classpath transitively; it is Boot's default pool) rather than relying on
+    // DataSourceBuilder's auto-detected type so connectionInitSql can be set without a runtime
+    // cast.
+    HikariDataSource dataSource =
+        DataSourceBuilder.create()
+            .type(HikariDataSource.class)
+            .url(resolvedUrl)
+            .username(resolvedUsername)
+            .password(resolvedPassword)
+            .build();
+    dataSource.setConnectionInitSql("SET default_transaction_read_only = on");
+    return dataSource;
   }
 
   private static DSLContext buildDslContext(DataSource dataSource) {

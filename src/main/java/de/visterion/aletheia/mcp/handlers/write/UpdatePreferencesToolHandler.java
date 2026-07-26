@@ -31,9 +31,12 @@ public class UpdatePreferencesToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Record durable customer preferences (markdown). Replaces the preferences section only"
+    return "Answers: how do I tell Aletheia to remember something durable about how I want it to"
+        + " work? Record durable customer preferences (markdown). Replaces the preferences"
+        + " section only"
         + " -- the operating guide is protected. wake_up first, edit, write back the full"
-        + " preferences markdown.";
+        + " preferences markdown."
+        + "\n\nKeywords: Einstellungen, Vorlieben, merken";
   }
 
   @Override

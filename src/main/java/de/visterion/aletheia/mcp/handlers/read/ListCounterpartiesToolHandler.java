@@ -33,13 +33,16 @@ public class ListCounterpartiesToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "List counterparties with their evidence aggregates, current tags, recurring series"
+    return "Answers: who have I paid or received money from, and what do I know about them"
+        + " (tags, recurring series, contract link)? List counterparties with their evidence"
+        + " aggregates, current tags, recurring series"
         + " and contract-link status. Evidence is computed over the logical view of"
         + " transactions (split parents excluded via NOT EXISTS on split_parent_*; only"
         + " children and unsplit originals contribute to counts/spend)."
         + " Optional namePattern filters case-insensitively on the effective display name"
         + " (LIKE-style -- % and _ act as wildcards); optional limit caps the number of"
-        + " counterparties returned.";
+        + " counterparties returned."
+        + "\n\nKeywords: Abbuchung, Ausgaben, Rechnung";
   }
 
   @Override

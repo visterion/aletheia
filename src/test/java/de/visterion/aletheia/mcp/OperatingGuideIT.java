@@ -45,7 +45,6 @@ class OperatingGuideIT extends AbstractPostgresIT {
   @Test
   void emptyDbSnapshotHasNoNulls() { // P1 (M3)
     String md = service.wakeUp();
-    assertThat(md).contains("How to work with Aletheia"); // seeded guide
     assertThat(md).contains("(none recorded yet)"); // empty preferences
     assertThat(md).contains("(no imports yet)");
     assertThat(md).doesNotContain("null");
@@ -104,6 +103,70 @@ class OperatingGuideIT extends AbstractPostgresIT {
           backup.get("workflow_md", String.class),
           backup.get("preferences_md", String.class));
     }
+  }
+
+  @Test
+  void wakeUpLeadsWithLiveStateAndNoLongerCarriesTheGuide() {
+    String md = service.wakeUp();
+
+    assertThat(md).doesNotContain("How to work with Aletheia");
+    assertThat(md.indexOf("# Aletheia — state")).isZero();
+    assertThat(md.indexOf("# Aletheia — state")).isLessThan(md.indexOf("# Customer preferences"));
+    assertThat(md).contains("Operating guide: read_me()");
+  }
+
+  @Test
+  void readMeReturnsTheSeededGuideVerbatim() {
+    assertThat(service.operatingGuide())
+        .isEqualTo(
+            (String)
+                db.fetchValue(
+                    "SELECT workflow_md FROM operating_guide WHERE scope='default'"));
+  }
+
+  @Test
+  void aDuplicatedCustomerPreferencesHeadingIsStrippedOnce() {
+    service.updatePreferences("# Customer preferences\n## Household\n- something", "test");
+
+    String md = service.wakeUp();
+
+    assertThat(md.split("# Customer preferences", -1)).hasSize(2); // exactly one occurrence
+    assertThat(md).contains("## Household");
+  }
+
+  @Test
+  void aDuplicatedHeadingAfterALeadingBlankLineIsStrippedToo() {
+    // An LLM writing preferences with a leading newline is plausible; the strip must look past
+    // blank lines to find the heading, not just at literal line zero.
+    service.updatePreferences("\n# Customer preferences\n- body", "test");
+
+    String md = service.wakeUp();
+
+    assertThat(md.split("# Customer preferences", -1)).hasSize(2); // exactly one occurrence
+    assertThat(md).contains("- body");
+  }
+
+  @Test
+  void wakeUpStaysUnderTheLineBudget() {
+    String md = service.wakeUp(); // empty preferences (reset by @BeforeEach)
+    assertThat(md.lines().count()).isLessThanOrEqualTo(20);
+  }
+
+  @Test
+  void aCustomerHeadingThatIsNotTheDuplicateSurvives() {
+    // A blanket "strip any leading H1" rule would silently delete the customer's own heading and
+    // leave only its body -- data loss for the sake of one saved string comparison.
+    service.updatePreferences("# Wichtig: Konto X nie anfassen\n- detail", "test");
+
+    assertThat(service.wakeUp()).contains("# Wichtig: Konto X nie anfassen");
+  }
+
+  @Test
+  void preferencesThatAreNothingButTheStrippedHeadingFallBackToThePlaceholder() {
+    // The blank check must run AFTER the strip, or this leaves an empty section.
+    service.updatePreferences("# Customer preferences\n\n", "test");
+
+    assertThat(service.wakeUp()).contains("(none recorded yet)");
   }
 
   private long seedCp(boolean reviewed) {

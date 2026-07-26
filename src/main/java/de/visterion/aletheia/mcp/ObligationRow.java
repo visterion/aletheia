@@ -1,5 +1,6 @@
 package de.visterion.aletheia.mcp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -12,15 +13,24 @@ import java.util.List;
  *
  * @param counterpartyId the {@code counterparties.id}
  * @param displayName a representative counterparty name
- * @param identityType {@code creditor_id} | {@code iban} | {@code name}
+ * @param identityType {@code creditor_id} | {@code iban} | {@code name}; {@code null} in compact
+ *     mode, where the key is omitted entirely
  * @param contractId the {@code contracts.id} this row documents
  * @param mandateId the {@code contracts.mandate_id}, {@code null} for a mandate-less obligation
+ *     (verbose mode only; the key is omitted entirely in compact mode)
  * @param cadence the {@code recurring.cadence} for this contract's series
  * @param annualCost {@link AnnualCost#estimate(RecurringView, BigDecimal)} for this contract
- * @param tags the counterparty's current {@code counterparty_tags} rows
- * @param hasContract always {@code true} -- every row is rooted at a confirmed contract
- * @param hivememCellId this contract's {@code hivemem_cell_id}, {@code null} if none
+ * @param tags the counterparty's current {@code counterparty_tags} rows (verbose mode only; the
+ *     key is omitted entirely in compact mode)
+ * @param hasContract always {@code true} in verbose mode; {@code null} in compact mode, where the
+ *     key is omitted entirely
+ * @param hivememCellId this contract's {@code hivemem_cell_id}, {@code null} if none (verbose mode
+ *     only; the key is omitted entirely in compact mode)
  */
+// Null-valued fields are omitted from the JSON entirely: in compact mode identityType, mandateId,
+// tags, hasContract and hivememCellId are passed as null and therefore disappear, rather than
+// emitting empty/explicit-null keys.
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record ObligationRow(
     long counterpartyId,
     String displayName,
@@ -30,5 +40,5 @@ public record ObligationRow(
     String cadence,
     BigDecimal annualCost,
     List<CounterpartyTagView> tags,
-    boolean hasContract,
+    Boolean hasContract,
     String hivememCellId) {}

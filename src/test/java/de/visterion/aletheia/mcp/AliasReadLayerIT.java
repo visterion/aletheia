@@ -195,7 +195,8 @@ class AliasReadLayerIT extends AbstractPostgresIT {
     long[] ids = seedMergedPair();
     long b = ids[1];
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).extracting(ObligationRow::counterpartyId).doesNotContain(b);
   }
@@ -215,7 +216,8 @@ class AliasReadLayerIT extends AbstractPostgresIT {
     long[] ids = seedMergedPair();
     long b = ids[1];
 
-    List<IncomeRow> income = readTools.listIncome();
+    List<IncomeRow> income =
+        readTools.listIncome(new ListParams(null, null, null, null)).rows();
 
     assertThat(income).extracting(IncomeRow::counterpartyId).doesNotContain(b);
   }
@@ -248,7 +250,7 @@ class AliasReadLayerIT extends AbstractPostgresIT {
 
   @Test
   void describeSchemaListsCounterpartyAliasTable() {
-    List<SchemaColumn> columns = readTools.describeSchema();
+    List<SchemaColumn> columns = readTools.describeSchema(null).columns();
 
     assertThat(columns).extracting(SchemaColumn::table).contains("counterparty_alias");
   }

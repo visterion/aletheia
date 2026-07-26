@@ -79,9 +79,9 @@ class McpControllerTest {
         .andExpect(
             jsonPath("$.result.instructions")
                 .value(
-                    "Before your first action, call the wake_up tool to load this customer's"
-                        + " operating guide, their preferences, and the current state. Follow the"
-                        + " operating guide. When you learn a durable customer preference, record"
+                    "Before your first action, call the wake_up tool for this customer's live"
+                        + " state and recorded preferences. Call read_me for the operating guide"
+                        + " and follow it. When you learn a durable customer preference, record"
                         + " it with update_preferences."))
         .andExpect(jsonPath("$.result.protocolVersion").value("2025-06-18"))
         .andExpect(header().exists("Mcp-Session-Id"))

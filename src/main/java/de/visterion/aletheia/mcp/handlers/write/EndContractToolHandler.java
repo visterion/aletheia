@@ -28,11 +28,13 @@ public class EndContractToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Mark an active (confirmed) contract as ended: it leaves the obligations register and the"
+    return "Answers: how do I record that a contract has ended, e.g. because I cancelled it? Mark"
+        + " an active (confirmed) contract as ended: it leaves the obligations register and the"
         + " unmatched-recurring list, but its history is preserved. Pass endDate (YYYY-MM-DD) or omit"
         + " for today, and an optional reason. Only a confirmed contract can be ended. To reactivate a"
         + " mandate-less contract later, confirm the counterparty again -- it reopens the ended row."
-        + " Example: end_contract(contractId=17, endDate=\"2026-06-30\", reason=\"cancelled\").";
+        + " Example: end_contract(contractId=17, endDate=\"2026-06-30\", reason=\"cancelled\")."
+        + "\n\nKeywords: Vertrag, Verträge, Kündigung, Versicherung, Abo";
   }
 
   @Override

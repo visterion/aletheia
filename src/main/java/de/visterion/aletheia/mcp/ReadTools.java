@@ -44,16 +44,22 @@ import org.springframework.stereotype.Component;
  * physical rows.
  *
  * <p>All tools except {@link #sqlQuery} run on the app {@link DSLContext} ({@code db}, the
- * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): a
- * prompt-injected query cannot write, even if the tool-layer SELECT-only check below is somehow
- * bypassed, because the underlying DB role is SELECT-only.
+ * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): the
+ * tool-layer check below now admits a leading {@code WITH} by design, so a statement can both
+ * write inside a CTE and try to flip the session read-only default back off via {@code
+ * set_config}. The real boundary is per-call: {@link #sqlQuery} wraps every statement in its own
+ * transaction with {@code SET TRANSACTION READ ONLY}, which -- once that transaction has taken
+ * its snapshot -- rejects any attempt to change transaction-read-write mode, session-level or
+ * not. {@code default_transaction_read_only = on} on the connection ({@code
+ * DataSourceConfig.roDataSource}, checked at startup by {@code ReadOnlyConnectionGuard}) remains
+ * as defense in depth underneath that, independent of what the underlying DB role is granted.
  */
 @Component
 public class ReadTools {
 
   private static final int DEFAULT_REVIEW_QUEUE_LIMIT = 50;
 
-  /** The exact set of tables/views {@link #describeSchema()} exposes. Auth/oauth tables are
+  /** The exact set of tables/views {@link #describeSchema(List)} exposes. Auth/oauth tables are
    * deliberately excluded (spec §6/§9): {@code sql_query} needs to discover the register/evidence
    * schema, never the auth schema. */
   private static final List<String> SCHEMA_TABLES =
@@ -68,6 +74,60 @@ public class ReadTools {
           "v_counterparty_evidence",
           "counterparty_alias",
           "cashflow_role_map");
+
+  /**
+   * Three canonical queries handed out with every {@code describe_schema} call. Each teaches one
+   * rule that the column metadata cannot show and that a first-time caller reliably gets wrong:
+   * split parents must be excluded or amounts double-count; a merged counterparty's identity must
+   * be resolved through the alias table or its history pools under the wrong id; and an {@code
+   * auto} tag is a proposal, not a decision.
+   *
+   * <p><b>Comment placement is load-bearing, not stylistic:</b> every explanatory comment sits
+   * <i>after</i> the {@code SELECT} keyword, not before it, because {@link #requireSelectOnly}'s
+   * {@code SELECT_ONLY} guard anchors on {@code ^\s*(WITH|SELECT)} and rejects a leading {@code
+   * --} line.
+   * The wording also avoids the bare word "into" (e.g. "folded under", never "folded into"),
+   * because {@code SELECT_INTO} scans {@link #stripStringLiterals} output, which blanks quoted
+   * string literals but not comments, so a stray "into" reads as {@code SELECT ... INTO}. Both are
+   * workarounds for guard weaknesses in {@link #requireSelectOnly}, not properties of SQL itself;
+   * do not "clean up" a comment above {@code SELECT} without re-running {@code
+   * everyBundledExampleQueryActuallyRuns}.
+   */
+  private static final List<String> SCHEMA_EXAMPLES =
+      List.of(
+          """
+          SELECT -- Monthly outgoing total. The NOT EXISTS guard drops split PARENTS: a parent
+                 -- whose children were booked separately would otherwise be counted alongside them.
+                 date_trunc('month', t.booking_date) AS month, sum(t.amount) AS total
+          FROM transactions t
+          WHERE t.direction = 'DBIT'
+            AND NOT EXISTS (SELECT 1 FROM transactions c
+                            WHERE c.split_parent_content_hash = t.content_hash
+                              AND c.split_parent_occurrence_index = t.occurrence_index)
+          GROUP BY 1 ORDER BY 1
+          """,
+          """
+          SELECT -- Counterparties with their canonical identity. merge_counterparty writes
+                 -- counterparty_alias and sets merged_into on the folded row in the same
+                 -- transaction, so a folded source's own row is never dropped, only marked:
+                 -- resolving through counterparty_alias pools it under the target's id, and
+                 -- variants > 1 is what a completed merge looks like.
+                 COALESCE(a.canonical_counterparty_id, c.id) AS effective_cp,
+                 count(*) AS variants
+          FROM counterparties c
+          LEFT JOIN counterparty_alias a
+                 ON a.identity_type = c.identity_type AND a.identity_value = c.identity_value
+          GROUP BY 1 ORDER BY variants DESC
+          """,
+          """
+          SELECT -- Confirmed tags only. source='auto' is a PROPOSAL the substrate made:
+                 -- source='confirmed' is the only one that reflects a human decision, and
+                 -- treating the two alike is how a guess becomes a reported fact.
+                 t.dimension, t.value, count(*) AS counterparties
+          FROM counterparty_tags t
+          WHERE t.source = 'confirmed'
+          GROUP BY 1, 2 ORDER BY counterparties DESC
+          """);
 
   private static final Map<String, String> COLUMN_DOCS =
       Map.ofEntries(
@@ -109,7 +169,14 @@ public class ReadTools {
       DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME)
           .as("display_name");
 
-  private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
+  /**
+   * Accepts a statement that begins with SELECT or WITH. This is a malformed-input filter, NOT a
+   * read-only guarantee: {@code WITH x AS (SELECT 1) DELETE FROM t} passes it, and so does a
+   * {@code SELECT set_config(...)} call that tries to turn a session-level read-only GUC back
+   * off. The actual boundary is the per-call {@code SET TRANSACTION READ ONLY} that {@link
+   * #sqlQuery} wraps every statement in -- see {@code SqlQueryReadOnlySessionIT}.
+   */
+  private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*(WITH|SELECT)\\b.*");
 
   /**
    * Matches a top-level {@code INTO} keyword followed by whitespace and something else, the
@@ -962,7 +1029,10 @@ public class ReadTools {
     return dimensions;
   }
 
-  public ObligationsRegister obligationsRegister() {
+  public ObligationsRegister obligationsRegister(ListParams params) {
+    ListParams effective = params == null ? new ListParams(null, null, null, null) : params;
+    boolean verbose = effective.effectiveVerbose();
+
     var rows =
         db.select(
                 CONTRACTS.ID,
@@ -1026,27 +1096,70 @@ public class ReadTools {
           new ObligationRow(
               counterpartyId,
               row.get(DISPLAY_NAME_EFFECTIVE),
-              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              verbose ? row.get(COUNTERPARTIES.IDENTITY_TYPE) : null,
               row.get(CONTRACTS.ID),
-              row.get(CONTRACTS.MANDATE_ID),
+              verbose ? row.get(CONTRACTS.MANDATE_ID) : null,
               recurring == null ? null : recurring.cadence(),
               AnnualCost.estimate(recurring, debitFallback),
-              tagsByCounterparty.getOrDefault(counterpartyId, List.of()),
-              true,
-              row.get(CONTRACTS.HIVEMEM_CELL_ID)));
+              verbose ? tagsByCounterparty.getOrDefault(counterpartyId, List.of()) : null,
+              verbose ? Boolean.TRUE : null,
+              verbose ? row.get(CONTRACTS.HIVEMEM_CELL_ID) : null));
     }
 
-    obligationRows.sort(Comparator.comparing(ObligationRow::annualCost).reversed());
+    if (effective.minAmount() != null) {
+      obligationRows.removeIf(r -> r.annualCost().compareTo(effective.minAmount()) < 0);
+    }
+
+    // annualCost alone is not a total order: several contracts share the BigDecimal.ZERO fallback
+    // from AnnualCost:49, and without a tie-breaker a tied row can appear on two pages at once.
+    obligationRows.sort(
+        Comparator.comparing(ObligationRow::annualCost)
+            .reversed()
+            // thenComparingLong avoids boxing contractId() (a primitive long) to Long on every
+            // comparison; thenComparing(ObligationRow::contractId) would compile too, just slower.
+            .thenComparingLong(ObligationRow::contractId));
 
     BigDecimal total =
         obligationRows.stream()
             .map(ObligationRow::annualCost)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-    return new ObligationsRegister(obligationRows, total);
+    long rowsTotal = obligationRows.size();
+    // long arithmetic on purpose: from + limit overflows int for limit=Integer.MAX_VALUE, which a
+    // caller can set, and an overflowed negative "to" would throw from subList.
+    int from = (int) Math.min((long) effective.effectiveOffset(), obligationRows.size());
+    int to = (int) Math.min((long) from + effective.effectiveLimit(), obligationRows.size());
+    List<ObligationRow> page = List.copyOf(obligationRows.subList(from, to));
+
+    return new ObligationsRegister(
+        page,
+        total,
+        new ListPageMeta(
+            rowsTotal,
+            page.size(),
+            effective.effectiveLimit(),
+            effective.effectiveOffset(),
+            effective.minAmount()));
   }
 
-  public List<IncomeRow> listIncome() {
+  public ListPage<IncomeRow> listIncome(ListParams params) {
+    ListParams effective = params == null ? new ListParams(null, null, null, null) : params;
+
+    var baseCondition =
+        V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT").and(COUNTERPARTIES.MERGED_INTO.isNull());
+    if (effective.minAmount() != null) {
+      baseCondition =
+          baseCondition.and(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.ge(effective.minAmount()));
+    }
+
+    long rowsTotal =
+        db.selectCount()
+            .from(COUNTERPARTIES)
+            .join(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(baseCondition)
+            .fetchOne(0, long.class);
+
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
@@ -1060,11 +1173,17 @@ public class ReadTools {
             .from(COUNTERPARTIES)
             .join(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
-            .where(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT"))
-            .and(COUNTERPARTIES.MERGED_INTO.isNull())
-            .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc())
+            .where(baseCondition)
+            // credit_total alone is not a total order (COALESCE(...,0) makes 0 common), and
+            // without a tie-breaker a tied row can appear on two pages and another on none.
+            .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc(), COUNTERPARTIES.ID.asc())
+            // Safe as SQL LIMIT: v_counterparty_evidence is GROUP BY effective_cp (V15:112), so
+            // this join yields exactly one row per counterparty and cannot fan out.
+            .limit(effective.effectiveLimit())
+            .offset(effective.effectiveOffset())
             .fetch();
 
+    boolean verbose = effective.effectiveVerbose();
     List<IncomeRow> income = new ArrayList<>();
     for (Record row : rows) {
       Long txnCount = row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT);
@@ -1072,19 +1191,40 @@ public class ReadTools {
           new IncomeRow(
               row.get(COUNTERPARTIES.ID),
               row.get(DISPLAY_NAME_EFFECTIVE),
-              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              verbose ? row.get(COUNTERPARTIES.IDENTITY_TYPE) : null,
               txnCount == null ? 0 : txnCount,
               row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),
               row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL),
-              row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN),
+              verbose ? row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN) : null,
               row.get(V_COUNTERPARTY_EVIDENCE.LAST_SEEN)));
     }
-    return income;
+
+    return new ListPage<>(
+        List.copyOf(income),
+        new ListPageMeta(
+            rowsTotal,
+            income.size(),
+            effective.effectiveLimit(),
+            effective.effectiveOffset(),
+            effective.minAmount()));
   }
 
   public SqlQueryResult sqlQuery(String sql) {
     requireSelectOnly(sql);
-    Result<Record> result = roDsl.fetch(sql);
+    // Per-call, not per-session: default_transaction_read_only is USERSET, so a caller-controlled
+    // statement (e.g. SELECT set_config('default_transaction_read_only','off',false)) can flip it
+    // back off on the pooled connection for every later call until Hikari retires that physical
+    // connection. An explicit transaction with SET TRANSACTION READ ONLY closes that: once the
+    // transaction has taken its snapshot, both the session and transaction-local read-only GUCs
+    // are rejected with "transaction read-write mode must be set before any query" -- see
+    // SqlQueryReadOnlySessionIT. connectionInitSql (DataSourceConfig.roDataSource) stays as
+    // defense in depth underneath this.
+    Result<Record> result =
+        roDsl.transactionResult(
+            cfg -> {
+              cfg.dsl().execute("SET TRANSACTION READ ONLY");
+              return cfg.dsl().fetch(sql);
+            });
     List<String> columns = new ArrayList<>();
     for (Field<?> field : result.fields()) {
       columns.add(field.getName());
@@ -1100,9 +1240,28 @@ public class ReadTools {
     return new SqlQueryResult(columns, rowMaps);
   }
 
-  public List<SchemaColumn> describeSchema() {
-    Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY");
-    Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY");
+  /**
+   * Structure of the register/evidence schema (tables, columns, types, keys), plus the canonical
+   * example queries in {@link #SCHEMA_EXAMPLES}.
+   *
+   * @param tables restrict the output to these tables; {@code null} or empty means all of {@link
+   *     #SCHEMA_TABLES}. Every name must be an exact, lowercase match against {@link
+   *     #SCHEMA_TABLES} -- an unknown or differently-cased name fails loudly instead of silently
+   *     returning an empty column list, because "this table has no columns" reads as an answer
+   *     rather than as the typo it actually is.
+   */
+  public DescribeSchemaResult describeSchema(List<String> tables) {
+    List<String> requested =
+        (tables == null || tables.isEmpty()) ? SCHEMA_TABLES : List.copyOf(tables);
+    for (String table : requested) {
+      if (!SCHEMA_TABLES.contains(table)) {
+        throw new IllegalArgumentException(
+            "unknown table '" + table + "'; allowed: " + String.join(", ", SCHEMA_TABLES));
+      }
+    }
+
+    Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY", requested);
+    Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY", requested);
 
     var columnRows =
         db.select(
@@ -1112,7 +1271,7 @@ public class ReadTools {
                 DSL.field("is_nullable", String.class))
             .from(DSL.table("information_schema.columns"))
             .where(DSL.field("table_schema", String.class).eq("public"))
-            .and(DSL.field("table_name", String.class).in(SCHEMA_TABLES))
+            .and(DSL.field("table_name", String.class).in(requested))
             .orderBy(DSL.field("table_name"), DSL.field("ordinal_position"))
             .fetch();
 
@@ -1131,10 +1290,10 @@ public class ReadTools {
               foreignKeys.contains(key),
               COLUMN_DOCS.get(table + "." + column)));
     }
-    return columns;
+    return new DescribeSchemaResult(List.copyOf(columns), SCHEMA_EXAMPLES);
   }
 
-  private Set<List<String>> fetchKeyColumns(String constraintType) {
+  private Set<List<String>> fetchKeyColumns(String constraintType, List<String> tables) {
     var rows =
         db.select(
                 DSL.field("tc.table_name", String.class), DSL.field("kcu.column_name", String.class))
@@ -1143,7 +1302,7 @@ public class ReadTools {
             .on(DSL.field("tc.constraint_name", String.class)
                 .eq(DSL.field("kcu.constraint_name", String.class)))
             .where(DSL.field("tc.constraint_type", String.class).eq(constraintType))
-            .and(DSL.field("tc.table_name", String.class).in(SCHEMA_TABLES))
+            .and(DSL.field("tc.table_name", String.class).in(tables))
             .fetch();
     Set<List<String>> keys = new HashSet<>();
     for (var row : rows) {
@@ -1155,19 +1314,25 @@ public class ReadTools {
   }
 
   /**
-   * Rejects anything that is not a single, side-effect-free {@code SELECT} statement, before the
-   * tool ever touches the (SELECT-only) {@code roDsl} connection (spec §5/§9): non-SELECT
-   * statements (INSERT, UPDATE, DELETE, DDL, ...), stacked statements (a {@code ;} followed by
-   * more SQL), and the {@code SELECT ... INTO ...} table-creation form (a SELECT that is
-   * actually a write: it creates and populates a new table).
+   * A malformed-input filter, not a read-only guarantee, before the tool ever touches {@code
+   * roDsl} (spec §5/§9): rejects a statement that does not begin with {@code SELECT} or {@code
+   * WITH} (so plain INSERT/UPDATE/DELETE/DDL are caught), stacked statements (a {@code ;}
+   * followed by more SQL), and the {@code SELECT ... INTO ...} table-creation form (a SELECT that
+   * is actually a write: it creates and populates a new table).
    *
-   * <p><b>This is defense-in-depth, not the security boundary.</b> The real boundary is the
-   * {@code aletheia_ro} DB role backing {@link #roDsl}: it has {@code SELECT} only, no {@code
-   * CREATE}, and no {@code EXECUTE} on dangerous functions. This tool-layer guard catches the
-   * obvious shapes (non-SELECT, stacked statements, {@code SELECT INTO}) early with a clear error
-   * message, but it cannot catch a side-effecting function call hidden inside an otherwise
-   * syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)} or {@code SELECT
-   * lo_export(...)}) -- blocking those is the DB role's job, not a regex's.
+   * <p><b>This is defense-in-depth, not the security boundary.</b> Accepting a leading {@code
+   * WITH} means {@code WITH x AS (DELETE FROM t RETURNING *) SELECT count(*) FROM x} passes this
+   * check by design, and so does a statement that tries to turn a session-level read-only GUC
+   * back off -- see {@code SqlQueryReadOnlySessionIT}. The real boundary is per-call: {@link
+   * #sqlQuery} wraps every statement in its own transaction with {@code SET TRANSACTION READ
+   * ONLY}, which Postgres enforces (SQLSTATE {@code 25006}) regardless of the session default or
+   * the underlying DB role's grants. {@code default_transaction_read_only = on} on the connection
+   * ({@code DataSourceConfig.roDataSource}, checked at startup by {@code
+   * ReadOnlyConnectionGuard}) is defense in depth underneath that. This tool-layer guard catches
+   * the obvious shapes (non-SELECT/WITH, stacked statements, {@code SELECT INTO}) early with a
+   * clear error message, but it cannot catch a side-effecting function call hidden inside an
+   * otherwise syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)} or {@code SELECT
+   * lo_export(...)}) -- blocking those is the connection's job, not a regex's.
    */
   private static void requireSelectOnly(String sql) {
     if (sql == null || sql.isBlank()) {
@@ -1180,7 +1345,8 @@ public class ReadTools {
       throw new IllegalArgumentException("sql_query rejects stacked statements");
     }
     if (!SELECT_ONLY.matcher(withoutTrailingSemicolon).matches()) {
-      throw new IllegalArgumentException("sql_query only allows a single SELECT statement");
+      throw new IllegalArgumentException(
+          "sql_query only allows a single statement beginning with SELECT or WITH");
     }
     if (SELECT_INTO.matcher(stripStringLiterals(withoutTrailingSemicolon)).find()) {
       throw new IllegalArgumentException(

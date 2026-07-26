@@ -31,8 +31,10 @@ public class DeleteTagRuleToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Delete a tag rule. Does NOT roll back tags it already applied (those are confirmed"
-        + " decisions; adjust them with classify_counterparty).";
+    return "Answers: how do I remove an auto-tagging rule I no longer want? Delete a tag rule."
+        + " Does NOT roll back tags it already applied (those are confirmed"
+        + " decisions; adjust them with classify_counterparty)."
+        + "\n\nKeywords: Regel, Regeln, löschen";
   }
 
   @Override

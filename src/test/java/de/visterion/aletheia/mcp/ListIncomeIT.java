@@ -9,6 +9,7 @@ import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -16,6 +17,7 @@ import org.jooq.JSONB;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import tools.jackson.databind.ObjectMapper;
 
 class ListIncomeIT extends AbstractPostgresIT {
 
@@ -86,7 +88,8 @@ class ListIncomeIT extends AbstractPostgresIT {
 
     resolver.run(null);
 
-    List<IncomeRow> income = readTools.listIncome();
+    ListPage<IncomeRow> page = readTools.listIncome(new ListParams(null, null, null, true));
+    List<IncomeRow> income = page.rows();
 
     assertThat(income).hasSize(2);
     assertThat(income.get(0).displayName()).isEqualTo("Salary Co");
@@ -97,5 +100,115 @@ class ListIncomeIT extends AbstractPostgresIT {
     assertThat(income.get(1).creditTotal()).isEqualByComparingTo("100.00");
 
     assertThat(income).extracting(IncomeRow::displayName).doesNotContain("Rent Co");
+  }
+
+  @Test
+  void limitAndOffsetPagesWithoutLossOrDuplication() {
+    // Smoke test only -- it does NOT by itself prove the COUNTERPARTIES.ID tie-breaker in
+    // ReadTools.listIncome matters. Three CRDT counterparties share the same credit_total, so
+    // ties need *some* deterministic order across the three offset-1 queries below or a row
+    // could appear on two pages while another appears on none.
+    //
+    // An attempt was made to make this test fail when the tie-breaker is removed: rewriting one
+    // row (UPDATE ... SET reviewed = true) does change its physical position (verified via
+    // ctid: the row moves to a new heap slot after a HOT update). But the query still came back
+    // in ascending-id order after that perturbation, with or without the explicit
+    // COUNTERPARTIES.ID.asc() tie-breaker -- because for a table this small, Postgres's planner
+    // drives the join through an index scan on the counterparties primary key, which returns
+    // rows in id order independent of physical heap layout. There is no known reliable,
+    // non-flaky way to force a different tie order from black-box SQL at this scale, so this
+    // test cannot catch a missing tie-breaker; it only guards the coarser regression of a
+    // duplicated or dropped row across a paged walk.
+    seedCreditCounterparty("TIE A", "100.00");
+    seedCreditCounterparty("TIE B", "100.00");
+    seedCreditCounterparty("TIE C", "100.00");
+
+    List<Long> walked = new ArrayList<>();
+    for (int offset = 0; offset < 3; offset++) {
+      ListPage<IncomeRow> page = readTools.listIncome(new ListParams(1, offset, null, true));
+      assertThat(page.rows()).hasSize(1);
+      walked.add(page.rows().getFirst().counterpartyId());
+    }
+    assertThat(walked).doesNotHaveDuplicates().hasSize(3);
+  }
+
+  @Test
+  void metaReportsTheUnpagedTotalSoTruncationIsVisible() {
+    seedCreditCounterparty("META A", "300.00");
+    seedCreditCounterparty("META B", "200.00");
+    seedCreditCounterparty("META C", "100.00");
+
+    ListPage<IncomeRow> page = readTools.listIncome(new ListParams(2, 0, null, true));
+
+    // @AfterEach truncates counterparties after every test, so the table is empty when this test
+    // starts and rowsTotal is exactly the 3 seeded here -- not merely ">= 3".
+    assertThat(page.rows()).hasSize(2);
+    assertThat(page.meta().rowsReturned()).isEqualTo(2);
+    assertThat(page.meta().rowsTotal()).isEqualTo(3);
+    assertThat(page.meta().rowsTotal()).isGreaterThan(page.meta().rowsReturned());
+    assertThat(page.meta().limit()).isEqualTo(2);
+    assertThat(page.meta().offset()).isZero();
+    assertThat(page.meta().minAmount()).isNull();
+  }
+
+  @Test
+  void minAmountFiltersInclusivelyAndIsCountedBeforePaging() {
+    seedCreditCounterparty("MIN LOW", "1.00");
+    seedCreditCounterparty("MIN EXACT", "50.00");
+    seedCreditCounterparty("MIN HIGH", "500.00");
+
+    ListPage<IncomeRow> page =
+        readTools.listIncome(new ListParams(null, null, new BigDecimal("50.00"), true));
+
+    assertThat(page.rows()).extracting(IncomeRow::displayName).contains("MIN EXACT", "MIN HIGH");
+    assertThat(page.rows()).extracting(IncomeRow::displayName).doesNotContain("MIN LOW");
+    assertThat(page.meta().minAmount()).isEqualByComparingTo("50.00");
+    assertThat(page.meta().rowsTotal()).isEqualTo(page.rows().size());
+  }
+
+  @Test
+  void offsetPastTheEndYieldsNoRowsButKeepsTheTotal() {
+    seedCreditCounterparty("PAST END", "42.00");
+
+    ListPage<IncomeRow> page = readTools.listIncome(new ListParams(10, 10_000, null, true));
+
+    assertThat(page.rows()).isEmpty();
+    assertThat(page.meta().rowsReturned()).isZero();
+    assertThat(page.meta().rowsTotal()).isEqualTo(1);
+  }
+
+  @Test
+  void compactModeOmitsIdentityTypeAndFirstSeenFromTheSerializedJson() {
+    seedCreditCounterparty("COMPACT", "77.00");
+
+    ListPage<IncomeRow> compact =
+        readTools.listIncome(new ListParams(null, null, new BigDecimal("77.00"), false));
+    ListPage<IncomeRow> verbose =
+        readTools.listIncome(new ListParams(null, null, new BigDecimal("77.00"), true));
+
+    // Assert on the parsed node, not the raw string: a substring check would pass on a row that
+    // merely lacks the value while still emitting the key.
+    var compactRow = new ObjectMapper().valueToTree(compact.rows().getFirst());
+    var verboseRow = new ObjectMapper().valueToTree(verbose.rows().getFirst());
+
+    assertThat(compactRow.has("identityType")).isFalse();
+    assertThat(compactRow.has("firstSeen")).isFalse();
+    assertThat(compactRow.has("creditTotal")).isTrue();
+    assertThat(verboseRow.has("identityType")).isTrue();
+    assertThat(verboseRow.has("firstSeen")).isTrue();
+  }
+
+  private void seedCreditCounterparty(String displayName, String amount) {
+    long imp = importId();
+    insertTxn(
+        imp,
+        "hash-" + UUID.randomUUID(),
+        LocalDate.now().minusDays(30),
+        amount,
+        "CRDT",
+        null,
+        null,
+        displayName);
+    resolver.run(null);
   }
 }

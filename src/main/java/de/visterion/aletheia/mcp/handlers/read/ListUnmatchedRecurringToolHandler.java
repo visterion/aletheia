@@ -32,12 +32,15 @@ public class ListUnmatchedRecurringToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Recurring debits without a documented contract (TP1 contract grain, spec §5 M3):"
+    return "Answers: which recurring debits don't have a documented contract behind them yet?"
+        + " Recurring debits without a documented contract (TP1 contract grain, spec §5 M3):"
         + " UNION of (1) an unlinked mandate contract -- a contracts row whose"
         + " hivemem_cell_id is not yet set, with its recurring series, and (2) a"
         + " mandate-less auto series -- a recurring row with no contract_id at all (never"
         + " carried a mandate_id). contractId distinguishes the two shapes (set for (1),"
-        + " null for (2)).";
+        + " null for (2))."
+        + "\n\nKeywords: Vertrag, Verträge, Verpflichtung, Verpflichtungen, Abbuchung, Lastschrift,"
+        + " Beitrag, Abo";
   }
 
   @Override

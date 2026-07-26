@@ -35,7 +35,7 @@ aletheia:
   ingest:
     dir: ${ALETHEIA_INGEST_DIR:exports}
     max-file-size: ${ALETHEIA_INGEST_MAX_FILE_SIZE:32MB}
-    # app:/ro: blocks below are UNCHANGED (do not fix here - separate task)
+  datasource:
     # Two datasources (spec §6/§7). Both default to empty so DataSourceConfig's fallback chain
     # (explicit props -> @ServiceConnection JdbcConnectionDetails -> spring.datasource.*) applies:
     # in prod set the env vars below; in single-datasource/test setups the fallback keeps working.
@@ -46,8 +46,11 @@ aletheia:
       username: ${ALETHEIA_APP_DB_USER:}
       password: ${ALETHEIA_APP_DB_PASSWORD:}
     ro:
-      # aletheia_ro: GRANT SELECT only. Used exclusively by the sql_query MCP tool so a
-      # prompt-injected query cannot write, even if the tool-layer SELECT-only check is bypassed.
+      # aletheia_ro: GRANT SELECT only. Used exclusively by the sql_query MCP tool.
+      # NOT the write boundary: ReadTools#sqlQuery wraps every statement in its own
+      # SET TRANSACTION READ ONLY transaction, which Postgres enforces regardless of role.
+      # This role's grants and the connection's session-level default_transaction_read_only
+      # are defense in depth behind it.
       # In prod this MUST be set to the dedicated read-only role (ALETHEIA_RO_DB_*).
       url: ${ALETHEIA_RO_DB_URL:}
       username: ${ALETHEIA_RO_DB_USER:}

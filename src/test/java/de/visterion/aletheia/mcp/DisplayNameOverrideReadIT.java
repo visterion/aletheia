@@ -169,7 +169,8 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
   void obligationsRegisterReturnsTheOverrideAsDisplayName() {
     long x = seedDbitCounterparty();
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     ObligationRow row =
         register.rows().stream().filter(r -> r.counterpartyId() == x).findFirst().orElseThrow();
@@ -191,7 +192,8 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
   void listIncomeReturnsTheOverrideAsDisplayName() {
     long y = seedCrdtCounterparty();
 
-    List<IncomeRow> income = readTools.listIncome();
+    List<IncomeRow> income =
+        readTools.listIncome(new ListParams(null, null, null, null)).rows();
 
     IncomeRow row = income.stream().filter(r -> r.counterpartyId() == y).findFirst().orElseThrow();
     assertThat(row.displayName()).isEqualTo(CUSTOM_NAME);

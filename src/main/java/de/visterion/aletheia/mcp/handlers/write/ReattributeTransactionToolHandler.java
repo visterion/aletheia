@@ -33,7 +33,9 @@ public class ReattributeTransactionToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Stamp the real merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the"
+    return "Answers: how do I stamp the real merchant name onto a passthrough booking"
+        + " (Adyen/LogPay/Klarna) that Aletheia couldn't parse on its own? Stamp the real"
+        + " merchant onto passthrough bookings (Adyen/LogPay/Klarna, where the"
         + " deterministic PayPal resolver cannot parse it). Pass the exact transactions as"
         + " refs (get contentHash/occurrenceIndex from counterparty_transactions) and the"
         + " real merchant as attributedName; pass attributedName=null to clear the"
@@ -41,7 +43,8 @@ public class ReattributeTransactionToolHandler implements ToolHandler {
         + " PayPal resolver. Attribute a whole recurring series consistently (all its refs)."
         + " Clearing a PayPal-creditor row is transient (the deterministic resolver re-stamps"
         + " it) -- to correct a wrong PayPal parse, set a manual name instead. Teardown of a"
-        + " no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId).";
+        + " no-longer-wanted merchant is dismiss_counterparty(merchantId, contractId)."
+        + "\n\nKeywords: Abbuchung, Beleg, Überweisung";
   }
 
   @Override

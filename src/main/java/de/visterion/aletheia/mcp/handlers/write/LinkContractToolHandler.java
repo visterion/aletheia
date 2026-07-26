@@ -31,11 +31,13 @@ public class LinkContractToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Link a contract to a HiveMem contract cell. contractId is a contracts.id -- get it"
+    return "Answers: how do I connect a contract row here to its documentation in HiveMem? Link a"
+        + " contract to a HiveMem contract cell. contractId is a contracts.id -- get it"
         + " from list_unmatched_recurring/get_review_queue (for a mandate-less obligation,"
         + " confirm_counterparty/dismiss_counterparty without a contractId first to"
         + " materialize its contract row). Find the cell id via HiveMem:search with"
-        + " where.realm=contracts (or the topic documenting the contract).";
+        + " where.realm=contracts (or the topic documenting the contract)."
+        + "\n\nKeywords: Vertrag, Verträge, Beleg, Rechnung";
   }
 
   @Override

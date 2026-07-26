@@ -166,7 +166,8 @@ class DismissConfirmBatchIT extends AbstractPostgresIT {
 
     // a NULL-mandate contract was materialized + confirmed -> visible in the register, the
     // actual surface a human/Claude reads (not just the raw contracts row).
-    var register = readTools.obligationsRegister();
+    var register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
     assertThat(register.rows())
         .anyMatch(row -> row.counterpartyId() == cp);
 

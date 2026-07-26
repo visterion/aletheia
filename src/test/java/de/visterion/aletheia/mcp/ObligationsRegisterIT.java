@@ -12,6 +12,7 @@ import de.visterion.aletheia.ingest.AbstractPostgresIT;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import tools.jackson.databind.ObjectMapper;
 
 class ObligationsRegisterIT extends AbstractPostgresIT {
 
@@ -138,7 +140,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     insertRecurring(paymentId, paymentContractB, "monthly", "75.00");
     insertTag(paymentId, "nature", "zahlungsdienst", "confirmed");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows())
         .extracting(ObligationRow::contractId)
@@ -154,7 +157,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     insertRecurring(paymentId, paymentContract, "monthly", "50.00");
     insertTag(paymentId, "nature", "zahlungsdienst", "confirmed");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).isEmpty();
     assertThat(register.totalAnnualCost()).isEqualByComparingTo(BigDecimal.ZERO);
@@ -175,7 +179,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     insertRecurring(counterpartyId, contractId, "monthly", "10.00");
     insertTag(counterpartyId, dimension, value, source);
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).extracting(ObligationRow::contractId).containsExactly(contractId);
     assertThat(register.totalAnnualCost()).isEqualByComparingTo("120.00");
@@ -267,7 +272,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
         .where(CONTRACTS.ID.eq(contractA))
         .execute();
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, true));
 
     assertThat(register.rows()).hasSize(1);
     ObligationRow row = register.rows().get(0);
@@ -310,7 +316,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     // no match for a NULL mandate_id).
     insertRecurring(idMix, contractMix, "irregular", null);
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).hasSize(1);
     ObligationRow row = register.rows().get(0);
@@ -338,7 +345,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     insertRecurring(idLow, contractLow, "monthly", "5.00");
     insertRecurring(idHigh, contractHigh, "monthly", "100.00");
 
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).hasSize(2);
     assertThat(register.rows().get(0).displayName()).isEqualTo("High Co");
@@ -400,7 +408,8 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
 
     // No recurring -> falls back to debit from (now filtered) v_contract_evidence
     // which must see only the 65 child, not 100 parent + 65.
-    ObligationsRegister register = readTools.obligationsRegister();
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(null, null, null, null));
 
     assertThat(register.rows()).hasSize(1);
     ObligationRow row = register.rows().get(0);
@@ -409,5 +418,141 @@ class ObligationsRegisterIT extends AbstractPostgresIT {
     // Correct data from child only:
     assertThat(row.annualCost()).isEqualByComparingTo("65.00");
     assertThat(register.totalAnnualCost()).isEqualByComparingTo("65.00");
+  }
+
+  @Test
+  void totalAnnualCostIgnoresPagingButRespectsMinAmount() {
+    // The register's grand total is the sum over ALL matching contracts, not over the page --
+    // otherwise a caller who sets limit sees a total that does not match the rows and is wrong
+    // without any signal. minAmount is the one parameter that DOES move it.
+    long lowId = counterparty("PAGE-LOW", "Low Page Co");
+    long lowContract = confirmedContract(lowId);
+    insertRecurring(lowId, lowContract, "monthly", "5.00");
+
+    long midId = counterparty("PAGE-MID", "Mid Page Co");
+    long midContract = confirmedContract(midId);
+    insertRecurring(midId, midContract, "monthly", "10.00");
+
+    long highId = counterparty("PAGE-HIGH", "High Page Co");
+    long highContract = confirmedContract(highId);
+    insertRecurring(highId, highContract, "monthly", "20.00");
+
+    ObligationsRegister unpaged =
+        readTools.obligationsRegister(new ListParams(null, null, null, true));
+    ObligationsRegister paged = readTools.obligationsRegister(new ListParams(1, 0, null, true));
+
+    assertThat(paged.rows()).hasSize(1);
+    assertThat(paged.totalAnnualCost()).isEqualByComparingTo(unpaged.totalAnnualCost());
+    assertThat(paged.meta().rowsTotal()).isEqualTo(unpaged.rows().size());
+    assertThat(paged.meta().rowsTotal()).isGreaterThan(paged.meta().rowsReturned());
+
+    // cutoff is the HIGHEST annualCost in the set (rows are sorted descending), so an inclusive
+    // boundary must return exactly that one row -- an exclusive comparison would return none,
+    // which "allSatisfy" on an empty list and "<=" on a lower total would both pass vacuously.
+    BigDecimal cutoff = unpaged.rows().getFirst().annualCost();
+    ObligationsRegister filtered =
+        readTools.obligationsRegister(new ListParams(null, null, cutoff, true));
+    assertThat(filtered.totalAnnualCost()).isLessThanOrEqualTo(unpaged.totalAnnualCost());
+    assertThat(filtered.rows())
+        .extracting(ObligationRow::contractId)
+        .containsExactly(highContract);
+    assertThat(filtered.meta().rowsTotal()).isEqualTo(1);
+  }
+
+  @Test
+  void offsetPastTheEndYieldsNoRowsButKeepsTheTotal() {
+    long id = counterparty("PAST-END", "Past End Co");
+    long contractId = confirmedContract(id);
+    insertRecurring(id, contractId, "monthly", "42.00");
+
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(10, 10_000, null, true));
+
+    assertThat(register.rows()).isEmpty();
+    assertThat(register.meta().rowsReturned()).isZero();
+    assertThat(register.meta().rowsTotal()).isEqualTo(1);
+  }
+
+  @Test
+  void maxIntLimitDoesNotOverflowTheOffsetPlusLimitClamp() {
+    // from + limit as int arithmetic overflows for limit = Integer.MAX_VALUE, which a caller can
+    // legally set (ListParams only rejects limit <= 0); an overflowed negative "to" would throw
+    // from subList rather than clamp to the actual row count.
+    long id = counterparty("MAX-LIMIT", "Max Limit Co");
+    long contractId = confirmedContract(id);
+    insertRecurring(id, contractId, "monthly", "7.00");
+
+    ObligationsRegister register =
+        readTools.obligationsRegister(new ListParams(Integer.MAX_VALUE, 1, null, true));
+
+    assertThat(register.rows()).isEmpty();
+    assertThat(register.meta().rowsReturned()).isZero();
+    assertThat(register.meta().rowsTotal()).isEqualTo(1);
+  }
+
+  @Test
+  void compactRowsOmitTheVerboseFieldsInTheSerializedJson() {
+    long id = counterparty("COMPACT-CP", "Compact Co");
+    long contractId = confirmedContract(id);
+    insertRecurring(id, contractId, "monthly", "10.00");
+
+    ObligationsRegister compact =
+        readTools.obligationsRegister(new ListParams(null, null, null, false));
+    ObligationsRegister verbose =
+        readTools.obligationsRegister(new ListParams(null, null, null, true));
+
+    var compactRow = new ObjectMapper().valueToTree(compact.rows().getFirst());
+    assertThat(compactRow.has("mandateId")).isFalse();
+    assertThat(compactRow.has("identityType")).isFalse();
+    assertThat(compactRow.has("tags")).isFalse();
+    assertThat(compactRow.has("hasContract")).isFalse();
+    assertThat(compactRow.has("hivememCellId")).isFalse();
+    assertThat(compactRow.has("annualCost")).isTrue();
+    assertThat(compactRow.has("contractId")).isTrue();
+
+    // An omitted "tags" key must be distinguishable from a present-but-empty list: verbose mode
+    // emits the key even when the counterparty has no tags at all.
+    var verboseRow = new ObjectMapper().valueToTree(verbose.rows().getFirst());
+    assertThat(verboseRow.has("tags")).isTrue();
+    assertThat(verboseRow.has("hasContract")).isTrue();
+  }
+
+  @Test
+  void pagingIsDeterministicWhenAnnualCostsTie() {
+    // Several contracts falling back to BigDecimal.ZERO (AnnualCost:49) is the ordinary case, not
+    // a corner case, so the contractId tie-breaker is what makes limit/offset sound. All six
+    // contracts here have no recurring series and no transactions, so every one falls back to
+    // BigDecimal.ZERO -- a total tie across the whole set.
+    long[] counterpartyIds = new long[6];
+    List<Long> contractIds = new ArrayList<>();
+    for (int i = 0; i < 6; i++) {
+      counterpartyIds[i] = counterparty("TIE-" + i, "Tie Co " + i);
+      contractIds.add(confirmedContract(counterpartyIds[i]));
+    }
+    // The query has no ORDER BY. Freshly inserted rows are stored (and therefore scanned) in
+    // ascending contractId order already, which would make this test pass trivially even with
+    // the tie-breaker deleted -- exactly the false-confidence defect the ListIncomeIT paging test
+    // shipped with. Physically re-cluster the CONTRACTS heap into DESCENDING id order so the
+    // untouched fetch order is the OPPOSITE of what the tie-breaker demands; verified by mutation
+    // (see below) that only the tie-breaker can put it back into ascending contractId order.
+    db.execute("CREATE INDEX tmp_contracts_desc_idx ON contracts (id DESC)");
+    db.execute("CLUSTER contracts USING tmp_contracts_desc_idx");
+    db.execute("DROP INDEX tmp_contracts_desc_idx");
+    db.execute("ANALYZE contracts");
+    List<Long> expectedAscending = contractIds.stream().sorted().toList();
+
+    List<Long> walked = new ArrayList<>();
+    long total =
+        readTools.obligationsRegister(new ListParams(1, 0, null, true)).meta().rowsTotal();
+    for (int offset = 0; offset < total; offset++) {
+      var page = readTools.obligationsRegister(new ListParams(1, offset, null, true));
+      walked.add(page.rows().getFirst().contractId());
+    }
+    assertThat(walked).doesNotHaveDuplicates().hasSize((int) total);
+    // This is the assertion that actually depends on the tie-breaker: without it, Java's stable
+    // sort merely preserves the descending fetch order forced above (mutation-verified: removing
+    // .thenComparingLong(...) in ReadTools.obligationsRegister makes this assertion fail with
+    // `walked` equal to the reverse of expectedAscending), not ascending contractId.
+    assertThat(walked).containsExactlyElementsOf(expectedAscending);
   }
 }

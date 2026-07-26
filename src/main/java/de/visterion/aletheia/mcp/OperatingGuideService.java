@@ -12,19 +12,26 @@ import org.springframework.stereotype.Component;
 @Component
 public class OperatingGuideService {
 
+  private static final String PREFERENCES_HEADING = "# Customer preferences";
+
   private final DSLContext db;
 
   public OperatingGuideService(DSLContext db) {
     this.db = db;
   }
 
+  /** The protected, seeded operating guide -- served by the {@code read_me} tool. */
+  public String operatingGuide() {
+    Record guide = db.fetchOne("SELECT workflow_md FROM operating_guide WHERE scope = 'default'");
+    return guide == null ? "" : guide.get("workflow_md", String.class);
+  }
+
   public String wakeUp() {
     Record guide =
-        db.fetchOne(
-            "SELECT workflow_md, preferences_md FROM operating_guide WHERE scope = 'default'");
-    String workflow = guide == null ? "" : guide.get("workflow_md", String.class);
+        db.fetchOne("SELECT preferences_md FROM operating_guide WHERE scope = 'default'");
     String prefsRaw = guide == null ? "" : guide.get("preferences_md", String.class);
-    String prefs = (prefsRaw == null || prefsRaw.isBlank()) ? "(none recorded yet)" : prefsRaw;
+    String stripped = prefsRaw == null ? "" : stripDuplicateHeading(prefsRaw).strip();
+    String prefs = stripped.isBlank() ? "(none recorded yet)" : stripped;
 
     long unreviewed =
         (Long)
@@ -43,10 +50,7 @@ public class OperatingGuideService {
     long confirmedContracts =
         (Long) db.fetchValue("SELECT count(*) FROM contracts WHERE status = 'confirmed'");
 
-    return workflow
-        + "\n\n# Customer preferences\n"
-        + prefs
-        + "\n\n# Current state (live)\n"
+    return "# Aletheia — state\n"
         + "- Unreviewed counterparties: "
         + unreviewed
         + "\n"
@@ -61,7 +65,32 @@ public class OperatingGuideService {
         + "\n"
         + "- Last import: "
         + lastImportLine()
-        + "\n";
+        + "\n"
+        + "\n# Customer preferences\n"
+        + prefs
+        + "\n\nOperating guide: read_me()\n";
+  }
+
+  /**
+   * Drops a leading {@code # Customer preferences} line from the customer-owned text, because the
+   * server emits that heading itself and would otherwise render it twice.
+   *
+   * <p>Deliberately matches that exact heading (case-insensitive, surrounding whitespace ignored)
+   * and nothing else: a blanket "strip any leading H1" rule would also swallow a customer's own
+   * opening heading and silently keep only its body. Leading blank lines are skipped before the
+   * comparison, so a preferences text that merely starts with an empty line still has its
+   * duplicate heading recognized and removed.
+   */
+  private static String stripDuplicateHeading(String preferences) {
+    String[] lines = preferences.split("\n", -1);
+    int i = 0;
+    while (i < lines.length && lines[i].isBlank()) {
+      i++;
+    }
+    if (i < lines.length && lines[i].strip().equalsIgnoreCase(PREFERENCES_HEADING)) {
+      return String.join("\n", java.util.Arrays.copyOfRange(lines, i + 1, lines.length));
+    }
+    return preferences;
   }
 
   private String lastImportLine() {
