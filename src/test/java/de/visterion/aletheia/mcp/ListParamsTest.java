@@ -27,12 +27,30 @@ class ListParamsTest {
   }
 
   @Test
+  void explicitFalseVerboseResolvesToFalse() {
+    // Distinct from nullsResolveToTheDocumentedDefaults: pins that effectiveVerbose() actually
+    // checks for TRUE rather than merely "not null" (which would also pass for an explicit false).
+    ListParams params = new ListParams(null, null, null, false);
+    assertThat(params.effectiveVerbose()).isFalse();
+  }
+
+  @Test
+  void theAcceptedEdgeOfEachGuardIsPinned() {
+    // limit = 1 and offset = 0 are the smallest values each guard must still accept; without this,
+    // tightening the guard to "limit <= 1" or "offset <= 0" leaves the rest of the suite green.
+    ListParams params = new ListParams(1, 0, null, null);
+    assertThat(params.effectiveLimit()).isEqualTo(1);
+    assertThat(params.effectiveOffset()).isZero();
+  }
+
+  @Test
   void nonPositiveLimitIsRejected() {
     assertThatThrownBy(() -> new ListParams(0, null, null, null))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("limit");
     assertThatThrownBy(() -> new ListParams(-1, null, null, null))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("limit");
   }
 
   @Test
