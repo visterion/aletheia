@@ -95,28 +95,32 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
         .fetchOne(CONTRACTS.ID);
   }
 
-  /** Seeds a two-mandate counterparty (Debeka), each mandate meeting the >=2-month rule. */
+  /** Seeds a two-mandate counterparty (an insurer), each mandate meeting the >=2-month rule. */
   private long seedTwoContractCounterparty() {
     long imp = importId();
     // Contract A (MANDATE-1): 2 debits of 30.00 in distinct months -> debit_last_365d = 60.00.
-    insertTxn(imp, "hash-deb-a1", LocalDate.now().minusDays(5), "30.00", "DBIT", "CDTR-DEBEKA", "MANDATE-1", "Debeka");
-    insertTxn(imp, "hash-deb-a2", LocalDate.now().minusDays(35), "30.00", "DBIT", "CDTR-DEBEKA", "MANDATE-1", "Debeka");
+    insertTxn(imp, "hash-ins-a1", LocalDate.now().minusDays(5), "30.00", "DBIT", "CDTR-INSURER",
+        "MANDATE-1", "SYNTHETIC INSURER");
+    insertTxn(imp, "hash-ins-a2", LocalDate.now().minusDays(35), "30.00", "DBIT", "CDTR-INSURER",
+        "MANDATE-1", "SYNTHETIC INSURER");
     // Contract B (MANDATE-2): 2 debits of 50.00 in distinct months -> debit_last_365d = 100.00.
-    insertTxn(imp, "hash-deb-b1", LocalDate.now().minusDays(8), "50.00", "DBIT", "CDTR-DEBEKA", "MANDATE-2", "Debeka");
-    insertTxn(imp, "hash-deb-b2", LocalDate.now().minusDays(38), "50.00", "DBIT", "CDTR-DEBEKA", "MANDATE-2", "Debeka");
+    insertTxn(imp, "hash-ins-b1", LocalDate.now().minusDays(8), "50.00", "DBIT", "CDTR-INSURER",
+        "MANDATE-2", "SYNTHETIC INSURER");
+    insertTxn(imp, "hash-ins-b2", LocalDate.now().minusDays(38), "50.00", "DBIT", "CDTR-INSURER",
+        "MANDATE-2", "SYNTHETIC INSURER");
 
     resolveAll();
-    return counterpartyIdFor("CDTR-DEBEKA");
+    return counterpartyIdFor("CDTR-INSURER");
   }
 
   @Test
   void twoContractCounterpartyProducesTwoRegisterRowsTotalIsTheirSum() {
-    long debekaId = seedTwoContractCounterparty();
-    long contractA = contractIdFor(debekaId, "MANDATE-1");
-    long contractB = contractIdFor(debekaId, "MANDATE-2");
+    long insurerId = seedTwoContractCounterparty();
+    long contractA = contractIdFor(insurerId, "MANDATE-1");
+    long contractB = contractIdFor(insurerId, "MANDATE-2");
 
-    writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
-    writeTools.confirmCounterparty(debekaId, contractB, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(insurerId, contractA, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(insurerId, contractB, null, null, null, null, null, null, null);
 
     ObligationsRegister register =
         readTools.obligationsRegister(new ListParams(null, null, null, null));
@@ -135,12 +139,12 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
 
   @Test
   void irregularContractCostIsItsOwnDebitNeverTheCounterpartyCombinedDebit() {
-    long debekaId = seedTwoContractCounterparty();
-    long contractA = contractIdFor(debekaId, "MANDATE-1");
-    long contractB = contractIdFor(debekaId, "MANDATE-2");
+    long insurerId = seedTwoContractCounterparty();
+    long contractA = contractIdFor(insurerId, "MANDATE-1");
+    long contractB = contractIdFor(insurerId, "MANDATE-2");
 
-    writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
-    writeTools.confirmCounterparty(debekaId, contractB, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(insurerId, contractA, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(insurerId, contractB, null, null, null, null, null, null, null);
 
     ObligationsRegister register =
         readTools.obligationsRegister(new ListParams(null, null, null, null));
@@ -159,17 +163,17 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
 
   @Test
   void statusGateOnlyConfirmedContractAppearsCounterpartyStatusIrrelevant() {
-    long debekaId = seedTwoContractCounterparty();
-    long contractA = contractIdFor(debekaId, "MANDATE-1");
-    long contractB = contractIdFor(debekaId, "MANDATE-2");
+    long insurerId = seedTwoContractCounterparty();
+    long contractA = contractIdFor(insurerId, "MANDATE-1");
+    long contractB = contractIdFor(insurerId, "MANDATE-2");
 
-    writeTools.confirmCounterparty(debekaId, contractA, null, null, null, null, null, null, null);
+    writeTools.confirmCounterparty(insurerId, contractA, null, null, null, null, null, null, null);
     // contractB stays open; counterparties.status is never flipped by the per-contract confirm.
 
     assertThat(
             db.select(COUNTERPARTIES.STATUS)
                 .from(COUNTERPARTIES)
-                .where(COUNTERPARTIES.ID.eq(debekaId))
+                .where(COUNTERPARTIES.ID.eq(insurerId))
                 .fetchOne(COUNTERPARTIES.STATUS))
         .isEqualTo("open");
 
@@ -243,9 +247,9 @@ class RegisterToolsContractGrainIT extends AbstractPostgresIT {
 
   @Test
   void getReviewQueueListsOpenContractsRankedByAnnualCostDesc() {
-    long debekaId = seedTwoContractCounterparty();
-    long contractA = contractIdFor(debekaId, "MANDATE-1"); // 60.00, stays open.
-    long contractB = contractIdFor(debekaId, "MANDATE-2"); // 100.00, stays open.
+    long insurerId = seedTwoContractCounterparty();
+    long contractA = contractIdFor(insurerId, "MANDATE-1"); // 60.00, stays open.
+    long contractB = contractIdFor(insurerId, "MANDATE-2"); // 100.00, stays open.
 
     List<ReviewQueueEntry> queue = readTools.getReviewQueue(null, true);
 
