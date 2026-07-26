@@ -1,13 +1,100 @@
 #!/bin/sh
-# .githooks/pre-commit — WARNING ONLY, never blocks
-CHANGED_FILES=$(git diff --cached --name-only)
-STRUCTURAL=$(echo "$CHANGED_FILES" | grep -E '(pom\.xml|package\.json|Dockerfile|\.ya?ml)' || true)
-NEW=$(git diff --cached --diff-filter=A --name-only | grep -E '\.(java|ts|tsx|js|vue|py)$' || true)
-DELETED=$(git diff --cached --diff-filter=D --name-only | grep -E '\.(java|ts|tsx|js|vue|py)$' || true)
+# pre-commit — privacy guardrails for a PUBLIC repo, aletheia variant.
+#
+# Same as the common hook, plus hard blocks for real financial data:
+# this repo processes actual bank exports, and its only protection today
+# is .gitignore.
+#
+# Deliberate bypass:  git commit --no-verify
+set -u
 
-if [ -n "$STRUCTURAL" ] || [ -n "$NEW" ] || [ -n "$DELETED" ]; then
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$STAGED" ] && exit 0
+ADDED=$(git diff --cached -U0 --diff-filter=ACMR | grep '^+' | grep -v '^+++' || true)
+# The hook itself legitimately contains credential and IBAN *patterns*. Scanning
+# it for such content would make it block its own commit, so exclude .githooks/
+# from the content checks only — path-based rules still apply everywhere.
+ADDED_SCAN=$(git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude).githooks/' \
+  | grep '^+' | grep -v '^+++' || true)
+
+fail=0
+
+# ---------------------------------------------------------------- HARD BLOCK 1
+# Agent context files are local-only operating docs.
+CTX=$(printf '%s\n' "$STAGED" | grep -E '^(CLAUDE\.md|AGENTS\.md|\.claude/)' || true)
+if [ -n "$CTX" ]; then
+  echo "BLOCKED: agent context files must stay local (public repo):"
+  printf '  %s\n' $CTX
+  echo "  CLAUDE.md here names real merchants and insurers."
+  echo "  If genuinely intended: git commit --no-verify"
+  fail=1
+fi
+
+# ---------------------------------------------------------------- HARD BLOCK 2
+# Real credential prefixes in ADDED lines only. Deliberately narrow.
+CRED=$(printf '%s\n' "$ADDED_SCAN" | grep -E \
+  'sk-ant-|sk-proj-|ghp_|gho_|ghs_|github_pat_|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-|hf_[A-Za-z0-9]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(postgres|postgresql|mysql|mongodb\+srv|redis|amqp)://[^/: ]+:[^@ ]+@' \
+  || true)
+if [ -n "$CRED" ]; then
+  echo "BLOCKED: staged content looks like a real credential."
+  echo "  Rotate it first — a history rewrite does NOT delete it from GitHub."
+  fail=1
+fi
+
+# ---------------------------------------------------------------- HARD BLOCK 3
+# Paths that hold real financial data. docs/ and exports/ are gitignored by
+# convention; this catches `git add -f` and a loosened .gitignore.
+FIN=$(printf '%s\n' "$STAGED" | grep -E \
+  '^(docs/|exports/|dumps/)|\.csv$|^camt.*\.xml$|\.dump$|\.sql\.gz$' || true)
+if [ -n "$FIN" ]; then
+  echo "BLOCKED: paths that carry real account data:"
+  printf '  %s\n' $FIN
+  echo "  Bank exports, dumps and local specs never belong in this repo."
+  fail=1
+fi
+
+# ---------------------------------------------------------------- HARD BLOCK 4
+# IBAN / SEPA creditor ID in staged content.
+# Allowlist: anything whose check digits are 00 is synthetic by construction —
+# 00 is not a valid IBAN checksum, and every fixture here uses DE00…,
+# DE00ZZZ…, DE00SYNTH…, DE00RAW…. Without this the hook blocks its own tests.
+CAND=$(printf '%s\n' "$ADDED_SCAN" \
+  | grep -oE '\b[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}\b' \
+  | grep -vE '^[A-Z]{2}00' || true)
+if [ -n "$CAND" ]; then
+  echo "BLOCKED: staged content contains what looks like a real IBAN or"
+  echo "         SEPA creditor ID:"
+  printf '%s\n' "$CAND" | sort -u | sed 's/^\(.\{8\}\).*/  \1… (redacted)/'
+  echo "  Test data must be synthetic — use DE00000000000000000001 style values."
+  fail=1
+fi
+
+# ------------------------------------------------------------------ WARN ONLY
+INFRA=$(printf '%s\n' "$ADDED" | grep -E \
+  '192\.168\.|10\.[0-9]+\.[0-9]+\.[0-9]+|172\.(1[6-9]|2[0-9]|3[01])\.|\.fritz\.box|\bpve\b|(CT|LXC) ?1[0-9][0-9]\b' \
+  || true)
+[ -n "$INFRA" ] && echo "WARN: staged content mentions internal infrastructure."
+
+MAILS=$(printf '%s\n' "$ADDED" \
+  | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' \
+  | grep -vE '@(example\.(com|org|net)|users\.noreply\.github\.com)$' || true)
+if [ -n "$MAILS" ]; then
+  echo "WARN: staged content contains non-example email addresses:"
+  printf '%s\n' "$MAILS" | sort -u | sed 's/^/      /'
+fi
+
+STRUCTURAL=$(printf '%s\n' "$STAGED" | grep -E '(pom\.xml|package\.json|Dockerfile|\.ya?ml)' || true)
+SRCCHG=$(printf '%s\n' "$STAGED" | grep -E '\.(java|ts|tsx|js|vue|py)$' || true)
+if [ -n "$STRUCTURAL" ] || [ -n "$SRCCHG" ]; then
   if [ -f CLAUDE.md ] && [ -n "$(find . -maxdepth 3 \( -name '*.java' -o -name '*.ts' -o -name '*.vue' -o -name '*.py' \) -newer CLAUDE.md 2>/dev/null | head -1)" ]; then
-    echo "  Structure changed but local CLAUDE.md looks stale."
-    echo "   Run: 'Update CLAUDE.md to reflect recent changes'"
+    echo "WARN: structure changed but local CLAUDE.md looks stale."
   fi
 fi
+
+if command -v code-review-graph >/dev/null 2>&1; then
+  code-review-graph update || true
+  code-review-graph detect-changes --brief || true
+fi
+
+[ "$fail" -eq 0 ] || exit 1
+exit 0
