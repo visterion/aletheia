@@ -28,11 +28,11 @@ public class SqlQueryToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Read-only escape hatch: run an arbitrary SELECT against the register/evidence schema."
-        + " Runs on a SELECT-only DB role; non-SELECT, stacked, and SELECT INTO statements"
-        + " are rejected before execution. CTEs are supported (WITH ... SELECT). The connection"
-        + " runs as a SELECT-only database role, which is what actually prevents writes; a"
-        + " statement that tries to write fails at the database, not at the input check.";
+    return "Read-only escape hatch: run an arbitrary SELECT (CTEs supported, WITH ... SELECT)"
+        + " against the register/evidence schema. Stacked statements and SELECT INTO are"
+        + " rejected before execution, but a WITH-prefixed write (e.g. WITH x AS (DELETE ...)"
+        + " SELECT ...) is not caught by that check -- it is stopped by the connection itself,"
+        + " which runs read-only, so any write fails at the database, not at the input check.";
   }
 
   @Override

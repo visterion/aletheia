@@ -44,9 +44,12 @@ import org.springframework.stereotype.Component;
  * physical rows.
  *
  * <p>All tools except {@link #sqlQuery} run on the app {@link DSLContext} ({@code db}, the
- * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): a
- * prompt-injected query cannot write, even if the tool-layer SELECT-only check below is somehow
- * bypassed, because the underlying DB role is SELECT-only.
+ * {@code @Primary} bean). {@link #sqlQuery} runs exclusively on {@code roDsl} (spec §6): the
+ * tool-layer check below now admits a leading {@code WITH} by design, so {@code WITH x AS
+ * (SELECT 1) DELETE ...} passes it -- the real boundary is the {@code roDsl} connection itself,
+ * which runs every statement in a session with {@code default_transaction_read_only = on}
+ * (verified at startup by {@code ReadOnlyConnectionGuard}), independent of what the underlying
+ * DB role is granted.
  */
 @Component
 public class ReadTools {
@@ -78,7 +81,8 @@ public class ReadTools {
    *
    * <p><b>Comment placement is load-bearing, not stylistic:</b> every explanatory comment sits
    * <i>after</i> the {@code SELECT} keyword, not before it, because {@link #requireSelectOnly}'s
-   * {@code SELECT_ONLY} guard anchors on {@code ^\s*SELECT} and rejects a leading {@code --} line.
+   * {@code SELECT_ONLY} guard anchors on {@code ^\s*(WITH|SELECT)} and rejects a leading {@code
+   * --} line.
    * The wording also avoids the bare word "into" (e.g. "folded under", never "folded into"),
    * because {@code SELECT_INTO} scans {@link #stripStringLiterals} output, which blanks quoted
    * string literals but not comments, so a stray "into" reads as {@code SELECT ... INTO}. Both are
@@ -1292,19 +1296,23 @@ public class ReadTools {
   }
 
   /**
-   * Rejects anything that is not a single, side-effect-free {@code SELECT} statement, before the
-   * tool ever touches the (SELECT-only) {@code roDsl} connection (spec §5/§9): non-SELECT
-   * statements (INSERT, UPDATE, DELETE, DDL, ...), stacked statements (a {@code ;} followed by
-   * more SQL), and the {@code SELECT ... INTO ...} table-creation form (a SELECT that is
-   * actually a write: it creates and populates a new table).
+   * A malformed-input filter, not a read-only guarantee, before the tool ever touches {@code
+   * roDsl} (spec §5/§9): rejects a statement that does not begin with {@code SELECT} or {@code
+   * WITH} (so plain INSERT/UPDATE/DELETE/DDL are caught), stacked statements (a {@code ;}
+   * followed by more SQL), and the {@code SELECT ... INTO ...} table-creation form (a SELECT that
+   * is actually a write: it creates and populates a new table).
    *
-   * <p><b>This is defense-in-depth, not the security boundary.</b> The real boundary is the
-   * {@code aletheia_ro} DB role backing {@link #roDsl}: it has {@code SELECT} only, no {@code
-   * CREATE}, and no {@code EXECUTE} on dangerous functions. This tool-layer guard catches the
-   * obvious shapes (non-SELECT, stacked statements, {@code SELECT INTO}) early with a clear error
-   * message, but it cannot catch a side-effecting function call hidden inside an otherwise
-   * syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)} or {@code SELECT
-   * lo_export(...)}) -- blocking those is the DB role's job, not a regex's.
+   * <p><b>This is defense-in-depth, not the security boundary.</b> Accepting a leading {@code
+   * WITH} means {@code WITH x AS (DELETE FROM t RETURNING *) SELECT count(*) FROM x} passes this
+   * check by design -- see {@code SqlQueryIT}. The real boundary is the {@code roDsl} connection
+   * itself: {@code DataSourceConfig.roDataSource} puts every connection it hands out into a
+   * session with {@code default_transaction_read_only = on}, so Postgres refuses any DML
+   * (SQLSTATE {@code 25006}) independent of what the underlying DB role is granted; {@code
+   * ReadOnlyConnectionGuard} verifies that at startup and refuses to boot otherwise. This
+   * tool-layer guard catches the obvious shapes (non-SELECT/WITH, stacked statements, {@code
+   * SELECT INTO}) early with a clear error message, but it cannot catch a side-effecting function
+   * call hidden inside an otherwise syntactically valid SELECT (e.g. {@code SELECT pg_sleep(10)}
+   * or {@code SELECT lo_export(...)}) -- blocking those is the connection's job, not a regex's.
    */
   private static void requireSelectOnly(String sql) {
     if (sql == null || sql.isBlank()) {

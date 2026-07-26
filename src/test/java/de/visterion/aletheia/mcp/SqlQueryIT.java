@@ -5,10 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import javax.sql.DataSource;
 import org.jooq.DSLContext;
 import org.jooq.SQLDialect;
+import org.jooq.exception.DataAccessException;
 import org.jooq.impl.DSL;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +65,28 @@ class SqlQueryIT extends AbstractPostgresIT {
     // superuser. Running the SQL directly on restrictedRo would skip requireSelectOnly and prove
     // nothing about the tool.
     restrictedReadTools = new ReadTools(db, restrictedRo, null, null, null);
+
+    db.execute(
+        "INSERT INTO counterparties (identity_type, identity_value, display_name) "
+            + "VALUES ('creditor_id', 'SQLQUERY-IT-BACKSTOP', 'Test Counterparty') "
+            + "ON CONFLICT (identity_type, identity_value) DO NOTHING");
+  }
+
+  @AfterAll
+  static void dropReadOnlyRole() throws java.sql.SQLException {
+    // A hand-built connection, not the autowired (instance-scoped) db: @AfterAll is static.
+    try (Connection connection =
+            DriverManager.getConnection(containerJdbcUrl(), containerUsername(), containerPassword());
+        var statement = connection.createStatement()) {
+      var rows =
+          statement.executeQuery(
+              "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '" + RO_USER + "')");
+      rows.next();
+      if (rows.getBoolean(1)) {
+        statement.execute("DROP OWNED BY " + RO_USER + " CASCADE");
+        statement.execute("DROP ROLE " + RO_USER);
+      }
+    }
   }
 
   @Test
@@ -91,12 +117,19 @@ class SqlQueryIT extends AbstractPostgresIT {
   @Test
   void aWriteInsideACteIsStoppedByTheRoleAndChangesNothing() {
     long before = (Long) db.fetchValue("SELECT count(*) FROM counterparties");
+    // A vacuous backstop (0 == 0) would pass even if the DELETE executed; the @BeforeEach seed
+    // guarantees there is at least one row for the DELETE to actually remove.
+    assertThat(before).isGreaterThan(0L);
 
+    // isInstanceOf + hasMessageContaining, not just "not an IllegalArgumentException": a typo'd
+    // table, a missing grant on an unrelated object, or a dropped connection would also satisfy
+    // the weaker check without proving the role actually blocked the write.
     assertThatThrownBy(
             () ->
                 restrictedReadTools.sqlQuery(
                     "WITH x AS (DELETE FROM counterparties RETURNING *) SELECT count(*) FROM x"))
-        .isNotInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(DataAccessException.class)
+        .hasMessageContaining("permission denied");
 
     // An exception alone would not prove nothing was written.
     assertThat((Long) db.fetchValue("SELECT count(*) FROM counterparties")).isEqualTo(before);
@@ -107,11 +140,13 @@ class SqlQueryIT extends AbstractPostgresIT {
     // The widened regex admits this shape too: it starts with WITH, has no semicolon, and carries
     // no INTO token for the SELECT_INTO guard to catch.
     long before = (Long) db.fetchValue("SELECT count(*) FROM counterparties");
+    assertThat(before).isGreaterThan(0L);
 
     assertThatThrownBy(
             () ->
                 restrictedReadTools.sqlQuery("WITH x AS (SELECT 1) DELETE FROM counterparties"))
-        .isNotInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(DataAccessException.class)
+        .hasMessageContaining("permission denied");
 
     assertThat((Long) db.fetchValue("SELECT count(*) FROM counterparties")).isEqualTo(before);
   }

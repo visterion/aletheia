@@ -31,6 +31,16 @@ public abstract class AbstractPostgresIT {
     return POSTGRES.getJdbcUrl();
   }
 
+  /** The shared container's default (full-privilege) username, for a second raw connection. */
+  protected static String containerUsername() {
+    return POSTGRES.getUsername();
+  }
+
+  /** The shared container's default (full-privilege) password, for a second raw connection. */
+  protected static String containerPassword() {
+    return POSTGRES.getPassword();
+  }
+
   @DynamicPropertySource
   static void disableStartupIngest(DynamicPropertyRegistry registry) {
     // Point ingest at a non-existent dir so the startup runner no-ops (spec §7 test isolation).
