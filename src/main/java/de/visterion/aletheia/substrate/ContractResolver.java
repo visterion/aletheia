@@ -38,6 +38,11 @@ public class ContractResolver implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(ContractResolver.class);
 
+  // The ON CONFLICT arbiter names product because V19 replaced uq_contract_counterparty_mandate
+  // with uq_contract_counterparty_mandate_product; the two-column target lost its supporting
+  // index and would fail on every resolve. Behaviour is unchanged: this INSERT does not set
+  // product, so every row it writes carries NULL, and NULLS NOT DISTINCT makes that the same slot
+  // the old key addressed. Deriving contracts AT product grain is a later task.
   // language=SQL
   private static final String UPSERT_CONTRACTS =
       """
@@ -88,7 +93,7 @@ public class ContractResolver implements ApplicationRunner {
       ) r
       GROUP BY r.effective_cp, r.mandate_id
       HAVING count(DISTINCT r.month) >= 2
-      ON CONFLICT (counterparty_id, mandate_id) DO NOTHING
+      ON CONFLICT (counterparty_id, mandate_id, product) DO NOTHING
       """;
 
   // language=SQL
