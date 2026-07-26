@@ -71,11 +71,19 @@
   },
   {
     "name": "describe_schema",
-    "description": "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query can be written without guessing. No data rows.",
+    "description": "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query can be written without guessing, plus three runnable example queries. No data rows. Optional tables filters the column list to an exact, lowercase subset of the allowed names; an unknown name fails with the allowed list rather than returning nothing.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {}
+      "properties": {
+        "tables": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "restrict the output to these tables (exact, lowercase names); omit for all of them"
+        }
+      }
     }
   },
   {

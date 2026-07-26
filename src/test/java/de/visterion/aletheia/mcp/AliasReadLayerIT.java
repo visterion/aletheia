@@ -250,7 +250,7 @@ class AliasReadLayerIT extends AbstractPostgresIT {
 
   @Test
   void describeSchemaListsCounterpartyAliasTable() {
-    List<SchemaColumn> columns = readTools.describeSchema();
+    List<SchemaColumn> columns = readTools.describeSchema(null).columns();
 
     assertThat(columns).extracting(SchemaColumn::table).contains("counterparty_alias");
   }

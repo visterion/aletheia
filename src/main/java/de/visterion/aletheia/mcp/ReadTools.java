@@ -53,7 +53,7 @@ public class ReadTools {
 
   private static final int DEFAULT_REVIEW_QUEUE_LIMIT = 50;
 
-  /** The exact set of tables/views {@link #describeSchema()} exposes. Auth/oauth tables are
+  /** The exact set of tables/views {@link #describeSchema(List)} exposes. Auth/oauth tables are
    * deliberately excluded (spec §6/§9): {@code sql_query} needs to discover the register/evidence
    * schema, never the auth schema. */
   private static final List<String> SCHEMA_TABLES =
@@ -68,6 +68,49 @@ public class ReadTools {
           "v_counterparty_evidence",
           "counterparty_alias",
           "cashflow_role_map");
+
+  /**
+   * Three canonical queries handed out with every {@code describe_schema} call. Each teaches one
+   * rule that the column metadata cannot show and that a first-time caller reliably gets wrong:
+   * split parents must be excluded or amounts double-count; counterparty identity must go through
+   * the alias table or a merged counterparty is counted twice; and an {@code auto} tag is a
+   * proposal, not a decision.
+   */
+  private static final List<String> SCHEMA_EXAMPLES =
+      List.of(
+          """
+          SELECT -- Monthly outgoing total. The NOT EXISTS guard drops split PARENTS: a parent
+                 -- whose children were booked separately would otherwise be counted alongside them.
+                 date_trunc('month', t.booking_date) AS month, sum(t.amount) AS total
+          FROM transactions t
+          WHERE t.direction = 'DBIT'
+            AND NOT EXISTS (SELECT 1 FROM transactions c
+                            WHERE c.split_parent_content_hash = t.content_hash
+                              AND c.split_parent_occurrence_index = t.occurrence_index)
+          GROUP BY 1 ORDER BY 1
+          """,
+          """
+          SELECT -- Counterparties with their canonical identity. Always resolve through
+                 -- counterparty_alias: a counterparty folded under another by merge_counterparty
+                 -- keeps its own row (merged_into set), and counting both double-counts the
+                 -- same merchant.
+                 COALESCE(a.canonical_counterparty_id, c.id) AS effective_cp,
+                 count(*) AS variants
+          FROM counterparties c
+          LEFT JOIN counterparty_alias a
+                 ON a.identity_type = c.identity_type AND a.identity_value = c.identity_value
+          WHERE c.merged_into IS NULL
+          GROUP BY 1 ORDER BY variants DESC
+          """,
+          """
+          SELECT -- Confirmed tags only. source='auto' is a PROPOSAL the substrate made --
+                 -- source='confirmed' is the only one that reflects a human decision, and
+                 -- treating the two alike is how a guess becomes a reported fact.
+                 t.dimension, t.value, count(*) AS counterparties
+          FROM counterparty_tags t
+          WHERE t.source = 'confirmed'
+          GROUP BY 1, 2 ORDER BY counterparties DESC
+          """);
 
   private static final Map<String, String> COLUMN_DOCS =
       Map.ofEntries(
@@ -1160,9 +1203,25 @@ public class ReadTools {
     return new SqlQueryResult(columns, rowMaps);
   }
 
-  public List<SchemaColumn> describeSchema() {
-    Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY");
-    Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY");
+  /**
+   * @param tables restrict the output to these tables; {@code null} or empty means all of {@link
+   *     #SCHEMA_TABLES}. Every name must be an exact, lowercase match against {@link
+   *     #SCHEMA_TABLES} -- an unknown or differently-cased name fails loudly instead of silently
+   *     returning an empty column list, because "this table has no columns" reads as an answer
+   *     rather than as the typo it actually is.
+   */
+  public DescribeSchemaResult describeSchema(List<String> tables) {
+    List<String> requested =
+        (tables == null || tables.isEmpty()) ? SCHEMA_TABLES : List.copyOf(tables);
+    for (String table : requested) {
+      if (!SCHEMA_TABLES.contains(table)) {
+        throw new IllegalArgumentException(
+            "unknown table '" + table + "'; allowed: " + String.join(", ", SCHEMA_TABLES));
+      }
+    }
+
+    Set<List<String>> primaryKeys = fetchKeyColumns("PRIMARY KEY", requested);
+    Set<List<String>> foreignKeys = fetchKeyColumns("FOREIGN KEY", requested);
 
     var columnRows =
         db.select(
@@ -1172,7 +1231,7 @@ public class ReadTools {
                 DSL.field("is_nullable", String.class))
             .from(DSL.table("information_schema.columns"))
             .where(DSL.field("table_schema", String.class).eq("public"))
-            .and(DSL.field("table_name", String.class).in(SCHEMA_TABLES))
+            .and(DSL.field("table_name", String.class).in(requested))
             .orderBy(DSL.field("table_name"), DSL.field("ordinal_position"))
             .fetch();
 
@@ -1191,10 +1250,10 @@ public class ReadTools {
               foreignKeys.contains(key),
               COLUMN_DOCS.get(table + "." + column)));
     }
-    return columns;
+    return new DescribeSchemaResult(List.copyOf(columns), SCHEMA_EXAMPLES);
   }
 
-  private Set<List<String>> fetchKeyColumns(String constraintType) {
+  private Set<List<String>> fetchKeyColumns(String constraintType, List<String> tables) {
     var rows =
         db.select(
                 DSL.field("tc.table_name", String.class), DSL.field("kcu.column_name", String.class))
@@ -1203,7 +1262,7 @@ public class ReadTools {
             .on(DSL.field("tc.constraint_name", String.class)
                 .eq(DSL.field("kcu.constraint_name", String.class)))
             .where(DSL.field("tc.constraint_type", String.class).eq(constraintType))
-            .and(DSL.field("tc.table_name", String.class).in(SCHEMA_TABLES))
+            .and(DSL.field("tc.table_name", String.class).in(tables))
             .fetch();
     Set<List<String>> keys = new HashSet<>();
     for (var row : rows) {

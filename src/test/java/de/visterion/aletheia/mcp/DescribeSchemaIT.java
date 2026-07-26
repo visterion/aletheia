@@ -1,8 +1,11 @@
 package de.visterion.aletheia.mcp;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import de.visterion.aletheia.ingest.AbstractPostgresIT;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -12,7 +15,7 @@ class DescribeSchemaIT extends AbstractPostgresIT {
 
   @Test
   void describesAllowlistedTablesOnly_noAuthTables_noDataRows() {
-    var cols = readTools.describeSchema();
+    var cols = readTools.describeSchema(null).columns();
     var tables = cols.stream().map(SchemaColumn::table).distinct().toList();
     assertThat(tables)
         .containsExactlyInAnyOrder(
@@ -51,7 +54,7 @@ class DescribeSchemaIT extends AbstractPostgresIT {
 
   @Test
   void exposesV16Columns() {
-    var cols = readTools.describeSchema();
+    var cols = readTools.describeSchema(null).columns();
     assertThat(cols)
         .anySatisfy(
             c -> {
@@ -63,5 +66,47 @@ class DescribeSchemaIT extends AbstractPostgresIT {
               assertThat(c.table()).isEqualTo("contracts");
               assertThat(c.column()).isEqualTo("end_date");
             });
+  }
+
+  @Test
+  void tablesSubsetsTheColumnList() {
+    DescribeSchemaResult all = readTools.describeSchema(null);
+    DescribeSchemaResult subset = readTools.describeSchema(List.of("contracts", "recurring"));
+
+    assertThat(subset.columns()).extracting(SchemaColumn::table)
+        .containsOnly("contracts", "recurring");
+    assertThat(subset.columns()).hasSizeLessThan(all.columns().size());
+  }
+
+  @Test
+  void anEmptyTableListBehavesLikeNoArgument() {
+    assertThat(readTools.describeSchema(List.of()).columns())
+        .hasSameSizeAs(readTools.describeSchema(null).columns());
+  }
+
+  @Test
+  void anUnknownTableNameFailsLoudlyAndNamesTheAllowedOnes() {
+    // Silently returning an empty column list for a typo is worse than an error: the caller reads
+    // "this table has no columns" and writes a query against a table that does not exist.
+    assertThatThrownBy(() -> readTools.describeSchema(List.of("contract")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("contract")
+        .hasMessageContaining("contracts")
+        .hasMessageContaining("transactions");
+  }
+
+  @Test
+  void tableNamesAreCaseSensitive() {
+    assertThatThrownBy(() -> readTools.describeSchema(List.of("Transactions")))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void everyBundledExampleQueryActuallyRuns() {
+    DescribeSchemaResult result = readTools.describeSchema(null);
+    assertThat(result.examples()).hasSize(3);
+    for (String example : result.examples()) {
+      assertThatCode(() -> readTools.sqlQuery(example)).doesNotThrowAnyException();
+    }
   }
 }

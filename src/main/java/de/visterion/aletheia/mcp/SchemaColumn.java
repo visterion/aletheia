@@ -1,7 +1,8 @@
 package de.visterion.aletheia.mcp;
 
 /**
- * One column of the register/evidence schema, as returned by {@link ReadTools#describeSchema()}.
+ * One column of the register/evidence schema, as returned by {@link
+ * ReadTools#describeSchema(java.util.List)}.
  * Structure only -- no data rows.
  */
 public record SchemaColumn(
