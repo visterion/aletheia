@@ -34,7 +34,8 @@ public class DismissCounterpartyToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally"
+    return "Answers: how do I tell Aletheia that a counterparty or contract is NOT an obligation"
+        + " to track? Mark counterparties as not-an-obligation. SINGLE: pass counterpartyId (optionally"
         + " contractId to dismiss just that contract). BATCH: pass counterpartyIds OR a"
         + " where-selector (never both, never with contractId/counterpartyId) -- each id is"
         + " dismissed at counterparty level (its mandate-less recurring series is"
@@ -46,7 +47,8 @@ public class DismissCounterpartyToolHandler implements ToolHandler {
         + " counterparties carrying any of these nature/domain tags), amountMin/amountMax"
         + " (largest single booking in absolute EUR, credits included, within these bounds;"
         + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
-        + " (last booking date, inclusive).";
+        + " (last booking date, inclusive)."
+        + "\n\nKeywords: Verpflichtung, Vertrag, Kündigung";
   }
 
   @Override

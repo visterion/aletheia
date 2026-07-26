@@ -32,13 +32,15 @@ public class CounterpartyTransactionsToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "The underlying bookings for one counterparty (evidence detail), optionally limited to"
+    return "Answers: what are the individual bookings behind one counterparty's totals? The"
+        + " underlying bookings for one counterparty (evidence detail), optionally limited to"
         + " the last N days via period, or to an inclusive [dateFrom, dateTo] absolute"
         + " range on booking_date. When dateFrom and dateTo are both given, the absolute"
         + " range wins over period (period is ignored). Returns only current logical"
         + " positions: split parents are hidden (NOT EXISTS filter on split_parent_*);"
         + " children and unsplit originals are shown (javadoc references logical view)."
-        + " Identity priority: attributed_name > creditor_id > iban > normalized name.";
+        + " Identity priority: attributed_name > creditor_id > iban > normalized name."
+        + "\n\nKeywords: Abbuchung, Konto, Beleg, Rechnung";
   }
 
   @Override

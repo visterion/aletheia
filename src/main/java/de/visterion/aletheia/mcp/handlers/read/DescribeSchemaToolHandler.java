@@ -31,10 +31,13 @@ public class DescribeSchemaToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Structure of the register/evidence schema (tables, columns, types, keys) so sql_query"
+    return "Answers: what tables and columns exist, so I can write my own SQL against this"
+        + " register without guessing? Structure of the register/evidence schema (tables,"
+        + " columns, types, keys) so sql_query"
         + " can be written without guessing, plus three runnable example queries. No data rows."
         + " Optional tables filters the column list to an exact, lowercase subset of the allowed"
-        + " names; an unknown name fails with the allowed list rather than returning nothing.";
+        + " names; an unknown name fails with the allowed list rather than returning nothing."
+        + "\n\nKeywords: Konto";
   }
 
   @Override

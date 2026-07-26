@@ -32,7 +32,8 @@ public class MergeCounterpartyToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Fold several fragmented counterparties into one canonical entity. A service often"
+    return "Answers: how do I fold several fragmented counterparty records that are really the"
+        + " same merchant into one? Fold several fragmented counterparties into one canonical entity. A service often"
         + " appears as multiple counterparties because its creditor-id, IBAN and name resolve"
         + " separately (e.g. one provider billing under several creditor-ids, or several own"
         + " bank sub-accounts). Re-points every source's bookings, tags, recurring series and"
@@ -50,7 +51,8 @@ public class MergeCounterpartyToolHandler implements ToolHandler {
         + " name:\n  merge_counterparty(targetId: 512, sourceIds: [788, 913], reason: \"one"
         + " provider, identity variants\")\n\nAfter a merge, list_counterparties / evidence /"
         + " obligations_register / counterparty_transactions show one line with all bookings;"
-        + " re-importing a folded variant adds no new record.";
+        + " re-importing a folded variant adds no new record."
+        + "\n\nKeywords: Konto, Vertrag";
   }
 
   @Override

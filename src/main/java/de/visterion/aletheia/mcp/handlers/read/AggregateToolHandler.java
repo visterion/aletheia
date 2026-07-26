@@ -39,8 +39,9 @@ public class AggregateToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Chart-ready aggregation over transactions for an inclusive [dateFrom, dateTo] date"
-        + " range -- replaces in-head arithmetic. Value expression: for a single direction"
+    return "Answers: how much did I spend or receive per month/quarter/year, and on what?"
+        + " Aggregates transactions over an inclusive [dateFrom, dateTo] date range -- replaces"
+        + " in-head arithmetic. Value expression: for a single direction"
         + " (DBIT or CRDT), SUM/AVG/MEDIAN run on the always-positive amount filtered to"
         + " that direction; for direction=BOTH there is no direction filter and the amount"
         + " is signed (DBIT negated, CRDT positive) before aggregation, so SUM(BOTH) ="
@@ -67,7 +68,8 @@ public class AggregateToolHandler implements ToolHandler {
         + " tag values (resolved through the identity CASE; a counterparty maps to a single value"
         + " per dimension -- confirmed over auto, then highest confidence, then alphabetical;"
         + " untagged or unresolved -> \"(untagged)\"). For a spend-by-category breakdown in ONE"
-        + " call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this.";
+        + " call use groupBy=DOMAIN, direction=DBIT, metric=SUM -- do not hand-write SQL for this."
+        + "\n\nKeywords: Ausgaben, Einkommen, Gehalt, Netto, Konto";
   }
 
   @Override

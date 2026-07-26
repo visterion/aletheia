@@ -38,7 +38,8 @@ public class ClassifyCounterpartyToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Set/replace the tags for one or more dimensions on a batch of counterparties (explicit"
+    return "Answers: how do I label a batch of counterparties with domain/nature/necessity tags?"
+        + " Set/replace the tags for one or more dimensions on a batch of counterparties (explicit"
         + " ids or a where-selector). Never sets counterparties.reviewed or status -- only"
         + " confirm/dismiss do that. Batches of 200+ require confirm=true; batches over"
         + " 1000 are always rejected."
@@ -48,7 +49,8 @@ public class ClassifyCounterpartyToolHandler implements ToolHandler {
         + " (largest single booking in absolute EUR, credits included, within these bounds;"
         + " counterparties with no bookings are excluded), and lastSeenBefore/lastSeenAfter"
         + " (last booking date, inclusive)."
-        + " Use the canonical values from taxonomy.seed instead of inventing new ones.";
+        + " Use the canonical values from taxonomy.seed instead of inventing new ones."
+        + "\n\nKeywords: Versicherung, Vertrag, Ausgaben, Verpflichtung";
   }
 
   @Override

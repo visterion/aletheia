@@ -28,11 +28,13 @@ public class SetDisplayNameToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Set or clear a counterparty's manual display-name override. The override is a label"
+    return "Answers: how do I change the name shown for a counterparty without touching how its"
+        + " bookings are identified? Set or clear a counterparty's manual display-name override. The override is a label"
         + " only -- it wins over the auto-derived name at read time but never changes identity"
         + " resolution or how splits route. Pass name=null (or omit) to clear it and revert to the"
         + " automatic most-frequent name. Rejects a folded (merged) counterparty -- set the label"
-        + " on the canonical one. Example: set_display_name(counterpartyId=42, name=\"Corner Bakery\").";
+        + " on the canonical one. Example: set_display_name(counterpartyId=42, name=\"Corner Bakery\")."
+        + "\n\nKeywords: Konto";
   }
 
   @Override

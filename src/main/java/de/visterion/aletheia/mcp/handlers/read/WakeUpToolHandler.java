@@ -25,10 +25,13 @@ public class WakeUpToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Call this FIRST, before any other action. Returns this customer's Aletheia operating"
-        + " guide, their recorded preferences, and a live snapshot of the current state"
-        + " (open reviews, opaque payment passthroughs, obligations). Follow the guide."
-        + " Record durable preferences with update_preferences.";
+    return "Answers: what needs my attention right now, and what have I told Aletheia about how"
+        + " I work? Call this FIRST, before any other action. Returns a live snapshot of the"
+        + " current state (open reviews, opaque payment passthroughs, obligations) and this"
+        + " customer's recorded preferences -- the operating guide itself lives in read_me."
+        + " Follow any recorded preferences."
+        + " Record durable preferences with update_preferences."
+        + "\n\nKeywords: Verpflichtung, Einkommen, Konto";
   }
 
   @Override

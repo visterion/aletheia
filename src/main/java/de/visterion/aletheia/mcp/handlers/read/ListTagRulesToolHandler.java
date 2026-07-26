@@ -28,7 +28,9 @@ public class ListTagRulesToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "List all auto-tagging rules (enabled and paused), oldest first.";
+    return "Answers: which auto-tagging rules are active or paused right now? List all"
+        + " auto-tagging rules (enabled and paused), oldest first."
+        + "\n\nKeywords: Ausgaben, Abbuchung";
   }
 
   @Override

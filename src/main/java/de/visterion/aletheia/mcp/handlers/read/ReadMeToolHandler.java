@@ -25,10 +25,12 @@ public class ReadMeToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "The Aletheia operating guide: how to work with this register, what counts as a"
-        + " proposal versus a decision, and how to keep merchant identity distinct. Read it once"
+    return "Answers: what are the rules for working with this register -- what counts as a"
+        + " proposal versus a decision, and how is merchant identity kept distinct? The Aletheia"
+        + " operating guide. Read it once"
         + " per session when you need the rules; wake_up returns the live state and the"
-        + " customer's preferences.";
+        + " customer's preferences."
+        + "\n\nKeywords: Verpflichtung, Vertrag";
   }
 
   @Override

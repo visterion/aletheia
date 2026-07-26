@@ -39,7 +39,8 @@ public class CashflowToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Build a **Sankey-ready** money-flow for a period. USE THIS whenever the user wants a"
+    return "Answers: where does my money come from and where does it go each month? Build a"
+        + " **Sankey-ready** money-flow for a period. USE THIS whenever the user wants a"
         + " monthly overview, budget flow, \"wohin fließt mein Geld\", or a finanzfluss-style"
         + " diagram — instead of hand-writing SQL. Income sources → budget → categories (→ top"
         + " counterparties); saving and internal-transfer handling are applied **server-side**"
@@ -66,7 +67,8 @@ public class CashflowToolHandler implements ToolHandler {
         + "**Consume the result:** render directly as a Plotly sankey — `node.label ←"
         + " nodes[].label`, `link.{source,target,value} ← links[]` (ids are stable; map"
         + " id→index). `meta` gives the KPI headline (income / outflow / saldo). Example:"
-        + " `cashflow(\"2026-06-01\",\"2026-06-30\")`.";
+        + " `cashflow(\"2026-06-01\",\"2026-06-30\")`."
+        + "\n\nKeywords: Einkommen, Ausgaben, Sparen, Umbuchung, Konto";
   }
 
   @Override

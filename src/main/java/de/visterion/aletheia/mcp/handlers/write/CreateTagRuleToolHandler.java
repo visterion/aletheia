@@ -36,12 +36,15 @@ public class CreateTagRuleToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Create a persistent auto-tagging rule (Outlook-style). conditions are AND-ed; actions set"
+    return "Answers: how do I make Aletheia auto-tag future bookings from a merchant, instead of"
+        + " tagging them by hand every time? Create a persistent auto-tagging rule"
+        + " (Outlook-style). conditions are AND-ed; actions set"
         + " tags (source=confirmed) on matching counterparties, overwriting 'auto' tags and"
         + " skipping dimensions already 'confirmed'. dryRun=true writes nothing and returns the"
         + " match preview -- always dry-run first. dryRun=false persists (enabled) and, if"
         + " backfill=true, tags existing counterparties now; the rule also runs on every future"
-        + " ingest. A match set of 200+ needs confirm=true.";
+        + " ingest. A match set of 200+ needs confirm=true."
+        + "\n\nKeywords: Ausgaben, Abbuchung, Konto";
   }
 
   @Override

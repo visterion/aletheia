@@ -32,7 +32,9 @@ public class ObligationsRegisterToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "The documented obligations register: confirmed contracts (TP1 contract grain -- one"
+    return "Answers: what recurring obligations (insurance, subscriptions, contracts) do I have"
+        + " documented, and what do they cost per year? The documented obligations register:"
+        + " confirmed contracts (TP1 contract grain -- one"
         + " row per confirmed contracts row, so a counterparty with two confirmed"
         + " contracts, e.g. two insurance policies, produces two rows) with annual cost,"
         + " tags and contract-link status, ordered by annual cost descending (contractId"
@@ -43,7 +45,8 @@ public class ObligationsRegisterToolHandler implements ToolHandler {
         + " paging parameter is set. All debit/annual cost figures are derived from the"
         + " logical transaction view (NOT EXISTS on split_parent_* excludes superseded"
         + " parents). Excludes counterparties tagged with confirmed nature:zahlungsdienst;"
-        + " auto tags do not exclude.";
+        + " auto tags do not exclude."
+        + "\n\nKeywords: Versicherung, Vertrag, Beitrag, Verpflichtung, Abo, Miete, Strom";
   }
 
   @Override

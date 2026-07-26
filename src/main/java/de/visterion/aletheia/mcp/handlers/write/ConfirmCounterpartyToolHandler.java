@@ -37,7 +37,8 @@ public class ConfirmCounterpartyToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that"
+    return "Answers: how do I confirm that a counterparty or contract really is a recurring"
+        + " obligation? The human's 'yes'. SINGLE: counterpartyId (+ optional contractId to confirm just that"
         + " contract). BATCH: counterpartyIds OR a where-selector (never both, never with"
         + " contractId/counterpartyId) -- each id is confirmed at counterparty level"
         + " (contractId=null): a mandate-less recurring series is materialized+confirmed"
@@ -52,7 +53,8 @@ public class ConfirmCounterpartyToolHandler implements ToolHandler {
         + " (last booking date, inclusive). SINGLE-item mode also accepts an optional cadence"
         + " (with typicalAmount and optional amountMin/amountMax): when supplied, this fuses"
         + " series-creation + contract-materialize + confirm into one call, e.g. confirming a"
-        + " newly-seen quarterly insurance debit as recurring at EUR 45.00 in a single step.";
+        + " newly-seen quarterly insurance debit as recurring at EUR 45.00 in a single step."
+        + "\n\nKeywords: Vertrag, Beitrag, Verpflichtung, Abo, Versicherung";
   }
 
   @Override

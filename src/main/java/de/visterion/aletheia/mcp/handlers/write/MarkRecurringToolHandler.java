@@ -35,7 +35,8 @@ public class MarkRecurringToolHandler implements ToolHandler {
 
   @Override
   public String description() {
-    return "Record/replace the recurring series for a counterparty, keyed by (counterparty_id,"
+    return "Answers: how do I tell Aletheia the cadence and typical amount of a recurring"
+        + " payment? Record/replace the recurring series for a counterparty, keyed by (counterparty_id,"
         + " contract_id) -- pass contractId (a contracts.id) to target that specific"
         + " contract's series, or null for the counterparty's mandate-less series. An"
         + " auto-source call can never overwrite an already-confirmed row. Never sets"
@@ -43,7 +44,8 @@ public class MarkRecurringToolHandler implements ToolHandler {
         + " whose contracts row has a mandate_id), measured values such as typical_amount"
         + " are refreshed from transactions by ContractResolver on every startup, so a"
         + " manual override here is not durable for mandate contracts -- mandate-less"
-        + " series (contractId=null) are not resolver-owned.";
+        + " series (contractId=null) are not resolver-owned."
+        + "\n\nKeywords: Vertrag, Beitrag, Abbuchung";
   }
 
   @Override
