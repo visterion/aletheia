@@ -72,9 +72,19 @@ public class ReadTools {
   /**
    * Three canonical queries handed out with every {@code describe_schema} call. Each teaches one
    * rule that the column metadata cannot show and that a first-time caller reliably gets wrong:
-   * split parents must be excluded or amounts double-count; counterparty identity must go through
-   * the alias table or a merged counterparty is counted twice; and an {@code auto} tag is a
-   * proposal, not a decision.
+   * split parents must be excluded or amounts double-count; a merged counterparty's identity must
+   * be resolved through the alias table or its history pools under the wrong id; and an {@code
+   * auto} tag is a proposal, not a decision.
+   *
+   * <p><b>Comment placement is load-bearing, not stylistic:</b> every explanatory comment sits
+   * <i>after</i> the {@code SELECT} keyword, not before it, because {@link #requireSelectOnly}'s
+   * {@code SELECT_ONLY} guard anchors on {@code ^\s*SELECT} and rejects a leading {@code --} line.
+   * The wording also avoids the bare word "into" (e.g. "folded under", never "folded into"),
+   * because {@code SELECT_INTO} scans {@link #stripStringLiterals} output, which blanks quoted
+   * string literals but not comments, so a stray "into" reads as {@code SELECT ... INTO}. Both are
+   * workarounds for guard weaknesses in {@link #requireSelectOnly}, not properties of SQL itself;
+   * do not "clean up" a comment above {@code SELECT} without re-running {@code
+   * everyBundledExampleQueryActuallyRuns}.
    */
   private static final List<String> SCHEMA_EXAMPLES =
       List.of(
@@ -90,20 +100,20 @@ public class ReadTools {
           GROUP BY 1 ORDER BY 1
           """,
           """
-          SELECT -- Counterparties with their canonical identity. Always resolve through
-                 -- counterparty_alias: a counterparty folded under another by merge_counterparty
-                 -- keeps its own row (merged_into set), and counting both double-counts the
-                 -- same merchant.
+          SELECT -- Counterparties with their canonical identity. merge_counterparty writes
+                 -- counterparty_alias and sets merged_into on the folded row in the same
+                 -- transaction, so a folded source's own row is never dropped, only marked:
+                 -- resolving through counterparty_alias pools it under the target's id, and
+                 -- variants > 1 is what a completed merge looks like.
                  COALESCE(a.canonical_counterparty_id, c.id) AS effective_cp,
                  count(*) AS variants
           FROM counterparties c
           LEFT JOIN counterparty_alias a
                  ON a.identity_type = c.identity_type AND a.identity_value = c.identity_value
-          WHERE c.merged_into IS NULL
           GROUP BY 1 ORDER BY variants DESC
           """,
           """
-          SELECT -- Confirmed tags only. source='auto' is a PROPOSAL the substrate made --
+          SELECT -- Confirmed tags only. source='auto' is a PROPOSAL the substrate made:
                  -- source='confirmed' is the only one that reflects a human decision, and
                  -- treating the two alike is how a guess becomes a reported fact.
                  t.dimension, t.value, count(*) AS counterparties
@@ -1204,6 +1214,9 @@ public class ReadTools {
   }
 
   /**
+   * Structure of the register/evidence schema (tables, columns, types, keys), plus the canonical
+   * example queries in {@link #SCHEMA_EXAMPLES}.
+   *
    * @param tables restrict the output to these tables; {@code null} or empty means all of {@link
    *     #SCHEMA_TABLES}. Every name must be an exact, lowercase match against {@link
    *     #SCHEMA_TABLES} -- an unknown or differently-cased name fails loudly instead of silently
