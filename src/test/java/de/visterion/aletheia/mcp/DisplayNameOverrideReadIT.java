@@ -191,7 +191,8 @@ class DisplayNameOverrideReadIT extends AbstractPostgresIT {
   void listIncomeReturnsTheOverrideAsDisplayName() {
     long y = seedCrdtCounterparty();
 
-    List<IncomeRow> income = readTools.listIncome();
+    List<IncomeRow> income =
+        readTools.listIncome(new ListParams(null, null, null, null)).rows();
 
     IncomeRow row = income.stream().filter(r -> r.counterpartyId() == y).findFirst().orElseThrow();
     assertThat(row.displayName()).isEqualTo(CUSTOM_NAME);

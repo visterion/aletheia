@@ -32,7 +32,24 @@
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {}
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "description": "max rows to return (default 25); must be > 0"
+        },
+        "offset": {
+          "type": "integer",
+          "description": "rows to skip for paging (default 0); must be >= 0"
+        },
+        "minAmount": {
+          "type": "number",
+          "description": "only counterparties whose all-time credit total is >= this value (default: no filter)"
+        },
+        "verbose": {
+          "type": "boolean",
+          "description": "false (default): compact rows without identityType/firstSeen; true: the full row"
+        }
+      }
     }
   },
   {

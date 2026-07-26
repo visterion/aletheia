@@ -215,7 +215,8 @@ class AliasReadLayerIT extends AbstractPostgresIT {
     long[] ids = seedMergedPair();
     long b = ids[1];
 
-    List<IncomeRow> income = readTools.listIncome();
+    List<IncomeRow> income =
+        readTools.listIncome(new ListParams(null, null, null, null)).rows();
 
     assertThat(income).extracting(IncomeRow::counterpartyId).doesNotContain(b);
   }

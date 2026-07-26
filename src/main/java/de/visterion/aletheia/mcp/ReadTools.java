@@ -1046,7 +1046,24 @@ public class ReadTools {
     return new ObligationsRegister(obligationRows, total);
   }
 
-  public List<IncomeRow> listIncome() {
+  public ListPage<IncomeRow> listIncome(ListParams params) {
+    ListParams effective = params == null ? new ListParams(null, null, null, null) : params;
+
+    var baseCondition =
+        V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT").and(COUNTERPARTIES.MERGED_INTO.isNull());
+    if (effective.minAmount() != null) {
+      baseCondition =
+          baseCondition.and(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.ge(effective.minAmount()));
+    }
+
+    long rowsTotal =
+        db.selectCount()
+            .from(COUNTERPARTIES)
+            .join(V_COUNTERPARTY_EVIDENCE)
+            .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
+            .where(baseCondition)
+            .fetchOne(0, long.class);
+
     var rows =
         db.select(
                 COUNTERPARTIES.ID,
@@ -1060,11 +1077,17 @@ public class ReadTools {
             .from(COUNTERPARTIES)
             .join(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(COUNTERPARTIES.ID))
-            .where(V_COUNTERPARTY_EVIDENCE.DIRECTION.eq("CRDT"))
-            .and(COUNTERPARTIES.MERGED_INTO.isNull())
-            .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc())
+            .where(baseCondition)
+            // credit_total alone is not a total order (COALESCE(...,0) makes 0 common), and
+            // without a tie-breaker a tied row can appear on two pages and another on none.
+            .orderBy(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL.desc(), COUNTERPARTIES.ID.asc())
+            // Safe as SQL LIMIT: v_counterparty_evidence is GROUP BY effective_cp (V15:112), so
+            // this join yields exactly one row per counterparty and cannot fan out.
+            .limit(effective.effectiveLimit())
+            .offset(effective.effectiveOffset())
             .fetch();
 
+    boolean verbose = effective.effectiveVerbose();
     List<IncomeRow> income = new ArrayList<>();
     for (Record row : rows) {
       Long txnCount = row.get(V_COUNTERPARTY_EVIDENCE.TXN_COUNT);
@@ -1072,14 +1095,22 @@ public class ReadTools {
           new IncomeRow(
               row.get(COUNTERPARTIES.ID),
               row.get(DISPLAY_NAME_EFFECTIVE),
-              row.get(COUNTERPARTIES.IDENTITY_TYPE),
+              verbose ? row.get(COUNTERPARTIES.IDENTITY_TYPE) : null,
               txnCount == null ? 0 : txnCount,
               row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_LAST_365D),
               row.get(V_COUNTERPARTY_EVIDENCE.CREDIT_TOTAL),
-              row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN),
+              verbose ? row.get(V_COUNTERPARTY_EVIDENCE.FIRST_SEEN) : null,
               row.get(V_COUNTERPARTY_EVIDENCE.LAST_SEEN)));
     }
-    return income;
+
+    return new ListPage<>(
+        List.copyOf(income),
+        new ListPageMeta(
+            rowsTotal,
+            income.size(),
+            effective.effectiveLimit(),
+            effective.effectiveOffset(),
+            effective.minAmount()));
   }
 
   public SqlQueryResult sqlQuery(String sql) {

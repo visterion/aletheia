@@ -1,5 +1,6 @@
 package de.visterion.aletheia.mcp;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -18,6 +19,9 @@ import java.time.LocalDate;
  * @param firstSeen earliest booking date for this counterparty
  * @param lastSeen latest booking date for this counterparty
  */
+// Null-valued fields are omitted from the JSON entirely: in compact mode identityType and
+// firstSeen are passed as null and therefore disappear, rather than emitting empty keys.
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record IncomeRow(
     long counterpartyId,
     String displayName,
