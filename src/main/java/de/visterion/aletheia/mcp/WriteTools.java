@@ -961,11 +961,27 @@ public class WriteTools {
 
   // --- split_transaction (Phase 2 core) ---
 
+  /**
+   * Replaces a raw parent's child allocations (spec §5 concurrency).
+   *
+   * <p>Held under {@link #substrateLock} like {@link #reattributeTransaction} and {@link
+   * #mergeCounterparty}: {@code ProductSplitResolver} derives the very same {@code
+   * syntheticSplitHash(parentHash, i)} child keys, so a tool call and a resolver pass would
+   * otherwise race on {@code uq_transactions_natural_key}. The lock is taken <b>outside</b> the
+   * service's {@code @Transactional} boundary, so the JVM lock is always acquired before any
+   * database work -- the ordering the rest of this class relies on to keep a JVM-lock/row-lock
+   * deadlock from forming.
+   */
   public SplitTransactionAck splitTransaction(
       TxReference tx,
       List<Allocation> allocations,
       Boolean unsplit) {
-    return splitService.splitTransaction(tx, allocations, unsplit);
+    substrateLock.lock();
+    try {
+      return splitService.splitTransaction(tx, allocations, unsplit);
+    } finally {
+      substrateLock.unlock();
+    }
   }
 
   // --- tag rules (#37 auto-tagging rules) ---
