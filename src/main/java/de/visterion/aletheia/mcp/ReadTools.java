@@ -162,7 +162,12 @@ public class ReadTools {
       DSL.coalesce(COUNTERPARTIES.DISPLAY_NAME_OVERRIDE, COUNTERPARTIES.DISPLAY_NAME)
           .as("display_name");
 
-  private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*SELECT\\b.*");
+  /**
+   * Accepts a statement that begins with SELECT or WITH. This is a malformed-input filter, NOT a
+   * read-only guarantee: {@code WITH x AS (SELECT 1) DELETE FROM t} passes it. The SELECT-only
+   * database role behind {@code roDsl} is the actual boundary -- see SqlQueryIT.
+   */
+  private static final Pattern SELECT_ONLY = Pattern.compile("(?is)^\\s*(WITH|SELECT)\\b.*");
 
   /**
    * Matches a top-level {@code INTO} keyword followed by whitespace and something else, the
@@ -1312,7 +1317,8 @@ public class ReadTools {
       throw new IllegalArgumentException("sql_query rejects stacked statements");
     }
     if (!SELECT_ONLY.matcher(withoutTrailingSemicolon).matches()) {
-      throw new IllegalArgumentException("sql_query only allows a single SELECT statement");
+      throw new IllegalArgumentException(
+          "sql_query only allows a single statement beginning with SELECT or WITH");
     }
     if (SELECT_INTO.matcher(stripStringLiterals(withoutTrailingSemicolon)).find()) {
       throw new IllegalArgumentException(

@@ -26,6 +26,11 @@ public abstract class AbstractPostgresIT {
     POSTGRES.start();
   }
 
+  /** The shared container's JDBC URL, for tests that need a second connection under another role. */
+  protected static String containerJdbcUrl() {
+    return POSTGRES.getJdbcUrl();
+  }
+
   @DynamicPropertySource
   static void disableStartupIngest(DynamicPropertyRegistry registry) {
     // Point ingest at a non-existent dir so the startup runner no-ops (spec §7 test isolation).
