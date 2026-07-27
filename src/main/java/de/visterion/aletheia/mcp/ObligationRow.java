@@ -19,6 +19,9 @@ import java.util.List;
  * @param contractId the {@code contracts.id} this row documents
  * @param mandateId the {@code contracts.mandate_id}, {@code null} for a mandate-less obligation
  *     (verbose mode only; the key is omitted entirely in compact mode)
+ * @param product the {@code contracts.product} this row documents, {@code null} (and omitted from
+ *     the JSON) for a mandate whose creditor has no product rule -- one SEPA mandate that bundles
+ *     several products yields one confirmed contract per product, each with its own annual cost
  * @param cadence the {@code recurring.cadence} for this contract's series
  * @param annualCost {@link AnnualCost#estimate(RecurringView, BigDecimal)} for this contract
  * @param tags the counterparty's current {@code counterparty_tags} rows (verbose mode only; the
@@ -38,6 +41,7 @@ public record ObligationRow(
     String identityType,
     long contractId,
     String mandateId,
+    String product,
     String cadence,
     BigDecimal annualCost,
     List<CounterpartyTagView> tags,

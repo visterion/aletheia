@@ -219,14 +219,24 @@ public class CounterpartyMergeService {
   }
 
   private void migrateOneContract(long targetId, long sourceId, ContractsRecord sourceContract) {
+    // The collision key is the contract grain itself: (mandate_id, product). Matching on the
+    // mandate alone would both throw TooManyRowsException once one mandate carries several
+    // product contracts, and treat a (mandate, HEALTH) contract as colliding with (mandate,
+    // LEGAL) -- two unrelated obligations that merely share a direct debit. NULL-safe on both
+    // sides: a mandate-less contract and a product-less one are legitimate.
     var mandateCondition =
         sourceContract.getMandateId() == null
             ? CONTRACTS.MANDATE_ID.isNull()
             : CONTRACTS.MANDATE_ID.eq(sourceContract.getMandateId());
+    var productCondition =
+        sourceContract.getProduct() == null
+            ? CONTRACTS.PRODUCT.isNull()
+            : CONTRACTS.PRODUCT.eq(sourceContract.getProduct());
     ContractsRecord targetContract =
         db.selectFrom(CONTRACTS)
             .where(CONTRACTS.COUNTERPARTY_ID.eq(targetId))
             .and(mandateCondition)
+            .and(productCondition)
             .fetchOne();
     RecurringRecord sourceRecurring =
         db.selectFrom(RECURRING).where(RECURRING.CONTRACT_ID.eq(sourceContract.getId())).fetchOne();

@@ -657,6 +657,7 @@ public class ReadTools {
                 CONTRACTS.ID,
                 CONTRACTS.COUNTERPARTY_ID,
                 CONTRACTS.MANDATE_ID,
+                CONTRACTS.PRODUCT,
                 DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 RECURRING.ID,
@@ -698,7 +699,11 @@ public class ReadTools {
                 V_CONTRACT_EVIDENCE
                     .COUNTERPARTY_ID
                     .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
+                    // The evidence view is grouped by product (V19), so a mandate-only join
+                    // would fan one contract out across EVERY product row of its mandate.
+                    // NULL-safe: both sides are legitimately NULL for a mandate with no rule.
+                    .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT)))
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.STATUS.eq("open"))
@@ -730,6 +735,7 @@ public class ReadTools {
               row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(CONTRACTS.ID),
+              row.get(CONTRACTS.PRODUCT),
               verbose ? evidence : null,
               verbose ? recurring : null,
               AnnualCost.estimate(recurring, debitFallback),
@@ -814,6 +820,8 @@ public class ReadTools {
               row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               null,
+              // A counterparty with no contract layer at all has no product either.
+              null,
               verbose ? evidence : null,
               verbose ? recurring : null,
               AnnualCost.estimate(recurring, evidence),
@@ -874,7 +882,11 @@ public class ReadTools {
                 V_CONTRACT_EVIDENCE
                     .COUNTERPARTY_ID
                     .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
+                    // The evidence view is grouped by product (V19), so a mandate-only join
+                    // would fan one contract out across EVERY product row of its mandate.
+                    // NULL-safe: both sides are legitimately NULL for a mandate with no rule.
+                    .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT)))
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.HIVEMEM_CELL_ID.isNull())
@@ -1038,6 +1050,7 @@ public class ReadTools {
                 CONTRACTS.ID,
                 CONTRACTS.COUNTERPARTY_ID,
                 CONTRACTS.MANDATE_ID,
+                CONTRACTS.PRODUCT,
                 CONTRACTS.HIVEMEM_CELL_ID,
                 DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
@@ -1063,7 +1076,11 @@ public class ReadTools {
                 V_CONTRACT_EVIDENCE
                     .COUNTERPARTY_ID
                     .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
+                    // The evidence view is grouped by product (V19), so a mandate-only join
+                    // would fan one contract out across EVERY product row of its mandate.
+                    // NULL-safe: both sides are legitimately NULL for a mandate with no rule.
+                    .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT)))
             // A mandate-less contract's MANDATE_ID is NULL, so the join above never matches it
             // (NULL = NULL is not TRUE in SQL) -- fall back to the counterparty's own evidence,
             // since a mandate-less obligation IS the whole counterparty (spec review M1 edge
@@ -1099,6 +1116,9 @@ public class ReadTools {
               verbose ? row.get(COUNTERPARTIES.IDENTITY_TYPE) : null,
               row.get(CONTRACTS.ID),
               verbose ? row.get(CONTRACTS.MANDATE_ID) : null,
+              // Shown in both modes: the product IS the obligation's identity once a mandate
+              // bundles several, so a compact listing without it would name three rows alike.
+              row.get(CONTRACTS.PRODUCT),
               recurring == null ? null : recurring.cadence(),
               AnnualCost.estimate(recurring, debitFallback),
               verbose ? tagsByCounterparty.getOrDefault(counterpartyId, List.of()) : null,
