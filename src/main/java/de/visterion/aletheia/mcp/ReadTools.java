@@ -644,8 +644,25 @@ public class ReadTools {
   }
 
   /**
+   * The join from a {@code contracts} row to its own {@code v_contract_evidence} row, shared by
+   * every read path that needs the per-contract debit fallback.
+   *
+   * <p>The evidence view is grouped by product (V19), so a mandate-only join would fan one
+   * contract out across EVERY product row of its mandate. The product term is NULL-safe: both
+   * sides are legitimately NULL for a mandate with no rule.
+   */
+  private static Condition contractEvidenceJoin() {
+    return V_CONTRACT_EVIDENCE
+        .COUNTERPARTY_ID
+        .eq(CONTRACTS.COUNTERPARTY_ID)
+        .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
+        .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT));
+  }
+
+  /**
    * The primary decision unit (TP1 contract grain): one row per OPEN {@code contracts} row.
-   * {@code v_contract_evidence} supplies the per-mandate debit fallback; {@code
+   * {@code v_contract_evidence} supplies the per-{@code (mandate, product)} debit fallback (V19);
+   * {@code
    * v_counterparty_evidence} is left-joined too so a mandate-less contract (whose {@code
    * v_contract_evidence} join yields no match, since {@code NULL = NULL} is never true) still
    * gets a debit fallback -- the counterparty's own debit, since a mandate-less obligation IS the
@@ -695,15 +712,7 @@ public class ReadTools {
             .leftJoin(RECURRING)
             .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
             .leftJoin(V_CONTRACT_EVIDENCE)
-            .on(
-                V_CONTRACT_EVIDENCE
-                    .COUNTERPARTY_ID
-                    .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
-                    // The evidence view is grouped by product (V19), so a mandate-only join
-                    // would fan one contract out across EVERY product row of its mandate.
-                    // NULL-safe: both sides are legitimately NULL for a mandate with no rule.
-                    .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT)))
+            .on(contractEvidenceJoin())
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.STATUS.eq("open"))
@@ -878,15 +887,7 @@ public class ReadTools {
             .join(COUNTERPARTIES)
             .on(COUNTERPARTIES.ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .leftJoin(V_CONTRACT_EVIDENCE)
-            .on(
-                V_CONTRACT_EVIDENCE
-                    .COUNTERPARTY_ID
-                    .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
-                    // The evidence view is grouped by product (V19), so a mandate-only join
-                    // would fan one contract out across EVERY product row of its mandate.
-                    // NULL-safe: both sides are legitimately NULL for a mandate with no rule.
-                    .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT)))
+            .on(contractEvidenceJoin())
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.HIVEMEM_CELL_ID.isNull())
@@ -1072,15 +1073,7 @@ public class ReadTools {
             .leftJoin(RECURRING)
             .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
             .leftJoin(V_CONTRACT_EVIDENCE)
-            .on(
-                V_CONTRACT_EVIDENCE
-                    .COUNTERPARTY_ID
-                    .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
-                    // The evidence view is grouped by product (V19), so a mandate-only join
-                    // would fan one contract out across EVERY product row of its mandate.
-                    // NULL-safe: both sides are legitimately NULL for a mandate with no rule.
-                    .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT)))
+            .on(contractEvidenceJoin())
             // A mandate-less contract's MANDATE_ID is NULL, so the join above never matches it
             // (NULL = NULL is not TRUE in SQL) -- fall back to the counterparty's own evidence,
             // since a mandate-less obligation IS the whole counterparty (spec review M1 edge

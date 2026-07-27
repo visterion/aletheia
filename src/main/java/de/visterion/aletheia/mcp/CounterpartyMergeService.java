@@ -257,7 +257,8 @@ public class CounterpartyMergeService {
           targetId,
           "contract:" + sourceContract.getId(),
           null,
-          "moved contract (mandate " + sourceContract.getMandateId() + ") from counterparty " + sourceId,
+          "moved contract (" + contractGrainLabel(sourceContract) + ") from counterparty "
+              + sourceId,
           "confirmed");
       return;
     }
@@ -304,6 +305,15 @@ public class CounterpartyMergeService {
           "confirmed");
     }
     db.deleteFrom(CONTRACTS).where(CONTRACTS.ID.eq(sourceContract.getId())).execute();
+  }
+
+  /**
+   * Human-readable contract grain for the audit trail. Since V19 several product contracts can
+   * share one mandate, so the mandate alone no longer identifies the row that moved.
+   */
+  private static String contractGrainLabel(ContractsRecord contract) {
+    String label = "mandate " + contract.getMandateId();
+    return contract.getProduct() == null ? label : label + ", product " + contract.getProduct();
   }
 
   /**

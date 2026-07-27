@@ -9,6 +9,7 @@ import de.visterion.aletheia.substrate.ProductSplitResolver;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import org.jooq.DSLContext;
 import org.jooq.Record;
@@ -128,6 +129,38 @@ class ProductReadPathIT extends AbstractPostgresIT {
     assertThat(health).isGreaterThan(legal);
     assertThat(health.add(legal))
         .isEqualByComparingTo(annualCostOfProduct(after, null));
+  }
+
+  /**
+   * The same rollout window (spec §8 steps 4-5) for the third {@code v_contract_evidence} join,
+   * the one behind {@code list_unmatched_recurring}: the confirmed mandate contract and the two
+   * fresh product contracts are all unlinked (no {@code hivemem_cell_id}) and all three must be
+   * listed exactly once. A fan-out here duplicates whole entries that each carry a plausible cost
+   * of their own, so cost assertions alone cannot see it -- the row count and {@code contractId}
+   * uniqueness are what catch it.
+   */
+  @Test
+  void unmatchedRecurringHasNoFanoutDuringTheCoexistenceWindow() {
+    seedTwoMonthlyMultiProductBookings();
+    settle();
+    confirmAllContracts();
+
+    seedRule();
+    settle();
+    assertThat(openProductContractCount()).isEqualTo(2);
+
+    List<UnmatchedRecurringEntry> entries = readTools.listUnmatchedRecurring(null, null);
+
+    // Three unlinked contracts, three entries. A mandate-only join joins each of them against
+    // every product evidence row of the mandate and multiplies this.
+    assertThat(entries).hasSize(3);
+    assertThat(entries).extracting(UnmatchedRecurringEntry::contractId).doesNotHaveDuplicates();
+
+    BigDecimal health = annualCostOfContractProduct(entries, "HEALTH");
+    BigDecimal legal = annualCostOfContractProduct(entries, "LEGAL");
+    BigDecimal lump = annualCostOfContractProduct(entries, null);
+    assertThat(health).isGreaterThan(legal);
+    assertThat(health.add(legal)).isEqualByComparingTo(lump);
   }
 
   @Test
@@ -283,6 +316,24 @@ class ProductReadPathIT extends AbstractPostgresIT {
         .findFirst()
         .orElseThrow()
         .annualCost();
+  }
+
+  /**
+   * {@link UnmatchedRecurringEntry} carries no {@code product}, so the grain is read back from
+   * {@code contracts} via the entry's {@code contractId}.
+   */
+  private BigDecimal annualCostOfContractProduct(
+      List<UnmatchedRecurringEntry> entries, String product) {
+    return entries.stream()
+        .filter(e -> Objects.equals(product, productOfContract(e.contractId())))
+        .findFirst()
+        .orElseThrow()
+        .annualCostEstimate();
+  }
+
+  private String productOfContract(Long contractId) {
+    return db.fetchOne("SELECT product FROM contracts WHERE id = ?", contractId)
+        .get("product", String.class);
   }
 
   private long openProductContractCount() {
