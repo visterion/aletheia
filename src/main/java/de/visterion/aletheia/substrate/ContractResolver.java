@@ -26,11 +26,21 @@ import org.springframework.stereotype.Component;
  * prevents creating contracts from logical split children (purchase parts must not trigger new
  * contracts via resolver).
  *
+ * <p><b>One scoped exception</b> (spec §6): a root that {@link ProductSplitResolver} superseded by
+ * <em>product</em> children is replaced by those children, which is what derives contracts at
+ * {@code (counterparty_id, mandate_id, product)} -- for a bundled booking the product exists only on
+ * the children. The exception does not weaken the doctrine it sits inside, because product children
+ * are not purchase parts: they are the same obligation to the same creditor under the same mandate,
+ * written by a deterministic rule, carrying the parent's creditor identity and mandate forward, and
+ * summing exactly to it. Every other child class stays excluded and every other parent stays
+ * admitted -- an ordinary human {@code split_transaction} parent included, whose children carry
+ * {@code product IS NULL}. See {@link TransactionLayerSql#contractGrainRootPredicate}.
+ *
  * <p>Idempotent. {@code contracts} holds no measured fields, so its upsert is {@code DO
  * NOTHING} (skipping preserves a confirmed row). {@code recurring} holds the measured series,
  * so its upsert is {@code DO UPDATE} of the measured columns while preserving {@code
  * source}/{@code confidence} (a re-imported premium raise must surface without downgrading a
- * human confirmation). Never invents a NULL-mandate contract row — that is materialized only
+ * human confirmation). Never invents a NULL-mandate contract row -- that is materialized only
  * by a human confirm/link.
  */
 @Component
@@ -41,14 +51,13 @@ public class ContractResolver implements ApplicationRunner {
 
   // The ON CONFLICT arbiter names product because V19 replaced uq_contract_counterparty_mandate
   // with uq_contract_counterparty_mandate_product; the two-column target lost its supporting
-  // index and would fail on every resolve. Behaviour is unchanged: this INSERT does not set
-  // product, so every row it writes carries NULL, and NULLS NOT DISTINCT makes that the same slot
-  // the old key addressed. Deriving contracts AT product grain is a later task.
+  // index and would fail on every resolve. NULLS NOT DISTINCT makes a NULL product address the
+  // same slot the old key addressed, so a mandate without a product rule keeps exactly one row.
   // language=SQL
   private static final String UPSERT_CONTRACTS =
       """
-      INSERT INTO contracts (counterparty_id, mandate_id, source, status)
-      SELECT r.effective_cp, r.mandate_id, 'auto', 'open'
+      INSERT INTO contracts (counterparty_id, mandate_id, product, source, status)
+      SELECT r.effective_cp, r.mandate_id, r.product, 'auto', 'open'
       FROM (
           SELECT
               COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp,
@@ -56,6 +65,10 @@ public class ContractResolver implements ApplicationRunner {
                   WHEN t.attributed_name IS NOT NULL THEN 'attributed'
                   ELSE t.mandate_id
               END AS mandate_id,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN NULL
+                  ELSE t.product
+              END AS product,
               date_trunc('month', t.booking_date) AS month
           FROM transactions t
           LEFT JOIN counterparty_alias al
@@ -84,19 +97,23 @@ public class ContractResolver implements ApplicationRunner {
 
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
-          WHERE t."""
-          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          WHERE\s"""
+          + TransactionLayerSql.contractGrainRootPredicate("t")
           + """
 
             AND (t.attributed_name IS NOT NULL
                  OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
             AND COALESCE(al.canonical_counterparty_id, own.id) IS NOT NULL
       ) r
-      GROUP BY r.effective_cp, r.mandate_id
+      GROUP BY r.effective_cp, r.mandate_id, r.product
       HAVING count(DISTINCT r.month) >= 2
       ON CONFLICT (counterparty_id, mandate_id, product) DO NOTHING
       """;
 
+  // Grouped and joined at product grain: without `ct.product IS NOT DISTINCT FROM m.product`
+  // every product contract of a mandate would receive the mandate LUMP series, and since the
+  // DO UPDATE below overwrites the measured columns on every pass while preserving only `source`,
+  // each product's annual cost would be that lump, re-asserted even after a human confirmation.
   // language=SQL
   private static final String UPSERT_RECURRING =
       """
@@ -121,6 +138,10 @@ public class ContractResolver implements ApplicationRunner {
                   WHEN t.attributed_name IS NOT NULL THEN 'attributed'
                   ELSE t.mandate_id
               END AS mandate_id,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN NULL
+                  ELSE t.product
+              END AS product,
               percentile_cont(0.5) WITHIN GROUP (ORDER BY t.amount) AS typical_amount,
               min(t.amount) AS amount_min,
               max(t.amount) AS amount_max,
@@ -154,17 +175,19 @@ public class ContractResolver implements ApplicationRunner {
 
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
-          WHERE t."""
-          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          WHERE\s"""
+          + TransactionLayerSql.contractGrainRootPredicate("t")
           + """
 
             AND (t.attributed_name IS NOT NULL
                  OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
             AND COALESCE(al.canonical_counterparty_id, own.id) IS NOT NULL
-          GROUP BY 1, 2
+          GROUP BY 1, 2, 3
       ) m
       JOIN contracts ct
-          ON ct.counterparty_id = m.effective_cp AND ct.mandate_id = m.mandate_id
+          ON ct.counterparty_id = m.effective_cp
+         AND ct.mandate_id = m.mandate_id
+         AND ct.product IS NOT DISTINCT FROM m.product
       WHERE ct.mandate_id IS NOT NULL
       ON CONFLICT (counterparty_id, contract_id) DO UPDATE SET
           typical_amount   = EXCLUDED.typical_amount,

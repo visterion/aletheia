@@ -11,6 +11,7 @@ import de.visterion.aletheia.auth.AuthPrincipal;
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.NameNormalization;
+import de.visterion.aletheia.substrate.ProductSplitResolver;
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
 import de.visterion.aletheia.tagrules.RuleAction;
@@ -55,6 +56,7 @@ public class WriteTools {
   private final TransactionSplitService splitService;
   private final OperatingGuideService operatingGuideService;
   private final CounterpartyResolver counterpartyResolver;
+  private final ProductSplitResolver productSplitResolver;
   private final ContractResolver contractResolver;
   private final SubstrateLock substrateLock;
   private final TagRuleResolver tagRuleResolver;
@@ -67,6 +69,7 @@ public class WriteTools {
       TransactionSplitService splitService,
       OperatingGuideService operatingGuideService,
       CounterpartyResolver counterpartyResolver,
+      ProductSplitResolver productSplitResolver,
       ContractResolver contractResolver,
       SubstrateLock substrateLock,
       TagRuleResolver tagRuleResolver,
@@ -77,6 +80,7 @@ public class WriteTools {
     this.splitService = splitService;
     this.operatingGuideService = operatingGuideService;
     this.counterpartyResolver = counterpartyResolver;
+    this.productSplitResolver = productSplitResolver;
     this.contractResolver = contractResolver;
     this.substrateLock = substrateLock;
     this.tagRuleResolver = tagRuleResolver;
@@ -896,6 +900,7 @@ public class WriteTools {
             "a target changed underneath the call (concurrent split?); retry");
       }
       counterpartyResolver.resolve();
+      productSplitResolver.resolve();
       contractResolver.resolve();
       try {
         tagRuleResolver.resolve();
@@ -946,6 +951,7 @@ public class WriteTools {
     try {
       Integer merged = txTemplate.execute(status -> mergeService.mergeCore(targetId, sourceIds, reason));
       counterpartyResolver.resolve();
+      productSplitResolver.resolve();
       contractResolver.resolve();
       try {
         tagRuleResolver.resolve();

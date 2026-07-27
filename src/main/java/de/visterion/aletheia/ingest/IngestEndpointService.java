@@ -3,6 +3,7 @@ package de.visterion.aletheia.ingest;
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.PayPalAttributionResolver;
+import de.visterion.aletheia.substrate.ProductSplitResolver;
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.tagrules.TagRuleResolver;
 import java.io.IOException;
@@ -25,6 +26,7 @@ public class IngestEndpointService {
   private final IngestService ingestService;
   private final PayPalAttributionResolver payPalAttributionResolver;
   private final CounterpartyResolver counterpartyResolver;
+  private final ProductSplitResolver productSplitResolver;
   private final ContractResolver contractResolver;
   private final TagRuleResolver tagRuleResolver;
   private final SubstrateLock lock;
@@ -34,6 +36,7 @@ public class IngestEndpointService {
       IngestService ingestService,
       PayPalAttributionResolver payPalAttributionResolver,
       CounterpartyResolver counterpartyResolver,
+      ProductSplitResolver productSplitResolver,
       ContractResolver contractResolver,
       TagRuleResolver tagRuleResolver,
       SubstrateLock lock) {
@@ -41,14 +44,20 @@ public class IngestEndpointService {
     this.ingestService = ingestService;
     this.payPalAttributionResolver = payPalAttributionResolver;
     this.counterpartyResolver = counterpartyResolver;
+    this.productSplitResolver = productSplitResolver;
     this.contractResolver = contractResolver;
     this.tagRuleResolver = tagRuleResolver;
     this.lock = lock;
   }
 
   /**
-   * Stages {@code bytes} as a unique working file, ingests it, refreshes both resolvers so the
-   * substrate reflects the upload without a restart, then archives the working file. On any
+   * Stages {@code bytes} as a unique working file, ingests it, refreshes the resolvers so the
+   * substrate reflects the upload without a restart, then archives the working file.
+   *
+   * <p>{@code ProductSplitResolver} runs between counterparty and contract resolution, matching its
+   * {@code @Order(4)}: the contract layer derives its grain from the product rows this pass writes,
+   * so running it afterwards would derive contracts from the lump and let the products appear one
+   * restart late. On any
    * failure the working file is deleted so {@code incoming/} never accumulates leftovers.
    */
   public IngestResponse ingestUpload(byte[] bytes, String rawClientName) {
@@ -66,6 +75,7 @@ public class IngestEndpointService {
         ImportSummary summary = ingestService.ingest(working, safeName);
         payPalAttributionResolver.resolve();
         counterpartyResolver.resolve();
+        productSplitResolver.resolve();
         contractResolver.resolve();
         try {
           tagRuleResolver.resolve();
