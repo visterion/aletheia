@@ -22,9 +22,9 @@ import org.springframework.stereotype.Component;
  * creditor identity, so the creditor path below excludes any row with {@code attributed_name
  * IS NOT NULL}.
  *
- * <p>Only raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}. This
- * prevents creating contracts from logical split children (purchase parts must not trigger new
- * contracts via resolver).
+ * <p>Raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}, with the one
+ * scoped exception named below. This prevents creating contracts from logical split children
+ * (purchase parts must not trigger new contracts via resolver).
  *
  * <p><b>One scoped exception</b> (spec §6): a root that {@link ProductSplitResolver} superseded by
  * <em>product</em> children is replaced by those children, which is what derives contracts at
@@ -40,7 +40,7 @@ import org.springframework.stereotype.Component;
  * NOTHING} (skipping preserves a confirmed row). {@code recurring} holds the measured series,
  * so its upsert is {@code DO UPDATE} of the measured columns while preserving {@code
  * source}/{@code confidence} (a re-imported premium raise must surface without downgrading a
- * human confirmation). Never invents a NULL-mandate contract row -- that is materialized only
+ * human confirmation). Never invents a NULL-mandate contract row — that is materialized only
  * by a human confirm/link.
  */
 @Component
@@ -53,6 +53,13 @@ public class ContractResolver implements ApplicationRunner {
   // with uq_contract_counterparty_mandate_product; the two-column target lost its supporting
   // index and would fail on every resolve. NULLS NOT DISTINCT makes a NULL product address the
   // same slot the old key addressed, so a mandate without a product rule keeps exactly one row.
+  //
+  // The `WHEN t.attributed_name IS NOT NULL THEN NULL` arm of the product CASE is the second of
+  // spec §5's two belts against a product landing on the synthetic 'attributed' mandate. The
+  // first belt is ProductSplitResolver clearing the stamp when it skips an attributed root; this
+  // one is still load-bearing on its own, because a *disabled* rule stops that resolver from
+  // visiting the creditor at all (disable is a pause, not a revert -- spec §5 rule lifecycle),
+  // so a stamp written before the rule was disabled survives an attribution unchanged.
   // language=SQL
   private static final String UPSERT_CONTRACTS =
       """

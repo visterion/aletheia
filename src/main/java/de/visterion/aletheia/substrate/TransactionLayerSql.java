@@ -3,10 +3,17 @@ package de.visterion.aletheia.substrate;
 /**
  * Shared SQL fragments for TP2 transaction layering.
  *
- * <p>Logical leaf = no child references this row (NOT EXISTS). Used by all business reads.
+ * <p>Three row-set concepts live here, and they are deliberately different:
  *
- * <p>Raw root = {@code split_parent_content_hash IS NULL}. Used by substrate resolvers that must
- * never process synthetic children.
+ * <ul>
+ *   <li><b>Logical leaf</b> = no child references this row (NOT EXISTS). Used by all business
+ *       reads. See {@link #notExistsSupersededParent}.
+ *   <li><b>Raw root</b> = {@code split_parent_content_hash IS NULL}. Used by substrate resolvers
+ *       that must never process synthetic children. See {@link #RAW_ROOT_PREDICATE}.
+ *   <li><b>Contract-grain row set</b> = raw roots, except that a root superseded by <em>product</em>
+ *       children is replaced by those children (spec §6). Used by {@link ContractResolver} only.
+ *       See {@link #contractGrainRootPredicate}.
+ * </ul>
  */
 public final class TransactionLayerSql {
   private TransactionLayerSql() {}

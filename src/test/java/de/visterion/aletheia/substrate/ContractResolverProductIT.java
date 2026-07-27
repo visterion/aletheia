@@ -165,6 +165,65 @@ class ContractResolverProductIT extends AbstractPostgresIT {
     assertThat(recurringRows()).isEqualTo(before);
   }
 
+  /**
+   * Belt 1 of spec §5: {@link ProductSplitResolver} clears a stale stamp when it skips an
+   * attributed root.
+   *
+   * <p>{@code validateRefsAreActiveRoots} rejects split children and split parents but not a
+   * <em>stamped</em> root, so stamp and attribution can legitimately coexist on one row. Without
+   * the clear, {@code v_contract_evidence} -- which projects {@code t.product} raw, with no
+   * attributed CASE -- would describe the row as {@code ('attributed', 'HEALTH')} while the
+   * contract layer derives {@code ('attributed', NULL)} for the very same booking.
+   */
+  @Test
+  void reattributingAStampedRootClearsTheStamp() {
+    seedRule(PATTERN);
+    seedBooking("jan", LocalDate.of(2026, 1, 15), "150.00", SINGLE);
+    seedBooking("feb", LocalDate.of(2026, 2, 15), "150.00", SINGLE);
+    settle();
+    assertThat(transactionProducts()).containsExactly("HEALTH", "HEALTH");
+
+    attribute("root-jan", "root-feb");
+    settle();
+
+    assertThat(transactionProducts()).containsExactly((String) null, null);
+    assertThat(attributedContractProducts()).containsExactly((String) null);
+  }
+
+  /**
+   * Belt 2 of spec §5: the {@code CASE WHEN attributed_name IS NOT NULL THEN NULL ELSE t.product
+   * END} in {@code UPSERT_CONTRACTS}/{@code UPSERT_RECURRING}.
+   *
+   * <p>Belt 1 does <b>not</b> subsume it. Disabling a rule is a pause, not a revert (spec §5 rule
+   * lifecycle): {@link ProductSplitResolver} then never visits the creditor again, existing stamps
+   * stay in place by design, and a later re-attribution therefore reaches {@link ContractResolver}
+   * with {@code attributed_name} and {@code product} both set on one row. Without the CASE that
+   * row groups as {@code (name-cp, 'attributed', 'HEALTH')} and mints a product contract on the
+   * synthetic mandate, which spec §6 forbids.
+   */
+  @Test
+  void attributedRootNeverMintsAProductContractEvenWithASurvivingStamp() {
+    seedRule(PATTERN);
+    seedBooking("jan", LocalDate.of(2026, 1, 15), "150.00", SINGLE);
+    seedBooking("feb", LocalDate.of(2026, 2, 15), "150.00", SINGLE);
+    settle();
+    assertThat(transactionProducts()).containsExactly("HEALTH", "HEALTH");
+
+    db.execute("UPDATE product_rules SET enabled = false");
+    attribute("root-jan", "root-feb");
+    settle();
+
+    // The pause is real: belt 1 cannot act here, so the stamp is still on the rows.
+    assertThat(transactionProducts()).containsExactly("HEALTH", "HEALTH");
+    assertThat(attributedContractProducts()).containsExactly((String) null);
+    assertThat(
+            db.fetchOne(
+                    "SELECT count(*) AS n FROM contracts"
+                        + " WHERE mandate_id = 'attributed' AND product IS NOT NULL")
+                .get("n", Integer.class))
+        .isZero();
+  }
+
   /** TP2 doctrine: purchase parts never mint a contract, even carrying creditor id and mandate. */
   @Test
   void ordinarySplitChildrenStillMintNoContract() {
@@ -371,6 +430,31 @@ class ContractResolverProductIT extends AbstractPostgresIT {
   /** Every contract's product, NULLs included, so a missing/extra lump row is visible. */
   private List<String> contractProducts() {
     return db.fetch("SELECT product FROM contracts ORDER BY product NULLS LAST")
+        .map(r -> r.get("product", String.class));
+  }
+
+  /** Stamps a human re-attribution onto raw roots, exactly as {@code reattribute_transaction} does. */
+  private void attribute(String... contentHashes) {
+    for (String hash : contentHashes) {
+      db.execute(
+          "UPDATE transactions SET attributed_name = 'SYNTHETIC MERCHANT',"
+              + " attribution_source = 'manual' WHERE content_hash = ?",
+          hash);
+    }
+  }
+
+  /** Every root's stamp, so a surviving or wrongly-cleared {@code product} is visible. */
+  private List<String> transactionProducts() {
+    return db.fetch(
+            "SELECT product FROM transactions WHERE split_parent_content_hash IS NULL"
+                + " ORDER BY content_hash")
+        .map(r -> r.get("product", String.class));
+  }
+
+  private List<String> attributedContractProducts() {
+    return db.fetch(
+            "SELECT product FROM contracts WHERE mandate_id = 'attributed'"
+                + " ORDER BY product NULLS LAST")
         .map(r -> r.get("product", String.class));
   }
 

@@ -40,7 +40,9 @@ import org.springframework.transaction.support.TransactionTemplate;
  * <ul>
  *   <li>a root with {@code attributed_name} is skipped -- a human {@code reattribute_transaction}
  *       is a decision, and splitting would hide the parent from every evidence view and erase that
- *       identity without an error
+ *       identity without an error. The skip <b>clears a stale stamp</b> too: a stamped root can be
+ *       re-attributed afterwards, and a surviving {@code product} would put a product on the
+ *       synthetic {@code 'attributed'} mandate in {@code v_contract_evidence}
  *   <li>a root with any child carrying {@code product IS NULL} is skipped, because that is a human
  *       {@code split_transaction} and the human outranks the rule. The skip also <b>clears a stale
  *       stamp</b> on the root: otherwise the pre-split full amount would keep feeding the product
@@ -226,7 +228,22 @@ public class ProductSplitResolver implements ApplicationRunner {
     int occ = root.get(TRANSACTIONS.OCCURRENCE_INDEX);
 
     if (root.get(TRANSACTIONS.ATTRIBUTED_NAME) != null) {
-      log.debug("Skipping attributed root {}/{}: a re-attribution is a human decision", hash, occ);
+      // The skip still clears: a root stamped in stamp-mode can be re-attributed afterwards
+      // (`validateRefsAreActiveRoots` rejects children and split parents, but not stamped roots),
+      // and skipping without clearing would leave `product` on the row forever. That residue is
+      // not cosmetic -- `v_contract_evidence` projects `t.product` raw, so the same physical row
+      // would be described as ('attributed', PRODUCT) by the evidence view while the contract
+      // layer derives ('attributed', NULL). This is the first of the two belts spec §5 requires;
+      // the second is the attributed CASE in ContractResolver's UPSERT_CONTRACTS, which still
+      // matters on its own because a disabled rule stops this resolver from visiting the creditor
+      // at all while its stamps stay in place by design.
+      int cleared = clearStamp(hash, occ);
+      log.debug(
+          "Skipping attributed root {}/{}: a re-attribution is a human decision (cleared {} stale"
+              + " stamp(s))",
+          hash,
+          occ,
+          cleared);
       return Outcome.SKIPPED;
     }
     if (hasHumanSplitChild(hash, occ)) {
