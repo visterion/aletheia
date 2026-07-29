@@ -40,7 +40,12 @@ public class ToolPermissionService {
           "wake_up",
           "list_tag_rules",
           "cashflow",
-          "read_me");
+          "read_me",
+          // Reads only, and READ-scoped for the same reason list_tag_rules is: after the product
+          // rollout both DB roles hold SELECT on product_rules, so a READER can already read a
+          // rule's pattern through sql_query. WRITER-scoping it would have withheld only the
+          // residue counters from the role that does read-only analysis.
+          "list_product_rules");
 
   /** Additional write-scope tools (spec §5 "Write"), on top of everything READER can do. */
   private static final Set<String> WRITE_TOOLS =
@@ -59,11 +64,9 @@ public class ToolPermissionService {
           "merge_counterparty",
           "set_display_name",
           "end_contract",
-          // Product rules (spec §7). list_product_rules reads only, but a rule's position pattern
-          // is a creditor's remittance format and belongs to the audience that may author one.
+          // Product rules (spec §7); list_product_rules is READ-scoped above.
           "create_product_rule",
           "update_product_rule",
-          "list_product_rules",
           "set_product_rule_enabled",
           "delete_product_rule");
 

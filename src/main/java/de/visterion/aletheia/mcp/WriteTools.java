@@ -6,8 +6,6 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 
-import de.visterion.aletheia.auth.AuthFilter;
-import de.visterion.aletheia.auth.AuthPrincipal;
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.NameNormalization;
@@ -29,8 +27,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * MCP write tools (spec §5 "Write", scope {@code write}). Every tool name here matches {@code
@@ -90,7 +86,7 @@ public class WriteTools {
 
   public String updatePreferences(
       String preferences) {
-    return operatingGuideService.updatePreferences(preferences, currentActor());
+    return operatingGuideService.updatePreferences(preferences, RequestActor.current());
   }
 
   @Transactional
@@ -776,24 +772,8 @@ public class WriteTools {
         .set(COUNTERPARTY_HISTORY.OLD_VALUE, oldValue)
         .set(COUNTERPARTY_HISTORY.NEW_VALUE, newValue)
         .set(COUNTERPARTY_HISTORY.SOURCE, source)
-        .set(COUNTERPARTY_HISTORY.ACTOR, currentActor())
+        .set(COUNTERPARTY_HISTORY.ACTOR, RequestActor.current())
         .execute();
-  }
-
-  /**
-   * The calling principal's name, resolved from the request attribute {@link AuthFilter} sets
-   * (mirrors how {@code ScopeEnforcingToolCallback} resolves the caller). Falls back to {@code
-   * "unknown"} for direct (non-HTTP) callers such as unit/integration tests that invoke this
-   * bean's methods without a request in flight.
-   */
-  private static String currentActor() {
-    RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-    if (attributes == null) {
-      return "unknown";
-    }
-    Object principal =
-        attributes.getAttribute(AuthFilter.PRINCIPAL_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
-    return principal instanceof AuthPrincipal authPrincipal ? authPrincipal.name() : "unknown";
   }
 
   // --- reattribute_transaction (#43 manual attribution) ---

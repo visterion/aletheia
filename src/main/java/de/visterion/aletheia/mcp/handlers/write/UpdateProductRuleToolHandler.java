@@ -36,7 +36,9 @@ public class UpdateProductRuleToolHandler implements ToolHandler {
         + " product rule in place. This is a graceful refresh: the split rows are recomputed and"
         + " the derived contracts survive. Deleting and re-creating the rule instead runs the full"
         + " revert and drops the auto contracts, so use this. An omitted field stays unchanged."
-        + " dryRun=true writes nothing and returns the blast radius the new pattern would produce;"
+        + " dryRun=true writes nothing and returns the blast radius the new pattern would produce"
+        + " (candidateRoots excludes the bookings a human has split or re-attributed, which the"
+        + " resolver skips and list_product_rules' rootsVisited still counts);"
         + " dryRun=false applies it and settles the substrate immediately."
         + "\n\nKeywords: Regel, Produkt, Tarif, ändern, korrigieren";
   }

@@ -7,8 +7,6 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 
-import de.visterion.aletheia.auth.AuthFilter;
-import de.visterion.aletheia.auth.AuthPrincipal;
 import de.visterion.aletheia.jooq.tables.records.ContractsRecord;
 import de.visterion.aletheia.jooq.tables.records.RecurringRecord;
 import java.util.LinkedHashSet;
@@ -16,8 +14,6 @@ import java.util.List;
 import org.jooq.DSLContext;
 import org.jooq.Record2;
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * The {@code merge_counterparty} merge core (spec {@code 2026-07-19-counterparty-merge-alias-design.md}
@@ -384,18 +380,7 @@ public class CounterpartyMergeService {
         .set(COUNTERPARTY_HISTORY.OLD_VALUE, oldValue)
         .set(COUNTERPARTY_HISTORY.NEW_VALUE, newValue)
         .set(COUNTERPARTY_HISTORY.SOURCE, source)
-        .set(COUNTERPARTY_HISTORY.ACTOR, currentActor())
+        .set(COUNTERPARTY_HISTORY.ACTOR, RequestActor.current())
         .execute();
-  }
-
-  /** Mirrors {@link WriteTools}'s actor resolution (same request-attribute convention). */
-  private static String currentActor() {
-    RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-    if (attributes == null) {
-      return "unknown";
-    }
-    Object principal =
-        attributes.getAttribute(AuthFilter.PRINCIPAL_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
-    return principal instanceof AuthPrincipal authPrincipal ? authPrincipal.name() : "unknown";
   }
 }

@@ -29,6 +29,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 class ProductRuleToolsIT extends AbstractPostgresIT {
 
   private static final String CREDITOR = "CDTR-INSURER";
+
+  /** A second creditor that books on a mandate reference spelled exactly like the insurer's. */
+  private static final String OTHER_CREDITOR = "CDTR-OTHER";
+
   private static final String MANDATE = "POLICY-1";
   private static final String OTHER_MANDATE = "POLICY-2";
 
@@ -101,7 +105,7 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
 
     ProductRuleBlastRadius radius = ack.blastRadius();
     assertThat(radius).isNotNull();
-    assertThat(radius.rootsVisited()).isEqualTo(4);
+    assertThat(radius.candidateRoots()).isEqualTo(4);
     assertThat(radius.bookingsMatched()).isEqualTo(3);
     assertThat(radius.positionsParsed()).isEqualTo(5);
     assertThat(radius.sumMismatches()).isEqualTo(1);
@@ -252,7 +256,7 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
   void deleteReopensEndedMandateContract() {
     seedBundledMandate();
     settleSubstrate();
-    long mandateContract = contractIdOfMandateLevel();
+    long mandateContract = contractIdOfMandateLevel(CREDITOR);
     confirmContract(mandateContract);
     writeTools.endContract(mandateContract, LocalDate.of(2026, 3, 1), "superseded by products");
     assertThat(contractStatus(mandateContract)).isEqualTo("ended");
@@ -267,6 +271,121 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
         .isEqualTo("open");
     assertThat(contractEndDate(mandateContract)).isNull();
     assertThat(ack.revert().mandateContractsReopened()).isEqualTo(1);
+  }
+
+  /**
+   * The worst outcome this tool can produce: destroying a human's {@code split_transaction}
+   * silently. The revert must delete only the rows the <em>rule</em> wrote, and the human children
+   * hang off a parent of exactly the same creditor -- the delete is addressed through that parent,
+   * so nothing but the {@code product IS NOT NULL} guard keeps them alive.
+   */
+  @Test
+  void deleteKeepsAHumansSplitChildren() {
+    seedBundledMandate();
+    seedBooking("root-human", LocalDate.of(2026, 3, 15), "150.00", MULTI, MANDATE);
+    settleSubstrate();
+    splitByHand("root-human");
+    assertThat(humanChildCount()).isEqualTo(2);
+    long ruleId = productRuleService.createProductRule(CREDITOR, PATTERN, null, false).ruleId();
+    assertThat(productChildCount())
+        .withFailMessage("the rule split a root a human had already split")
+        .isEqualTo(4);
+
+    ProductRuleAck ack = productRuleService.deleteProductRule(ruleId, false);
+
+    assertThat(humanChildCount())
+        .withFailMessage(
+            "delete_product_rule destroyed a human's split children: the child DELETE is addressed"
+                + " through the parent's creditor id, so without the product IS NOT NULL guard it"
+                + " takes every child of every booking of that creditor")
+        .isEqualTo(2);
+    assertThat(productChildCount()).isZero();
+    assertThat(ack.revert().childrenRemoved())
+        .withFailMessage("the human's children were counted as removed by the rule revert")
+        .isEqualTo(4);
+  }
+
+  /**
+   * A SEPA mandate reference is unique only per creditor, so a generic one collides. Both delete
+   * queries must scope by the rule creditor's counterparty as well -- the reopen arm is the
+   * reachable one: it would flip an ended contract a human deliberately ended back to open, with an
+   * audit row blaming this tool.
+   */
+  @Test
+  void deleteDoesNotReachIntoASecondCreditorSharingTheMandateReference() {
+    seedBundledMandate();
+    seedOtherCreditorBookings();
+    settleSubstrate();
+    long otherEnded = contractIdOfMandateLevel(OTHER_CREDITOR);
+    confirmContract(otherEnded);
+    writeTools.endContract(otherEnded, LocalDate.of(2026, 3, 1), "ended by hand");
+    long otherProductContract = seedProductContractFor(otherEnded);
+    long ruleId = productRuleService.createProductRule(CREDITOR, PATTERN, null, false).ruleId();
+
+    ProductRuleAck ack = productRuleService.deleteProductRule(ruleId, false);
+
+    assertThat(contractStatus(otherEnded))
+        .withFailMessage(
+            "delete_product_rule reopened another creditor's deliberately ended contract, which"
+                + " only shares the mandate reference string")
+        .isEqualTo("ended");
+    assertThat(ack.revert().mandateContractsReopened()).isZero();
+    assertThat(contractExists(otherProductContract))
+        .withFailMessage("delete_product_rule deleted another creditor's product contract")
+        .isTrue();
+    assertThat(ack.revert().autoContractsDeleted()).isEqualTo(2);
+    assertThat(contractProducts()).containsExactly("TRAVEL");
+  }
+
+  /**
+   * The two denominators are deliberately different and must stay distinguishable: a dry run counts
+   * only the roots the rule may act on, the resolver counts every root it looked at -- including
+   * the ones it skipped because a human had decided them.
+   */
+  @Test
+  void candidateRootsExcludeSkippedRootsWhileRootsVisitedCountsThem() {
+    seedBundledMandate();
+    seedBooking("root-human", LocalDate.of(2026, 3, 15), "150.00", MULTI, MANDATE);
+    settleSubstrate();
+    splitByHand("root-human");
+
+    ProductRuleAck preview = productRuleService.createProductRule(CREDITOR, PATTERN, null, true);
+    assertThat(preview.blastRadius().candidateRoots()).isEqualTo(2);
+
+    productRuleService.createProductRule(CREDITOR, PATTERN, null, false);
+
+    assertThat(productRuleService.listProductRules().get(0).rootsVisited())
+        .withFailMessage(
+            "rootsVisited no longer counts the skipped root: the two counters have converged and"
+                + " the documented divergence is now silent")
+        .isEqualTo(3);
+  }
+
+  /** The reopen is auditable, and it names the caller, not the tool. */
+  @Test
+  void reopenWritesAHistoryRowNamingTheCallerAndTheTool() {
+    seedBundledMandate();
+    settleSubstrate();
+    long mandateContract = contractIdOfMandateLevel(CREDITOR);
+    confirmContract(mandateContract);
+    writeTools.endContract(mandateContract, LocalDate.of(2026, 3, 1), "superseded by products");
+    long ruleId = productRuleService.createProductRule(CREDITOR, PATTERN, null, false).ruleId();
+
+    productRuleService.deleteProductRule(ruleId, false);
+
+    var history =
+        db.fetchOne(
+            "SELECT actor, source, old_value, new_value FROM counterparty_history"
+                + " WHERE field = ? ORDER BY id DESC LIMIT 1",
+            "contract:" + mandateContract);
+    assertThat(history.get("old_value", String.class)).isEqualTo("ended");
+    assertThat(history.get("new_value", String.class)).isEqualTo("open");
+    assertThat(history.get("source", String.class)).contains("delete_product_rule");
+    assertThat(history.get("actor", String.class))
+        .withFailMessage(
+            "the reopen row hard-codes an actor instead of naming the calling principal like every"
+                + " other history write")
+        .isEqualTo("unknown"); // no request in flight in an IT; same fallback WriteTools uses
   }
 
   @Test
@@ -353,6 +472,15 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
     assertThatThrownBy(() -> productRuleService.createProductRule(CREDITOR, PATTERN, null, false))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining(CREDITOR);
+
+    // The dry run must be rejected too: previewing a create that the very next call would reject
+    // is a preview of something that cannot happen.
+    assertThatThrownBy(() -> productRuleService.createProductRule(CREDITOR, PATTERN, null, true))
+        .withFailMessage(
+            "create_product_rule(dryRun=true) previewed a create for a creditor that already has a"
+                + " rule; the duplicate check sits after the preview return")
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("already exists");
   }
 
   // -----------------------------------------------------------------------------------------
@@ -370,8 +498,56 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
     seedBooking("root-stamp", LocalDate.of(2026, 1, 20), "90.00", SINGLE, OTHER_MANDATE);
   }
 
+  /**
+   * A second creditor booking on a mandate reference that happens to be spelled exactly like the
+   * insurer's. SEPA mandate references are unique only per creditor, so this is legal data, not a
+   * contrived one.
+   */
+  private void seedOtherCreditorBookings() {
+    seedBooking(
+        "other-jan", LocalDate.of(2026, 1, 10), "20.00", "OTHER SERVICE", MANDATE, OTHER_CREDITOR);
+    seedBooking(
+        "other-feb", LocalDate.of(2026, 2, 10), "20.00", "OTHER SERVICE", MANDATE, OTHER_CREDITOR);
+  }
+
+  /** Splits a booking the way a human would: two allocations, both {@code product IS NULL}. */
+  private void splitByHand(String hash) {
+    writeTools.splitTransaction(
+        new TxReference(hash, 0),
+        List.of(
+            new Allocation(null, "SYNTHETIC CASH", null, new BigDecimal("100.00"), "cash part"),
+            new Allocation(null, "SYNTHETIC SHOP", null, new BigDecimal("50.00"), "goods part")),
+        null);
+  }
+
+  /**
+   * An auto product contract on the <em>other</em> creditor's counterparty, on the colliding
+   * mandate reference: the narrow arm of the same over-reach.
+   */
+  private long seedProductContractFor(long otherMandateContractId) {
+    long counterpartyId =
+        db.fetchOne("SELECT counterparty_id AS c FROM contracts WHERE id = ?", otherMandateContractId)
+            .get("c", Long.class);
+    return db.fetchOne(
+            "INSERT INTO contracts (counterparty_id, mandate_id, product, source, status)"
+                + " VALUES (?, ?, 'TRAVEL', 'auto', 'open') RETURNING id",
+            counterpartyId,
+            MANDATE)
+        .get("id", Long.class);
+  }
+
   private void seedBooking(
       String hash, LocalDate date, String amount, String remittance, String mandate) {
+    seedBooking(hash, date, amount, remittance, mandate, CREDITOR);
+  }
+
+  private void seedBooking(
+      String hash,
+      LocalDate date,
+      String amount,
+      String remittance,
+      String mandate,
+      String creditor) {
     db.execute(
         "INSERT INTO transactions (content_hash, occurrence_index, import_id, booking_date,"
             + " amount, currency, direction, booking_status, remittance_info, counterparty_name,"
@@ -383,7 +559,7 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
         date,
         new BigDecimal(amount),
         remittance,
-        CREDITOR,
+        creditor,
         mandate);
   }
 
@@ -421,6 +597,27 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
         org.jooq.impl.DSL.condition("split_parent_content_hash is null and product is not null"));
   }
 
+  /** Children a human's {@code split_transaction} wrote; the rule never touches these. */
+  private int humanChildCount() {
+    return db.fetchCount(
+        org.jooq.impl.DSL.table("transactions"),
+        org.jooq.impl.DSL.condition("split_parent_content_hash is not null and product is null"));
+  }
+
+  private int productChildCount() {
+    return db.fetchCount(
+        org.jooq.impl.DSL.table("transactions"),
+        org.jooq.impl.DSL.condition(
+            "split_parent_content_hash is not null and product is not null"));
+  }
+
+  private boolean contractExists(long contractId) {
+    return db.fetchCount(
+            org.jooq.impl.DSL.table("contracts"),
+            org.jooq.impl.DSL.condition("id = ?", contractId))
+        == 1;
+  }
+
   private List<String> childProducts() {
     return db.fetch(
             "SELECT product FROM transactions WHERE split_parent_content_hash IS NOT NULL"
@@ -449,9 +646,14 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
     return db.fetchOne("SELECT id FROM contracts WHERE product = ?", product).get("id", Long.class);
   }
 
-  private long contractIdOfMandateLevel() {
+  /** The mandate-level contract of one creditor; two creditors share the mandate reference here. */
+  private long contractIdOfMandateLevel(String creditor) {
     return db.fetchOne(
-            "SELECT id FROM contracts WHERE product IS NULL AND mandate_id = ?", MANDATE)
+            "SELECT c.id FROM contracts c JOIN counterparties cp ON cp.id = c.counterparty_id"
+                + " WHERE c.product IS NULL AND c.mandate_id = ?"
+                + " AND cp.identity_type = 'creditor_id' AND cp.identity_value = ?",
+            MANDATE,
+            creditor)
         .get("id", Long.class);
   }
 

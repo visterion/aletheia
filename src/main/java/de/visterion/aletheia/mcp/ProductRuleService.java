@@ -32,9 +32,15 @@ public class ProductRuleService {
   private static final Logger log = LoggerFactory.getLogger(ProductRuleService.class);
 
   /**
-   * The roots a rule would act on: the resolver's candidate set, including its two skips. Counting
-   * roots the resolver will refuse to touch would overstate every dry run on a mandate a human has
-   * already split or re-attributed.
+   * The roots a rule would act on: the resolver's candidate set <em>minus</em> its two skips.
+   * Counting roots the resolver will refuse to touch would overstate every dry run on a mandate a
+   * human has already split or re-attributed.
+   *
+   * <p>This is why the dry run reports {@code candidateRoots} while {@code list_product_rules}
+   * reports {@code rootsVisited}: the resolver counts a skipped root as visited (it visits it and
+   * decides to leave it alone), so on a creditor with human-decided bookings {@code rootsVisited >
+   * candidateRoots} -- by exactly the number of skips. Two denominators, deliberately, and named
+   * apart so nobody reads the difference as drift.
    */
   private static final String CANDIDATE_ROOTS =
       """
@@ -68,14 +74,37 @@ public class ProductRuleService {
       "split_parent_content_hash IS NULL AND product IS NOT NULL AND creditor_id = ?";
 
   /**
-   * Product contracts of the mandates this creditor books on. Contracts carry no creditor id of
-   * their own, so the mandate is the join -- the same grain the rule operates at.
+   * The creditor's counterparty, alias-aware. A SEPA mandate reference is unique only <em>per
+   * creditor</em>, so a generic one ({@code 1}, {@code RECHNUNG}) collides across creditors and a
+   * mandate-only scope would reach into a second creditor's contracts.
+   *
+   * <p>The alias hop is the frozen {@code COALESCE(al.canonical_counterparty_id, own.id)} idiom of
+   * every other identity site ({@code ReadTools:228}, {@code ContractResolver:70}, {@code
+   * CounterpartyResolver:119}, {@code TagRuleResolver:99}) -- contracts hang off the
+   * <em>effective</em> counterparty, so resolving the creditor without the hop would silently miss
+   * every contract of a folded creditor.
+   */
+  private static final String EFFECTIVE_CREDITOR_COUNTERPARTY =
+      """
+      SELECT COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp
+      FROM (SELECT 'creditor_id' AS identity_type, CAST(? AS text) AS identity_value) i
+      LEFT JOIN counterparty_alias al ON al.identity_type = i.identity_type AND al.identity_value = i.identity_value
+      LEFT JOIN counterparties own ON own.identity_type = i.identity_type AND own.identity_value = i.identity_value
+      """;
+
+  /**
+   * Product contracts of this creditor's counterparty, on the mandates it books on. Contracts carry
+   * no creditor id of their own, so the mandate is one half of the join -- and the counterparty is
+   * the other half, because the mandate alone is not creditor-unique (see {@link
+   * #EFFECTIVE_CREDITOR_COUNTERPARTY}). {@code CounterpartyMergeService.migrateOneContract} already
+   * matches {@code (mandate_id, product)} within one counterparty for the same reason.
    */
   private static final String PRODUCT_CONTRACTS =
       """
       SELECT c.id, c.counterparty_id, c.mandate_id, c.product, c.status, c.source
       FROM contracts c
       WHERE c.product IS NOT NULL
+        AND c.counterparty_id = ?
         AND EXISTS (SELECT 1 FROM transactions t
                     WHERE t.creditor_id = ? AND t.mandate_id = c.mandate_id)
       ORDER BY c.mandate_id, c.product
@@ -88,6 +117,12 @@ public class ProductRuleService {
    * selects {@code confirmed}), the review queue (it selects {@code open}) and {@code
    * list_unmatched_recurring} (it excludes {@code ended}) in one step, with the rule's counter
    * surface gone too.
+   *
+   * <p>Scoped to the creditor's own counterparty as well as to the mandate, and that scope is the
+   * reachable half of the mandate-uniqueness problem: without it, deleting a rule would flip
+   * <em>any</em> ended mandate contract of <em>any</em> counterparty whose mandate string happens
+   * to collide back to {@code open} -- reviving a contract a human deliberately ended, with an
+   * audit row that blames this tool.
    */
   private static final String ENDED_MANDATE_CONTRACTS =
       """
@@ -96,6 +131,7 @@ public class ProductRuleService {
       WHERE c.product IS NULL
         AND c.status = 'ended'
         AND c.mandate_id IS NOT NULL
+        AND c.counterparty_id = ?
         AND EXISTS (SELECT 1 FROM transactions t
                     WHERE t.creditor_id = ? AND t.mandate_id = c.mandate_id)
       ORDER BY c.id
@@ -139,16 +175,18 @@ public class ProductRuleService {
 
     substrateLock.lock();
     try {
-      ProductRuleBlastRadius radius = blastRadius(creditor, positionPattern);
-      if (preview) {
-        return new ProductRuleAck(null, "dry run, nothing written: " + describe(radius), true,
-            radius, null);
-      }
+      // Before the preview, not after it: a dry run that happily previews a create the very next
+      // call would reject is a preview of something that cannot happen.
       Long existing = ruleIdOfCreditor(creditor);
       if (existing != null) {
         throw new IllegalArgumentException(
             "a product rule for " + creditor + " already exists (id " + existing
                 + "); edit it with update_product_rule instead of creating a second one");
+      }
+      ProductRuleBlastRadius radius = blastRadius(creditor, positionPattern);
+      if (preview) {
+        return new ProductRuleAck(null, "dry run, nothing written: " + describe(radius), true,
+            radius, null);
       }
       long ruleId =
           db.fetchOne(
@@ -300,7 +338,8 @@ public class ProductRuleService {
   }
 
   private ProductRuleRevert revertPlan(String creditor) {
-    List<Record> contracts = db.fetch(PRODUCT_CONTRACTS, creditor);
+    Long counterpartyId = effectiveCounterpartyOf(creditor);
+    List<Record> contracts = db.fetch(PRODUCT_CONTRACTS, counterpartyId, creditor);
     List<Long> autoIds = new ArrayList<>();
     List<String> kept = new ArrayList<>();
     partitionContracts(contracts, autoIds, kept);
@@ -313,12 +352,13 @@ public class ProductRuleService {
             condition(STAMPED_ROOTS_PREDICATE, creditor)),
         autoIds.size(),
         recurringCount(autoIds),
-        db.fetch(ENDED_MANDATE_CONTRACTS, creditor).size(),
+        db.fetch(ENDED_MANDATE_CONTRACTS, counterpartyId, creditor).size(),
         List.copyOf(kept));
   }
 
   private ProductRuleRevert revert(long ruleId, String creditor) {
-    List<Record> contracts = db.fetch(PRODUCT_CONTRACTS, creditor);
+    Long counterpartyId = effectiveCounterpartyOf(creditor);
+    List<Record> contracts = db.fetch(PRODUCT_CONTRACTS, counterpartyId, creditor);
     List<Long> autoIds = new ArrayList<>();
     List<String> kept = new ArrayList<>();
     partitionContracts(contracts, autoIds, kept);
@@ -345,7 +385,7 @@ public class ProductRuleService {
     }
 
     int reopened = 0;
-    for (Record ended : db.fetch(ENDED_MANDATE_CONTRACTS, creditor)) {
+    for (Record ended : db.fetch(ENDED_MANDATE_CONTRACTS, counterpartyId, creditor)) {
       long contractId = ended.get("id", Long.class);
       db.execute(
           "UPDATE contracts SET status = 'open', end_date = NULL WHERE id = ?", contractId);
@@ -369,15 +409,29 @@ public class ProductRuleService {
 
   /**
    * Audits the reopen. The row it flips was confirmed by a human before it was ended, so the status
-   * change has to be traceable; {@code actor} names the tool because no request-bound principal
-   * reaches this service.
+   * change has to be traceable: {@code actor} is the calling principal ({@link RequestActor}, the
+   * convention every other history write follows -- this service runs on the request thread like
+   * any other tool), and the tool name goes into {@code source}, where {@code end_contract} puts
+   * its reason.
    */
   private void insertReopenHistory(long counterpartyId, long contractId) {
     db.execute(
         "INSERT INTO counterparty_history (counterparty_id, field, old_value, new_value, source,"
-            + " actor) VALUES (?, ?, 'ended', 'open', 'auto', 'delete_product_rule')",
+            + " actor) VALUES (?, ?, 'ended', 'open', 'reopened by delete_product_rule', ?)",
         counterpartyId,
-        "contract:" + contractId);
+        "contract:" + contractId,
+        RequestActor.current());
+  }
+
+  /**
+   * Resolves the creditor to its effective counterparty; see {@link
+   * #EFFECTIVE_CREDITOR_COUNTERPARTY}. A {@code null} result (no counterparty for this creditor id
+   * yet) is deliberately passed on to the scoped queries, where {@code counterparty_id = NULL}
+   * matches nothing: fail closed, never fall back to a mandate-only scope.
+   */
+  private Long effectiveCounterpartyOf(String creditorId) {
+    Record row = db.fetchOne(EFFECTIVE_CREDITOR_COUNTERPARTY, creditorId);
+    return row == null ? null : row.get("effective_cp", Long.class);
   }
 
   /**
@@ -443,12 +497,12 @@ public class ProductRuleService {
    * one the resolver performs, so the numbers a dry run reports are the numbers the settle produces.
    */
   private ProductRuleBlastRadius blastRadius(String creditorId, String positionPattern) {
-    int visited = 0;
+    int candidates = 0;
     int matched = 0;
     int positions = 0;
     int mismatches = 0;
     for (Record root : db.fetch(CANDIDATE_ROOTS, creditorId)) {
-      visited++;
+      candidates++;
       ProductPositionParser.ParseResult parsed =
           parser.parse(
               positionPattern,
@@ -461,7 +515,7 @@ public class ProductRuleService {
         positions += parsed.positions().size();
       }
     }
-    return new ProductRuleBlastRadius(visited, matched, positions, mismatches);
+    return new ProductRuleBlastRadius(candidates, matched, positions, mismatches);
   }
 
   /** Reuses the parser's own validation; a second copy of it would drift from what runs. */
@@ -515,8 +569,8 @@ public class ProductRuleService {
   private static String describe(ProductRuleBlastRadius radius) {
     return radius.bookingsMatched()
         + " of "
-        + radius.rootsVisited()
-        + " booking(s) match ("
+        + radius.candidateRoots()
+        + " candidate booking(s) match ("
         + radius.positionsParsed()
         + " position(s)), "
         + radius.sumMismatches()

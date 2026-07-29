@@ -115,7 +115,7 @@ class McpEndpointIT {
     }
     try (McpSyncClient reader = connect(readerToken)) {
       reader.initialize();
-      assertThat(reader.listTools().tools()).hasSize(14);
+      assertThat(reader.listTools().tools()).hasSize(15);
     }
   }
 

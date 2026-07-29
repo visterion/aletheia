@@ -11,6 +11,7 @@ import de.visterion.aletheia.mcp.handlers.read.DescribeSchemaToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.GetReviewQueueToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ListCounterpartiesToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ListIncomeToolHandler;
+import de.visterion.aletheia.mcp.handlers.read.ListProductRulesToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ListTagRulesToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ListUnmatchedRecurringToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.ObligationsRegisterToolHandler;
@@ -27,7 +28,6 @@ import de.visterion.aletheia.mcp.handlers.write.DeleteTagRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.DismissCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.EndContractToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.LinkContractToolHandler;
-import de.visterion.aletheia.mcp.handlers.write.ListProductRulesToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MarkRecurringToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MergeCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.ReattributeTransactionToolHandler;
@@ -117,7 +117,7 @@ class ToolPermissionCoverageTest {
     assertThat(allowedForWriter).as("exactly 33 tools are visible to WRITER").hasSize(33);
 
     Set<String> allowedForReader = new ToolPermissionService().allowedTools(AuthRole.READER);
-    assertThat(allowedForReader).as("exactly 14 tools are visible to READER").hasSize(14);
+    assertThat(allowedForReader).as("exactly 15 tools are visible to READER").hasSize(15);
   }
 
   @Test
