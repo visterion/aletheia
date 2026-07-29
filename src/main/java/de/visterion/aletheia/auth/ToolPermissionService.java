@@ -58,7 +58,14 @@ public class ToolPermissionService {
           "delete_tag_rule",
           "merge_counterparty",
           "set_display_name",
-          "end_contract");
+          "end_contract",
+          // Product rules (spec §7). list_product_rules reads only, but a rule's position pattern
+          // is a creditor's remittance format and belongs to the audience that may author one.
+          "create_product_rule",
+          "update_product_rule",
+          "list_product_rules",
+          "set_product_rule_enabled",
+          "delete_product_rule");
 
   private static final Set<String> WRITER_TOOLS = union(READ_TOOLS, WRITE_TOOLS);
 

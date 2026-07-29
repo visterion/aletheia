@@ -1177,5 +1177,118 @@
       "additionalProperties": false,
       "properties": {}
     }
+  },
+  {
+    "name": "create_product_rule",
+    "description": "Answers: one SEPA mandate pays for several products at once -- how do I get one contract per product instead of a lump? Create the creditor's product rule. positionPattern is a regex matching ONE position of the remittance, applied globally; it must declare the named capture groups product and amount, optionally policy. Read a few of the creditor's remittances with counterparty_transactions first and derive the pattern from those -- do not guess it. Positions must sum EXACTLY to the booking amount, otherwise the booking is left untouched and counted as a mismatch. dryRun=true writes nothing and returns the blast radius (bookings matched, positions parsed, sum mismatches) -- always dry-run first and check the numbers. dryRun=false persists the rule (enabled) and settles the substrate immediately, so the product contracts appear in the same call. Product identity is the normalized product name, so a mid-history capitalisation change stays one product.\n\nKeywords: Versicherung, Vertrag, Produkt, Tarif, Mandat, Regel, aufteilen",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "creditorId": {
+          "description": "SEPA creditor identifier; must match a known counterparty",
+          "type": "string"
+        },
+        "positionPattern": {
+          "description": "regex for ONE position, with named groups product and amount, optionally policy",
+          "type": "string"
+        },
+        "notes": {
+          "description": "free-form operator note",
+          "type": "string"
+        },
+        "dryRun": {
+          "description": "true = preview only, write nothing",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "creditorId",
+        "positionPattern",
+        "dryRun"
+      ]
+    }
+  },
+  {
+    "name": "update_product_rule",
+    "description": "Answers: the creditor changed its remittance format (or my pattern missed a position) -- how do I fix the rule without losing the contracts it already produced? Edit a product rule in place. This is a graceful refresh: the split rows are recomputed and the derived contracts survive. Deleting and re-creating the rule instead runs the full revert and drops the auto contracts, so use this. An omitted field stays unchanged. dryRun=true writes nothing and returns the blast radius the new pattern would produce; dryRun=false applies it and settles the substrate immediately.\n\nKeywords: Regel, Produkt, Tarif, ändern, korrigieren",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ruleId": {
+          "description": "product_rules.id",
+          "type": "integer"
+        },
+        "positionPattern": {
+          "description": "new regex for ONE position, with named groups product and amount, optionally policy",
+          "type": "string"
+        },
+        "notes": {
+          "description": "new operator note",
+          "type": "string"
+        },
+        "dryRun": {
+          "description": "true = preview only, write nothing",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "dryRun"
+      ]
+    }
+  },
+  {
+    "name": "list_product_rules",
+    "description": "Answers: which creditors split their mandate into per-product contracts, and does each rule still explain that creditor's bookings? Oldest first, with the counters of the last resolver pass: rootsVisited, rootsSplit, rootsStamped and rootsMismatched. A rising rootsMismatched means the creditor changed its remittance format and those bookings are being left untouched -- fix the pattern with update_product_rule.\n\nKeywords: Regel, Regeln, Produkt, Tarif, Versicherung",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "set_product_rule_enabled",
+    "description": "Answers: how do I pause or resume a product rule without losing what it produced? Pausing is a pause, not a revert: the existing per-product rows and contracts stay exactly as they are, only no new work is done. Enabling settles the substrate immediately, so the per-product contracts appear in the same call. Use delete_product_rule when you really want the split undone.\n\nKeywords: Regel, Produkt, pausieren, aktivieren",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ruleId": {
+          "description": "product_rules.id",
+          "type": "integer"
+        },
+        "enabled": {
+          "description": "true = enabled, false = paused",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ruleId",
+        "enabled"
+      ]
+    }
+  },
+  {
+    "name": "delete_product_rule",
+    "description": "Answers: how do I undo a product split entirely and go back to one contract per mandate? Delete a product rule and revert it in one step: the per-product rows are removed, the stamps cleared, the strictly-auto per-product contracts and their recurring series deleted, and a mandate contract that was ended when the split was rolled out is reopened -- otherwise the creditor would disappear from the register, the review queue and the unmatched list at once. A per-product contract you confirmed, dismissed or ended is NOT deleted (a human decision is never destroyed by a tool call); it is named in the ack and then describes a product no booking carries any more -- clean it up deliberately. To fix a pattern, use update_product_rule instead: it keeps the contracts. dryRun=true reports the blast radius and writes nothing.\n\nKeywords: Regel, Produkt, löschen, rückgängig",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ruleId": {
+          "description": "product_rules.id",
+          "type": "integer"
+        },
+        "dryRun": {
+          "description": "true = preview the revert only, write nothing",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "ruleId"
+      ]
+    }
   }
 ]

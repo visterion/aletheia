@@ -20,18 +20,23 @@ import de.visterion.aletheia.mcp.handlers.read.TaxonomyToolHandler;
 import de.visterion.aletheia.mcp.handlers.read.WakeUpToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.ClassifyCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.ConfirmCounterpartyToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.CreateProductRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.CreateTagRuleToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.DeleteProductRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.DeleteTagRuleToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.DismissCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.EndContractToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.LinkContractToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.ListProductRulesToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MarkRecurringToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.MergeCounterpartyToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.ReattributeTransactionToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SetDisplayNameToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.SetProductRuleEnabledToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SetTagRuleEnabledToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.SplitTransactionToolHandler;
 import de.visterion.aletheia.mcp.handlers.write.UpdatePreferencesToolHandler;
+import de.visterion.aletheia.mcp.handlers.write.UpdateProductRuleToolHandler;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -42,7 +47,7 @@ import org.junit.jupiter.api.Test;
  * classes, registered in {@link ToolRegistry}) and {@link ToolPermissionService}'s
  * role-to-tool-name allow-list. A registered handler whose name is missing from the WRITER union
  * would be silently denied at runtime (fails closed) -- this test would catch that regression, and
- * an accidentally dropped or duplicated tool registration (guarded by the exact count of 28).
+ * an accidentally dropped or duplicated tool registration (guarded by the exact count of 33).
  *
  * <p>Rewritten for Task 10 (Spring AI removal): the previous version reflected on
  * {@code @Tool}-annotated methods on {@link ReadTools}/{@link WriteTools}; those classes no longer
@@ -84,13 +89,18 @@ class ToolPermissionCoverageTest {
         new SetDisplayNameToolHandler(null),
         new EndContractToolHandler(null),
         new CashflowToolHandler(null),
-        new ReadMeToolHandler(null));
+        new ReadMeToolHandler(null),
+        new CreateProductRuleToolHandler(null),
+        new UpdateProductRuleToolHandler(null),
+        new ListProductRulesToolHandler(null),
+        new SetProductRuleEnabledToolHandler(null),
+        new DeleteProductRuleToolHandler(null));
   }
 
   @Test
-  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyTwentyEight() {
+  void everyRegisteredToolIsCoveredByThePermissionServiceAndThereAreExactlyThirtyThree() {
     List<ToolHandler> handlers = allHandlers();
-    assertThat(handlers).as("exactly 28 MCP tool handlers are registered").hasSize(28);
+    assertThat(handlers).as("exactly 33 MCP tool handlers are registered").hasSize(33);
 
     Set<String> allToolNames = new HashSet<>();
     for (ToolHandler handler : handlers) {
@@ -104,7 +114,7 @@ class ToolPermissionCoverageTest {
     assertThat(allowedForWriter)
         .as("every registered tool handler name must be present in the WRITER permission union")
         .containsAll(allToolNames);
-    assertThat(allowedForWriter).as("exactly 28 tools are visible to WRITER").hasSize(28);
+    assertThat(allowedForWriter).as("exactly 33 tools are visible to WRITER").hasSize(33);
 
     Set<String> allowedForReader = new ToolPermissionService().allowedTools(AuthRole.READER);
     assertThat(allowedForReader).as("exactly 14 tools are visible to READER").hasSize(14);
