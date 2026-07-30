@@ -30,6 +30,7 @@ class OperatingGuideIT extends AbstractPostgresIT {
         "TRUNCATE TABLE counterparty_history, contracts, recurring, counterparty_tags, "
             + "counterparties RESTART IDENTITY CASCADE");
     db.execute("TRUNCATE TABLE transactions, imports RESTART IDENTITY CASCADE");
+    db.execute("TRUNCATE TABLE product_rules RESTART IDENTITY CASCADE");
     // operating_guide is NOT truncated: the seeded 'default' row must survive. Reset its
     // mutable preferences columns so a preference-mutating test can't poison another test under
     // any ordering.
@@ -150,6 +151,77 @@ class OperatingGuideIT extends AbstractPostgresIT {
   void wakeUpStaysUnderTheLineBudget() {
     String md = service.wakeUp(); // empty preferences (reset by @BeforeEach)
     assertThat(md.lines().count()).isLessThanOrEqualTo(20);
+
+    // The residue warning is one line, not a paragraph: wake_up was cut from 82 lines to a
+    // live-state-first shape precisely because prose here burns tokens before the first question.
+    seedRule("CDTR-INSURER", true, 3);
+    String withWarning = service.wakeUp();
+    assertThat(withWarning.lines().count()).isEqualTo(md.lines().count() + 1);
+    assertThat(withWarning.indexOf("# Aletheia — state")).isZero();
+    assertThat(withWarning.indexOf("# Aletheia — state"))
+        .isLessThan(withWarning.indexOf("# Customer preferences"));
+  }
+
+  @Test
+  void aRuleWithSumMismatchesRaisesExactlyOneWarningLine() {
+    seedRule("CDTR-INSURER", true, 3);
+
+    String md = service.wakeUp();
+
+    var warnings = md.lines().filter(l -> l.contains("unmatched product bookings")).toList();
+    assertThat(warnings).hasSize(1);
+    assertThat(warnings.get(0)).contains("CDTR-INSURER: 3").startsWith("- WARNING:");
+    // Inside the live-state block, i.e. before the preferences heading.
+    assertThat(md.indexOf(warnings.get(0))).isLessThan(md.indexOf("# Customer preferences"));
+  }
+
+  @Test
+  void everyMismatchingCreditorIsNamedOnTheOneWarningLine() {
+    seedRule("CDTR-INSURER-A", true, 2);
+    seedRule("CDTR-INSURER-B", true, 5);
+
+    var warnings =
+        service.wakeUp().lines().filter(l -> l.contains("unmatched product bookings")).toList();
+
+    assertThat(warnings).hasSize(1);
+    assertThat(warnings.get(0)).contains("CDTR-INSURER-A: 2").contains("CDTR-INSURER-B: 5");
+  }
+
+  @Test
+  void noMismatchesMeansNoWarningLineAnywhere() {
+    seedRule("CDTR-INSURER", true, 0);
+
+    String md = service.wakeUp();
+
+    assertThat(md).doesNotContain("unmatched product bookings");
+    assertThat(md).doesNotContain("WARNING");
+  }
+
+  @Test
+  void aDisabledRuleWithStaleMismatchesRaisesNoWarning() {
+    // Decision: disable is a pause, not a revert (spec §5, pinned by
+    // ProductSplitResolverIT.disabledRuleLeavesChildrenAndStampsInPlace). A paused rule is skipped
+    // by the resolver, so its counters are frozen at the moment of pausing and can never rise
+    // again. Alarming on them would mean an operator who deliberately paused a rule to stop acting
+    // on it gets a warning on every wake_up that no action can clear -- the definition of an alarm
+    // that trains its reader to ignore alarms. The live counter surface (list_product_rules) still
+    // shows the stale numbers for anyone who asks.
+    seedRule("CDTR-INSURER", false, 4);
+
+    String md = service.wakeUp();
+
+    assertThat(md).doesNotContain("unmatched product bookings");
+    assertThat(md).doesNotContain("CDTR-INSURER");
+  }
+
+  private void seedRule(String creditorId, boolean enabled, int mismatched) {
+    db.execute(
+        "INSERT INTO product_rules (creditor_id, position_pattern, enabled, roots_mismatched) "
+            + "VALUES (?, ?, ?, ?)",
+        creditorId,
+        "(?<product>\\w+) (?<amount>[0-9,]+)",
+        enabled,
+        mismatched);
   }
 
   @Test

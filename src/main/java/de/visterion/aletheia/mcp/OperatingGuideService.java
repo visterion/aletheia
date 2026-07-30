@@ -66,6 +66,7 @@ public class OperatingGuideService {
         + "- Last import: "
         + lastImportLine()
         + "\n"
+        + productMismatchWarning()
         + "\n# Customer preferences\n"
         + prefs
         + "\n\nOperating guide: read_me()\n";
@@ -91,6 +92,49 @@ public class OperatingGuideService {
       return String.join("\n", java.util.Arrays.copyOfRange(lines, i + 1, lines.length));
     }
     return preferences;
+  }
+
+  /**
+   * The residue surface of the product grain (spec §6): one warning line, or nothing at all.
+   *
+   * <p>A booking whose parsed positions do not sum to the booking amount is left untouched by
+   * {@code ProductSplitResolver} and pools into the mandate-level contract that the rollout ended
+   * -- which no read surface shows, because the register selects {@code confirmed}, the review
+   * queue selects {@code open} and {@code list_unmatched_recurring} excludes {@code ended}. A
+   * creditor that silently reformats its remittance would therefore be under-reported from that
+   * month on, with the only trace in container logs. This line is what makes it visible.
+   *
+   * <p><b>Only enabled rules warn.</b> Disabling a rule is a pause, not a revert (spec §5): the
+   * resolver skips a paused rule entirely, so its counters are frozen at the moment of pausing and
+   * can never rise again. Alarming on them would produce a warning on every {@code wake_up} that
+   * no action clears. The frozen numbers stay readable through {@code list_product_rules}.
+   *
+   * <p>It renders as a single line even for several creditors, deliberately: {@code wake_up} was
+   * cut from 82 lines to a live-state-first shape because prose here burns tokens before the first
+   * real question is asked, and a warning that grows a line per creditor would reintroduce that.
+   */
+  private String productMismatchWarning() {
+    var rows =
+        db.fetch(
+            "SELECT creditor_id, roots_mismatched FROM product_rules "
+                + "WHERE enabled AND roots_mismatched > 0 ORDER BY creditor_id");
+    if (rows.isEmpty()) {
+      return "";
+    }
+    StringBuilder creditors = new StringBuilder();
+    for (Record r : rows) {
+      if (!creditors.isEmpty()) {
+        creditors.append(", ");
+      }
+      creditors
+          .append(r.get("creditor_id", String.class))
+          .append(": ")
+          .append(r.get("roots_mismatched", Integer.class));
+    }
+    return "- WARNING: unmatched product bookings ("
+        + creditors
+        + ") -- the parsed positions no longer sum to the booking amount; the creditor may have"
+        + " changed its remittance format (list_product_rules)\n";
   }
 
   private String lastImportLine() {

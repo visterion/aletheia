@@ -73,7 +73,8 @@ public class ReadTools {
           "imports",
           "v_counterparty_evidence",
           "counterparty_alias",
-          "cashflow_role_map");
+          "cashflow_role_map",
+          "product_rules");
 
   /**
    * Three canonical queries handed out with every {@code describe_schema} call. Each teaches one
@@ -156,7 +157,22 @@ public class ReadTools {
               "Date an ended obligation stopped (status='ended'); NULL while active."),
           Map.entry(
               "cashflow_role_map.role",
-              "income | saving | transfer | depot | passthrough; a tag value absent from this table defaults to expense (consumed by the cashflow tool)"));
+              "income | saving | transfer | depot | passthrough; a tag value absent from this table defaults to expense (consumed by the cashflow tool)"),
+          Map.entry(
+              "transactions.product",
+              "Product a bundled mandate's booking belongs to (identity-normalised, i.e. upper-cased and whitespace-collapsed); NULL unless a product_rules rule stamped or split the booking"),
+          Map.entry(
+              "transactions.product_policy_no",
+              "Policy/subscription number parsed alongside product; stored verbatim, part of no key"),
+          Map.entry(
+              "contracts.product",
+              "Contract grain below the mandate (identity-normalised); NULL for a mandate-level contract. The key is (counterparty_id, mandate_id, product), NULLS NOT DISTINCT."),
+          Map.entry(
+              "product_rules.position_pattern",
+              "Regex matching ONE position of a bundled remittance; applied globally (find()) per booking"),
+          Map.entry(
+              "product_rules.roots_mismatched",
+              "Bookings the rule parsed but left untouched because the positions did not sum exactly to the booking amount; a rising count means the creditor changed its remittance format"));
 
   /**
    * The read-time effective display name (P2 manual override, Spec B): every read that surfaces a

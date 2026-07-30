@@ -103,7 +103,8 @@ class DescribeSchemaIT extends AbstractPostgresIT {
             "imports",
             "v_counterparty_evidence",
             "counterparty_alias",
-            "cashflow_role_map");
+            "cashflow_role_map",
+            "product_rules");
     assertThat(tables)
         .doesNotContain("api_tokens", "oauth_tokens", "oauth_clients", "oauth_authorization_codes");
     // a known column with its curated description
@@ -141,6 +142,44 @@ class DescribeSchemaIT extends AbstractPostgresIT {
               assertThat(c.table()).isEqualTo("contracts");
               assertThat(c.column()).isEqualTo("end_date");
             });
+  }
+
+  @Test
+  void exposesV19ProductColumns() {
+    // Without these, an LLM writing sql_query cannot see the product grain at all and reads a
+    // multi-product mandate as one lump -- which is the failure this slice exists to end.
+    var cols = readTools.describeSchema(null).columns();
+    assertThat(cols)
+        .anySatisfy(
+            c -> {
+              assertThat(c.table()).isEqualTo("transactions");
+              assertThat(c.column()).isEqualTo("product");
+              assertThat(c.description()).contains("identity-normalised");
+            })
+        .anySatisfy(
+            c -> {
+              assertThat(c.table()).isEqualTo("transactions");
+              assertThat(c.column()).isEqualTo("product_policy_no");
+            })
+        .anySatisfy(
+            c -> {
+              assertThat(c.table()).isEqualTo("contracts");
+              assertThat(c.column()).isEqualTo("product");
+            });
+  }
+
+  @Test
+  void productRulesIsDescribableOnItsOwn() {
+    var result = readTools.describeSchema(List.of("product_rules"));
+
+    assertThat(result.columns()).extracting(SchemaColumn::table).containsOnly("product_rules");
+    assertThat(result.columns())
+        .extracting(SchemaColumn::column)
+        .contains("creditor_id", "position_pattern", "enabled", "roots_mismatched");
+    assertThat(result.columns())
+        .filteredOn(c -> c.column().equals("roots_mismatched"))
+        .singleElement()
+        .satisfies(c -> assertThat(c.description()).contains("sum"));
   }
 
   @Test
