@@ -27,6 +27,9 @@ import java.time.LocalDate;
  * @param identityType {@code creditor_id} | {@code iban} | {@code name}
  * @param contractId the {@code contracts.id} this row documents, {@code null} for the legacy
  *     no-contract-layer path
+ * @param product the {@code contracts.product} this row documents, {@code null} (and omitted from
+ *     the JSON) for a mandate whose creditor has no product rule -- one SEPA mandate that bundles
+ *     several products yields one open contract per product, each with its own cost and cadence
  * @param evidence the {@code v_counterparty_evidence} aggregates; {@code null} in compact mode or
  *     when no evidence row exists yet (a counterparty with no matched transactions deliberately
  *     stays in the queue). Counterparty-scoped even for a contract row: for a split counterparty, this row's own
@@ -48,6 +51,7 @@ public record ReviewQueueEntry(
     String displayName,
     String identityType,
     Long contractId,
+    String product,
     CounterpartyEvidence evidence,
     RecurringView recurring,
     BigDecimal annualCostEstimate,

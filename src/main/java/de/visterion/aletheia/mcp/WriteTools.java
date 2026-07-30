@@ -6,11 +6,10 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 
-import de.visterion.aletheia.auth.AuthFilter;
-import de.visterion.aletheia.auth.AuthPrincipal;
 import de.visterion.aletheia.substrate.ContractResolver;
 import de.visterion.aletheia.substrate.CounterpartyResolver;
 import de.visterion.aletheia.substrate.NameNormalization;
+import de.visterion.aletheia.substrate.ProductSplitResolver;
 import de.visterion.aletheia.substrate.SubstrateLock;
 import de.visterion.aletheia.substrate.TransactionLayerSql;
 import de.visterion.aletheia.tagrules.RuleAction;
@@ -28,8 +27,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * MCP write tools (spec §5 "Write", scope {@code write}). Every tool name here matches {@code
@@ -55,6 +52,7 @@ public class WriteTools {
   private final TransactionSplitService splitService;
   private final OperatingGuideService operatingGuideService;
   private final CounterpartyResolver counterpartyResolver;
+  private final ProductSplitResolver productSplitResolver;
   private final ContractResolver contractResolver;
   private final SubstrateLock substrateLock;
   private final TagRuleResolver tagRuleResolver;
@@ -67,6 +65,7 @@ public class WriteTools {
       TransactionSplitService splitService,
       OperatingGuideService operatingGuideService,
       CounterpartyResolver counterpartyResolver,
+      ProductSplitResolver productSplitResolver,
       ContractResolver contractResolver,
       SubstrateLock substrateLock,
       TagRuleResolver tagRuleResolver,
@@ -77,6 +76,7 @@ public class WriteTools {
     this.splitService = splitService;
     this.operatingGuideService = operatingGuideService;
     this.counterpartyResolver = counterpartyResolver;
+    this.productSplitResolver = productSplitResolver;
     this.contractResolver = contractResolver;
     this.substrateLock = substrateLock;
     this.tagRuleResolver = tagRuleResolver;
@@ -86,7 +86,7 @@ public class WriteTools {
 
   public String updatePreferences(
       String preferences) {
-    return operatingGuideService.updatePreferences(preferences, currentActor());
+    return operatingGuideService.updatePreferences(preferences, RequestActor.current());
   }
 
   @Transactional
@@ -772,24 +772,8 @@ public class WriteTools {
         .set(COUNTERPARTY_HISTORY.OLD_VALUE, oldValue)
         .set(COUNTERPARTY_HISTORY.NEW_VALUE, newValue)
         .set(COUNTERPARTY_HISTORY.SOURCE, source)
-        .set(COUNTERPARTY_HISTORY.ACTOR, currentActor())
+        .set(COUNTERPARTY_HISTORY.ACTOR, RequestActor.current())
         .execute();
-  }
-
-  /**
-   * The calling principal's name, resolved from the request attribute {@link AuthFilter} sets
-   * (mirrors how {@code ScopeEnforcingToolCallback} resolves the caller). Falls back to {@code
-   * "unknown"} for direct (non-HTTP) callers such as unit/integration tests that invoke this
-   * bean's methods without a request in flight.
-   */
-  private static String currentActor() {
-    RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-    if (attributes == null) {
-      return "unknown";
-    }
-    Object principal =
-        attributes.getAttribute(AuthFilter.PRINCIPAL_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
-    return principal instanceof AuthPrincipal authPrincipal ? authPrincipal.name() : "unknown";
   }
 
   // --- reattribute_transaction (#43 manual attribution) ---
@@ -896,6 +880,7 @@ public class WriteTools {
             "a target changed underneath the call (concurrent split?); retry");
       }
       counterpartyResolver.resolve();
+      productSplitResolver.resolve();
       contractResolver.resolve();
       try {
         tagRuleResolver.resolve();
@@ -946,6 +931,7 @@ public class WriteTools {
     try {
       Integer merged = txTemplate.execute(status -> mergeService.mergeCore(targetId, sourceIds, reason));
       counterpartyResolver.resolve();
+      productSplitResolver.resolve();
       contractResolver.resolve();
       try {
         tagRuleResolver.resolve();
@@ -961,11 +947,27 @@ public class WriteTools {
 
   // --- split_transaction (Phase 2 core) ---
 
+  /**
+   * Replaces a raw parent's child allocations (spec §5 concurrency).
+   *
+   * <p>Held under {@link #substrateLock} like {@link #reattributeTransaction} and {@link
+   * #mergeCounterparty}: {@code ProductSplitResolver} derives the very same {@code
+   * syntheticSplitHash(parentHash, i)} child keys, so a tool call and a resolver pass would
+   * otherwise race on {@code uq_transactions_natural_key}. The lock is taken <b>outside</b> the
+   * service's {@code @Transactional} boundary, so the JVM lock is always acquired before any
+   * database work -- the ordering the rest of this class relies on to keep a JVM-lock/row-lock
+   * deadlock from forming.
+   */
   public SplitTransactionAck splitTransaction(
       TxReference tx,
       List<Allocation> allocations,
       Boolean unsplit) {
-    return splitService.splitTransaction(tx, allocations, unsplit);
+    substrateLock.lock();
+    try {
+      return splitService.splitTransaction(tx, allocations, unsplit);
+    } finally {
+      substrateLock.unlock();
+    }
   }
 
   // --- tag rules (#37 auto-tagging rules) ---

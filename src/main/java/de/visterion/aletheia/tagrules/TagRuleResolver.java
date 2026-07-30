@@ -23,7 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Applies persistent auto-tagging rules (#37, spec §4/§5). Deterministic: no LLM. Runs after the
- * counterparty/contract resolvers on startup ({@code @Order(5)}), and is called by the HTTP ingest,
+ * counterparty/contract resolvers on startup ({@code @Order(6)}), and is called by the HTTP ingest,
  * {@code reattribute_transaction}, and {@code create_tag_rule} backfill.
  *
  * <p>Each rule is applied in its own {@link TransactionTemplate} unit (NOT {@code @Transactional} --
@@ -33,7 +33,7 @@ import tools.jackson.databind.ObjectMapper;
  * {@code confirmed}, appending a {@code counterparty_history} row.
  */
 @Component
-@Order(5)
+@Order(6)
 public class TagRuleResolver implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(TagRuleResolver.class);

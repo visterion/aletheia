@@ -48,6 +48,7 @@ class ReviewQueueSerializationIT extends AbstractPostgresIT {
         "Telco One",
         "creditor_id",
         contractId,
+        null,
         evidence,
         recurring,
         new BigDecimal("120.00"),

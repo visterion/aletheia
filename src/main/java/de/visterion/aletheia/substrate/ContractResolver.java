@@ -9,7 +9,8 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /**
- * On startup (after {@link CounterpartyResolver}, spec TP1 §Detection), derives the contract
+ * On startup (after {@link CounterpartyResolver} and {@link ProductSplitResolver}, spec TP1
+ * §Detection), derives the contract
  * layer from {@code transactions}: a {@code mandate_id} booked in >= 2 distinct calendar
  * months under a {@code creditor_id}-identity counterparty is a contract.
  *
@@ -21,9 +22,19 @@ import org.springframework.stereotype.Component;
  * creditor identity, so the creditor path below excludes any row with {@code attributed_name
  * IS NOT NULL}.
  *
- * <p>Only raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}. This
- * prevents creating contracts from logical split children (purchase parts must not trigger new
- * contracts via resolver).
+ * <p>Raw/root rows are considered (TP2): {@code split_parent_content_hash IS NULL}, with the one
+ * scoped exception named below. This prevents creating contracts from logical split children
+ * (purchase parts must not trigger new contracts via resolver).
+ *
+ * <p><b>One scoped exception</b> (spec §6): a root that {@link ProductSplitResolver} superseded by
+ * <em>product</em> children is replaced by those children, which is what derives contracts at
+ * {@code (counterparty_id, mandate_id, product)} -- for a bundled booking the product exists only on
+ * the children. The exception does not weaken the doctrine it sits inside, because product children
+ * are not purchase parts: they are the same obligation to the same creditor under the same mandate,
+ * written by a deterministic rule, carrying the parent's creditor identity and mandate forward, and
+ * summing exactly to it. Every other child class stays excluded and every other parent stays
+ * admitted -- an ordinary human {@code split_transaction} parent included, whose children carry
+ * {@code product IS NULL}. See {@link TransactionLayerSql#contractGrainRootPredicate}.
  *
  * <p>Idempotent. {@code contracts} holds no measured fields, so its upsert is {@code DO
  * NOTHING} (skipping preserves a confirmed row). {@code recurring} holds the measured series,
@@ -33,16 +44,27 @@ import org.springframework.stereotype.Component;
  * by a human confirm/link.
  */
 @Component
-@Order(4)
+@Order(5)
 public class ContractResolver implements ApplicationRunner {
 
   private static final Logger log = LoggerFactory.getLogger(ContractResolver.class);
 
+  // The ON CONFLICT arbiter names product because V19 replaced uq_contract_counterparty_mandate
+  // with uq_contract_counterparty_mandate_product; the two-column target lost its supporting
+  // index and would fail on every resolve. NULLS NOT DISTINCT makes a NULL product address the
+  // same slot the old key addressed, so a mandate without a product rule keeps exactly one row.
+  //
+  // The `WHEN t.attributed_name IS NOT NULL THEN NULL` arm of the product CASE is the second of
+  // spec §5's two belts against a product landing on the synthetic 'attributed' mandate. The
+  // first belt is ProductSplitResolver clearing the stamp when it skips an attributed root; this
+  // one is still load-bearing on its own, because a *disabled* rule stops that resolver from
+  // visiting the creditor at all (disable is a pause, not a revert -- spec §5 rule lifecycle),
+  // so a stamp written before the rule was disabled survives an attribution unchanged.
   // language=SQL
   private static final String UPSERT_CONTRACTS =
       """
-      INSERT INTO contracts (counterparty_id, mandate_id, source, status)
-      SELECT r.effective_cp, r.mandate_id, 'auto', 'open'
+      INSERT INTO contracts (counterparty_id, mandate_id, product, source, status)
+      SELECT r.effective_cp, r.mandate_id, r.product, 'auto', 'open'
       FROM (
           SELECT
               COALESCE(al.canonical_counterparty_id, own.id) AS effective_cp,
@@ -50,6 +72,10 @@ public class ContractResolver implements ApplicationRunner {
                   WHEN t.attributed_name IS NOT NULL THEN 'attributed'
                   ELSE t.mandate_id
               END AS mandate_id,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN NULL
+                  ELSE t.product
+              END AS product,
               date_trunc('month', t.booking_date) AS month
           FROM transactions t
           LEFT JOIN counterparty_alias al
@@ -78,19 +104,23 @@ public class ContractResolver implements ApplicationRunner {
 
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
-          WHERE t."""
-          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          WHERE\s"""
+          + TransactionLayerSql.contractGrainRootPredicate("t")
           + """
 
             AND (t.attributed_name IS NOT NULL
                  OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
             AND COALESCE(al.canonical_counterparty_id, own.id) IS NOT NULL
       ) r
-      GROUP BY r.effective_cp, r.mandate_id
+      GROUP BY r.effective_cp, r.mandate_id, r.product
       HAVING count(DISTINCT r.month) >= 2
-      ON CONFLICT (counterparty_id, mandate_id) DO NOTHING
+      ON CONFLICT (counterparty_id, mandate_id, product) DO NOTHING
       """;
 
+  // Grouped and joined at product grain: without `ct.product IS NOT DISTINCT FROM m.product`
+  // every product contract of a mandate would receive the mandate LUMP series, and since the
+  // DO UPDATE below overwrites the measured columns on every pass while preserving only `source`,
+  // each product's annual cost would be that lump, re-asserted even after a human confirmation.
   // language=SQL
   private static final String UPSERT_RECURRING =
       """
@@ -115,6 +145,10 @@ public class ContractResolver implements ApplicationRunner {
                   WHEN t.attributed_name IS NOT NULL THEN 'attributed'
                   ELSE t.mandate_id
               END AS mandate_id,
+              CASE
+                  WHEN t.attributed_name IS NOT NULL THEN NULL
+                  ELSE t.product
+              END AS product,
               percentile_cont(0.5) WITHIN GROUP (ORDER BY t.amount) AS typical_amount,
               min(t.amount) AS amount_min,
               max(t.amount) AS amount_max,
@@ -148,17 +182,19 @@ public class ContractResolver implements ApplicationRunner {
 
                      WHEN t.creditor_id IS NOT NULL THEN t.creditor_id
                  END
-          WHERE t."""
-          + TransactionLayerSql.RAW_ROOT_PREDICATE
+          WHERE\s"""
+          + TransactionLayerSql.contractGrainRootPredicate("t")
           + """
 
             AND (t.attributed_name IS NOT NULL
                  OR (t.creditor_id IS NOT NULL AND t.mandate_id IS NOT NULL))
             AND COALESCE(al.canonical_counterparty_id, own.id) IS NOT NULL
-          GROUP BY 1, 2
+          GROUP BY 1, 2, 3
       ) m
       JOIN contracts ct
-          ON ct.counterparty_id = m.effective_cp AND ct.mandate_id = m.mandate_id
+          ON ct.counterparty_id = m.effective_cp
+         AND ct.mandate_id = m.mandate_id
+         AND ct.product IS NOT DISTINCT FROM m.product
       WHERE ct.mandate_id IS NOT NULL
       ON CONFLICT (counterparty_id, contract_id) DO UPDATE SET
           typical_amount   = EXCLUDED.typical_amount,

@@ -7,8 +7,6 @@ import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_HISTORY;
 import static de.visterion.aletheia.jooq.Tables.COUNTERPARTY_TAGS;
 import static de.visterion.aletheia.jooq.Tables.RECURRING;
 
-import de.visterion.aletheia.auth.AuthFilter;
-import de.visterion.aletheia.auth.AuthPrincipal;
 import de.visterion.aletheia.jooq.tables.records.ContractsRecord;
 import de.visterion.aletheia.jooq.tables.records.RecurringRecord;
 import java.util.LinkedHashSet;
@@ -16,8 +14,6 @@ import java.util.List;
 import org.jooq.DSLContext;
 import org.jooq.Record2;
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
 
 /**
  * The {@code merge_counterparty} merge core (spec {@code 2026-07-19-counterparty-merge-alias-design.md}
@@ -219,14 +215,24 @@ public class CounterpartyMergeService {
   }
 
   private void migrateOneContract(long targetId, long sourceId, ContractsRecord sourceContract) {
+    // The collision key is the contract grain itself: (mandate_id, product). Matching on the
+    // mandate alone would both throw TooManyRowsException once one mandate carries several
+    // product contracts, and treat a (mandate, HEALTH) contract as colliding with (mandate,
+    // LEGAL) -- two unrelated obligations that merely share a direct debit. NULL-safe on both
+    // sides: a mandate-less contract and a product-less one are legitimate.
     var mandateCondition =
         sourceContract.getMandateId() == null
             ? CONTRACTS.MANDATE_ID.isNull()
             : CONTRACTS.MANDATE_ID.eq(sourceContract.getMandateId());
+    var productCondition =
+        sourceContract.getProduct() == null
+            ? CONTRACTS.PRODUCT.isNull()
+            : CONTRACTS.PRODUCT.eq(sourceContract.getProduct());
     ContractsRecord targetContract =
         db.selectFrom(CONTRACTS)
             .where(CONTRACTS.COUNTERPARTY_ID.eq(targetId))
             .and(mandateCondition)
+            .and(productCondition)
             .fetchOne();
     RecurringRecord sourceRecurring =
         db.selectFrom(RECURRING).where(RECURRING.CONTRACT_ID.eq(sourceContract.getId())).fetchOne();
@@ -247,7 +253,8 @@ public class CounterpartyMergeService {
           targetId,
           "contract:" + sourceContract.getId(),
           null,
-          "moved contract (mandate " + sourceContract.getMandateId() + ") from counterparty " + sourceId,
+          "moved contract (" + contractGrainLabel(sourceContract) + ") from counterparty "
+              + sourceId,
           "confirmed");
       return;
     }
@@ -294,6 +301,15 @@ public class CounterpartyMergeService {
           "confirmed");
     }
     db.deleteFrom(CONTRACTS).where(CONTRACTS.ID.eq(sourceContract.getId())).execute();
+  }
+
+  /**
+   * Human-readable contract grain for the audit trail. Since V19 several product contracts can
+   * share one mandate, so the mandate alone no longer identifies the row that moved.
+   */
+  private static String contractGrainLabel(ContractsRecord contract) {
+    String label = "mandate " + contract.getMandateId();
+    return contract.getProduct() == null ? label : label + ", product " + contract.getProduct();
   }
 
   /**
@@ -364,18 +380,7 @@ public class CounterpartyMergeService {
         .set(COUNTERPARTY_HISTORY.OLD_VALUE, oldValue)
         .set(COUNTERPARTY_HISTORY.NEW_VALUE, newValue)
         .set(COUNTERPARTY_HISTORY.SOURCE, source)
-        .set(COUNTERPARTY_HISTORY.ACTOR, currentActor())
+        .set(COUNTERPARTY_HISTORY.ACTOR, RequestActor.current())
         .execute();
-  }
-
-  /** Mirrors {@link WriteTools}'s actor resolution (same request-attribute convention). */
-  private static String currentActor() {
-    RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
-    if (attributes == null) {
-      return "unknown";
-    }
-    Object principal =
-        attributes.getAttribute(AuthFilter.PRINCIPAL_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST);
-    return principal instanceof AuthPrincipal authPrincipal ? authPrincipal.name() : "unknown";
   }
 }

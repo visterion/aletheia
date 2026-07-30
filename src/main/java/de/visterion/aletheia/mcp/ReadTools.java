@@ -73,7 +73,8 @@ public class ReadTools {
           "imports",
           "v_counterparty_evidence",
           "counterparty_alias",
-          "cashflow_role_map");
+          "cashflow_role_map",
+          "product_rules");
 
   /**
    * Three canonical queries handed out with every {@code describe_schema} call. Each teaches one
@@ -156,7 +157,22 @@ public class ReadTools {
               "Date an ended obligation stopped (status='ended'); NULL while active."),
           Map.entry(
               "cashflow_role_map.role",
-              "income | saving | transfer | depot | passthrough; a tag value absent from this table defaults to expense (consumed by the cashflow tool)"));
+              "income | saving | transfer | depot | passthrough; a tag value absent from this table defaults to expense (consumed by the cashflow tool)"),
+          Map.entry(
+              "transactions.product",
+              "Product a bundled mandate's booking belongs to (identity-normalised, i.e. upper-cased and whitespace-collapsed); NULL unless a product_rules rule stamped or split the booking"),
+          Map.entry(
+              "transactions.product_policy_no",
+              "Policy/subscription number parsed alongside product; stored verbatim, part of no key"),
+          Map.entry(
+              "contracts.product",
+              "Contract grain below the mandate (identity-normalised); NULL for a mandate-level contract. The key is (counterparty_id, mandate_id, product), NULLS NOT DISTINCT."),
+          Map.entry(
+              "product_rules.position_pattern",
+              "Regex matching ONE position of a bundled remittance; applied globally (find()) per booking"),
+          Map.entry(
+              "product_rules.roots_mismatched",
+              "Bookings the rule parsed but left untouched because the positions did not sum exactly to the booking amount; a rising count means the creditor changed its remittance format"));
 
   /**
    * The read-time effective display name (P2 manual override, Spec B): every read that surfaces a
@@ -644,8 +660,25 @@ public class ReadTools {
   }
 
   /**
+   * The join from a {@code contracts} row to its own {@code v_contract_evidence} row, shared by
+   * every read path that needs the per-contract debit fallback.
+   *
+   * <p>The evidence view is grouped by product (V19), so a mandate-only join would fan one
+   * contract out across EVERY product row of its mandate. The product term is NULL-safe: both
+   * sides are legitimately NULL for a mandate with no rule.
+   */
+  private static Condition contractEvidenceJoin() {
+    return V_CONTRACT_EVIDENCE
+        .COUNTERPARTY_ID
+        .eq(CONTRACTS.COUNTERPARTY_ID)
+        .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID))
+        .and(V_CONTRACT_EVIDENCE.PRODUCT.isNotDistinctFrom(CONTRACTS.PRODUCT));
+  }
+
+  /**
    * The primary decision unit (TP1 contract grain): one row per OPEN {@code contracts} row.
-   * {@code v_contract_evidence} supplies the per-mandate debit fallback; {@code
+   * {@code v_contract_evidence} supplies the per-{@code (mandate, product)} debit fallback (V19);
+   * {@code
    * v_counterparty_evidence} is left-joined too so a mandate-less contract (whose {@code
    * v_contract_evidence} join yields no match, since {@code NULL = NULL} is never true) still
    * gets a debit fallback -- the counterparty's own debit, since a mandate-less obligation IS the
@@ -657,6 +690,7 @@ public class ReadTools {
                 CONTRACTS.ID,
                 CONTRACTS.COUNTERPARTY_ID,
                 CONTRACTS.MANDATE_ID,
+                CONTRACTS.PRODUCT,
                 DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
                 RECURRING.ID,
@@ -694,11 +728,7 @@ public class ReadTools {
             .leftJoin(RECURRING)
             .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
             .leftJoin(V_CONTRACT_EVIDENCE)
-            .on(
-                V_CONTRACT_EVIDENCE
-                    .COUNTERPARTY_ID
-                    .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+            .on(contractEvidenceJoin())
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.STATUS.eq("open"))
@@ -730,6 +760,7 @@ public class ReadTools {
               row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               row.get(CONTRACTS.ID),
+              row.get(CONTRACTS.PRODUCT),
               verbose ? evidence : null,
               verbose ? recurring : null,
               AnnualCost.estimate(recurring, debitFallback),
@@ -814,6 +845,8 @@ public class ReadTools {
               row.get(DISPLAY_NAME_EFFECTIVE),
               row.get(COUNTERPARTIES.IDENTITY_TYPE),
               null,
+              // A counterparty with no contract layer at all has no product either.
+              null,
               verbose ? evidence : null,
               verbose ? recurring : null,
               AnnualCost.estimate(recurring, evidence),
@@ -870,11 +903,7 @@ public class ReadTools {
             .join(COUNTERPARTIES)
             .on(COUNTERPARTIES.ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .leftJoin(V_CONTRACT_EVIDENCE)
-            .on(
-                V_CONTRACT_EVIDENCE
-                    .COUNTERPARTY_ID
-                    .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+            .on(contractEvidenceJoin())
             .leftJoin(V_COUNTERPARTY_EVIDENCE)
             .on(V_COUNTERPARTY_EVIDENCE.COUNTERPARTY_ID.eq(CONTRACTS.COUNTERPARTY_ID))
             .where(CONTRACTS.HIVEMEM_CELL_ID.isNull())
@@ -1038,6 +1067,7 @@ public class ReadTools {
                 CONTRACTS.ID,
                 CONTRACTS.COUNTERPARTY_ID,
                 CONTRACTS.MANDATE_ID,
+                CONTRACTS.PRODUCT,
                 CONTRACTS.HIVEMEM_CELL_ID,
                 DISPLAY_NAME_EFFECTIVE,
                 COUNTERPARTIES.IDENTITY_TYPE,
@@ -1059,11 +1089,7 @@ public class ReadTools {
             .leftJoin(RECURRING)
             .on(RECURRING.CONTRACT_ID.eq(CONTRACTS.ID))
             .leftJoin(V_CONTRACT_EVIDENCE)
-            .on(
-                V_CONTRACT_EVIDENCE
-                    .COUNTERPARTY_ID
-                    .eq(CONTRACTS.COUNTERPARTY_ID)
-                    .and(V_CONTRACT_EVIDENCE.MANDATE_ID.eq(CONTRACTS.MANDATE_ID)))
+            .on(contractEvidenceJoin())
             // A mandate-less contract's MANDATE_ID is NULL, so the join above never matches it
             // (NULL = NULL is not TRUE in SQL) -- fall back to the counterparty's own evidence,
             // since a mandate-less obligation IS the whole counterparty (spec review M1 edge
@@ -1099,6 +1125,9 @@ public class ReadTools {
               verbose ? row.get(COUNTERPARTIES.IDENTITY_TYPE) : null,
               row.get(CONTRACTS.ID),
               verbose ? row.get(CONTRACTS.MANDATE_ID) : null,
+              // Shown in both modes: the product IS the obligation's identity once a mandate
+              // bundles several, so a compact listing without it would name three rows alike.
+              row.get(CONTRACTS.PRODUCT),
               recurring == null ? null : recurring.cadence(),
               AnnualCost.estimate(recurring, debitFallback),
               verbose ? tagsByCounterparty.getOrDefault(counterpartyId, List.of()) : null,
