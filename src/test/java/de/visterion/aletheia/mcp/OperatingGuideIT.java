@@ -157,6 +157,10 @@ class OperatingGuideIT extends AbstractPostgresIT {
     seedRule("CDTR-INSURER", true, 3);
     String withWarning = service.wakeUp();
     assertThat(withWarning.lines().count()).isEqualTo(md.lines().count() + 1);
+    // Absolute, not just relative: the budget is what this test defends, so the warned payload --
+    // the largest wake_up shape there is -- must be held to it too, or growth in the state block
+    // could push it over while the relative assertion above stays happily green.
+    assertThat(withWarning.lines().count()).isLessThanOrEqualTo(20);
     assertThat(withWarning.indexOf("# Aletheia — state")).isZero();
     assertThat(withWarning.indexOf("# Aletheia — state"))
         .isLessThan(withWarning.indexOf("# Customer preferences"));
@@ -214,16 +218,6 @@ class OperatingGuideIT extends AbstractPostgresIT {
     assertThat(md).doesNotContain("CDTR-INSURER");
   }
 
-  private void seedRule(String creditorId, boolean enabled, int mismatched) {
-    db.execute(
-        "INSERT INTO product_rules (creditor_id, position_pattern, enabled, roots_mismatched) "
-            + "VALUES (?, ?, ?, ?)",
-        creditorId,
-        "(?<product>\\w+) (?<amount>[0-9,]+)",
-        enabled,
-        mismatched);
-  }
-
   @Test
   void aCustomerHeadingThatIsNotTheDuplicateSurvives() {
     // A blanket "strip any leading H1" rule would silently delete the customer's own heading and
@@ -239,6 +233,16 @@ class OperatingGuideIT extends AbstractPostgresIT {
     service.updatePreferences("# Customer preferences\n\n", "test");
 
     assertThat(service.wakeUp()).contains("(none recorded yet)");
+  }
+
+  private void seedRule(String creditorId, boolean enabled, int mismatched) {
+    db.execute(
+        "INSERT INTO product_rules (creditor_id, position_pattern, enabled, roots_mismatched) "
+            + "VALUES (?, ?, ?, ?)",
+        creditorId,
+        "(?<product>\\w+) (?<amount>[0-9,]+)",
+        enabled,
+        mismatched);
   }
 
   private long seedCp(boolean reviewed) {

@@ -134,7 +134,8 @@ public class OperatingGuideService {
     return "- WARNING: unmatched product bookings ("
         + creditors
         + ") -- the parsed positions no longer sum to the booking amount; the creditor may have"
-        + " changed its remittance format (list_product_rules)\n";
+        + " changed its remittance format; inspect with list_product_rules, then re-author the"
+        + " pattern with update_product_rule (dryRun first)\n";
   }
 
   private String lastImportLine() {

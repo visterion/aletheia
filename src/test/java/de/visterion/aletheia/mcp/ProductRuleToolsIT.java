@@ -11,6 +11,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.jooq.DSLContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,16 +64,33 @@ class ProductRuleToolsIT extends AbstractPostgresIT {
 
   @BeforeEach
   void reset() {
-    db.execute(
-        "TRUNCATE TABLE recurring, contracts, counterparty_history, counterparty_tags,"
-            + " counterparty_alias, tag_rules, product_rules, counterparties, transactions,"
-            + " imports RESTART IDENTITY CASCADE");
+    truncateSubstrate();
     importId =
         db.fetchOne(
                 "INSERT INTO imports (file_name, file_sha256) VALUES ('synthetic.json', ?)"
                     + " RETURNING id",
                 "sha-" + UUID.randomUUID())
             .get("id", Long.class);
+  }
+
+  /**
+   * Truncating on the way out as well as on the way in. The Postgres container is a process-wide
+   * singleton and {@code product_rules} has {@code UNIQUE (creditor_id)}, so a row left behind here
+   * is visible to whatever class Surefire runs next: {@code OperatingGuideIT} seeds the very same
+   * synthetic {@code CDTR-INSURER} id (unique-constraint violation) and asserts on {@code
+   * roots_mismatched} counters it believes it owns (a leaked non-zero counter would fabricate a
+   * wake_up warning line). A @BeforeEach-only reset protects this class and nobody else.
+   */
+  @AfterEach
+  void cleanUp() {
+    truncateSubstrate();
+  }
+
+  private void truncateSubstrate() {
+    db.execute(
+        "TRUNCATE TABLE recurring, contracts, counterparty_history, counterparty_tags,"
+            + " counterparty_alias, tag_rules, product_rules, counterparties, transactions,"
+            + " imports RESTART IDENTITY CASCADE");
   }
 
   // -----------------------------------------------------------------------------------------

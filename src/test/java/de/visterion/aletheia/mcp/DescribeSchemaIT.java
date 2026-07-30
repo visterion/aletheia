@@ -160,11 +160,15 @@ class DescribeSchemaIT extends AbstractPostgresIT {
             c -> {
               assertThat(c.table()).isEqualTo("transactions");
               assertThat(c.column()).isEqualTo("product_policy_no");
+              // Columns are enumerated from information_schema; COLUMN_DOCS only decorates them,
+              // so a table()/column() assertion alone passes with an empty description.
+              assertThat(c.description()).contains("verbatim");
             })
         .anySatisfy(
             c -> {
               assertThat(c.table()).isEqualTo("contracts");
               assertThat(c.column()).isEqualTo("product");
+              assertThat(c.description()).contains("NULLS NOT DISTINCT");
             });
   }
 
@@ -180,6 +184,10 @@ class DescribeSchemaIT extends AbstractPostgresIT {
         .filteredOn(c -> c.column().equals("roots_mismatched"))
         .singleElement()
         .satisfies(c -> assertThat(c.description()).contains("sum"));
+    assertThat(result.columns())
+        .filteredOn(c -> c.column().equals("position_pattern"))
+        .singleElement()
+        .satisfies(c -> assertThat(c.description()).contains("ONE position"));
   }
 
   @Test
