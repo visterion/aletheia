@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.0</version>
+        <version>4.1.1</version>
         <relativePath/>
     </parent>
 
@@ -20,7 +20,7 @@
     <properties>
         <!-- Java 26, matching HiveMem's toolchain (the reference repo for this project). -->
         <java.version>26</java.version>
-        <mcp-sdk.version>2.0.0</mcp-sdk.version>
+        <mcp-sdk.version>2.0.1</mcp-sdk.version>
     </properties>
 
     <dependencies>
