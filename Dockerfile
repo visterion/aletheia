@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM eclipse-temurin:26-jre
+FROM eclipse-temurin:27-jre
 WORKDIR /app
 COPY target/aletheia-*.jar app.jar
 # Same default the app uses (server.port: ${ALETHEIA_PORT:8431}); declared here so the healthcheck
